@@ -1,0 +1,103 @@
+/*
+ * Mint DS Web 1.0 (Patchwork) semantic-color tokens, transcribed for use in the extension.
+ *
+ * These are approximations of Mint's semantic palette inferred from the Figma library —
+ * verify exact hex values against the canonical Figma file before locking the design:
+ *   https://www.figma.com/design/FDd6CaSdzwPebuzTexclKm/
+ *
+ * Token naming follows Mint's "Primary/FG UI/strong-fg" pattern, flattened to CSS custom
+ * properties as --mint-fg-strong, --mint-fg-subdued-title, etc. Semantic family colors
+ * (Positive / Warning / Negative / Highlight) get -bg-soft + -fg-strong pairs.
+ */
+:root {
+  /* surface */
+  --mint-bg-page: #f5f5f4;
+  --mint-bg-card: #ffffff;
+  --mint-bg-subtle: #fafaf9;
+  --mint-bg-hover: #f0efed;
+
+  /* text & icon */
+  --mint-fg-strong: #14110c;            /* Primary/FG UI/strong-fg */
+  --mint-fg-subdued-title: #4d4842;     /* Primary/FG UI/subdued-fg-title */
+  --mint-fg-soft: #6b665e;              /* Primary/FG UI/soft-fg */
+  --mint-fg-inactive: #a39e96;          /* Primary/FG UI/inactive-fg */
+  --mint-fg-inverted: #ffffff;
+
+  /* borders / outlines */
+  --mint-outline: #dfdcd6;
+  --mint-outline-strong: #c4c0b9;
+
+  /* semantic — Positive (green) */
+  --mint-positive-bg-soft: rgba(20, 130, 86, 0.10);
+  --mint-positive-fg-strong: #0e6f48;
+  --mint-positive-fg-graphic: #148256;
+
+  /* semantic — Warning (amber) */
+  --mint-warning-bg-soft: rgba(178, 105, 28, 0.10);
+  --mint-warning-fg-strong: #8a4f15;
+  --mint-warning-fg-graphic: #b2691c;
+
+  /* semantic — Negative (red) */
+  --mint-negative-bg-soft: rgba(193, 60, 60, 0.10);
+  --mint-negative-fg-strong: #a02f2f;
+  --mint-negative-fg-graphic: #c13c3c;
+
+  /* semantic — Highlight (indigo) */
+  --mint-highlight-bg-soft: rgba(75, 92, 195, 0.10);
+  --mint-highlight-fg-strong: #3a479c;
+  --mint-highlight-fg-graphic: #4b5cc3;
+
+  /* neutral semantic (for cancelled badge etc.) */
+  --mint-neutral-bg-soft: rgba(20, 17, 12, 0.06);
+
+  /* spacing scale */
+  --mint-sp-1: 4px;
+  --mint-sp-2: 8px;
+  --mint-sp-3: 12px;
+  --mint-sp-4: 16px;
+  --mint-sp-5: 20px;
+  --mint-sp-6: 24px;
+
+  /* corner radii */
+  --mint-radius-button: 8px;
+  --mint-radius-card: 12px;
+  --mint-radius-pill: 9999px;
+
+  /* typography */
+  --mint-font-family: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --mint-font-mono: 'SF Mono', 'Menlo', ui-monospace, monospace;
+
+  --mint-text-body: 13px;
+  --mint-text-meta: 12px;
+  --mint-text-micro: 11px;
+  --mint-text-nano: 10px;
+  --mint-text-h-md: 16px;
+  --mint-text-h-sm: 14px;
+
+  /* effects */
+  --mint-card-stroke: 1px solid var(--mint-outline);
+  --mint-card-shadow: 0 1px 2px rgba(20, 17, 12, 0.04);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: var(--mint-font-family);
+  font-size: var(--mint-text-body);
+  color: var(--mint-fg-strong);
+  background: var(--mint-bg-page);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+button {
+  font-family: inherit;
+  font-size: inherit;
+  cursor: pointer;
+}
+
+button:focus-visible {
+  outline: 2px solid var(--mint-highlight-fg-graphic);
+  outline-offset: 2px;
+}

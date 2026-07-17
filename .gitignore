@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+extension/node_modules/
+
+# Build output
+extension/dist/
+extension/tsconfig.tsbuildinfo
+
+# Env / secrets — real values live in 1Password, only .env.example is committed
+.env
+.env.local
+.env.*.local
+extension/.env
+extension/.env.local
+extension/.env.*.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+npm-debug.log*
+
+# Claude / scratch
+.claude/
+scratchpad/

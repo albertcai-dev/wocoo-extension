@@ -1,0 +1,83 @@
+{
+  "manifest_version": 3,
+  "name": "WOCOO Triager",
+  "version": "0.1.0",
+  "description": "Ticket-in-context side panel for the Wealthsimple Cash & Card Operations triage workflow.",
+  "icons": {
+    "16": "public/icons/icon-16.png",
+    "48": "public/icons/icon-48.png",
+    "128": "public/icons/icon-128.png"
+  },
+  "action": {
+    "default_title": "Open WOCOO Triager panel"
+  },
+  "side_panel": {
+    "default_path": "src/sidepanel/index.html"
+  },
+  "background": {
+    "service_worker": "src/background/service-worker.ts",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://wealthsimple.atlassian.net/*"],
+      "js": ["src/content/jira.ts"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://atlas.wealthsimple.com/*"],
+      "js": ["src/content/atlas.ts"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://wealthsimplecs.mycardplace.com/*"],
+      "js": ["src/content/i2c.ts"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://*.preset.io/*"],
+      "js": ["src/content/preset.ts"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://admin.koho.ca/*"],
+      "js": ["src/content/koho.ts"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://ledge.wealthsimple.com/*"],
+      "js": ["src/content/ledge.ts"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://app.slack.com/*"],
+      "js": ["src/content/slack.ts"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://tracking.i2cinc.com/servicedesk/customer/portal/*"],
+      "js": ["src/content/i2cservicedesk.ts"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://script.google.com/*"],
+      "js": ["src/content/gasBridge.ts"],
+      "run_at": "document_start"
+    }
+  ],
+  "permissions": ["sidePanel", "storage", "scripting", "tabs", "identity", "alarms"],
+  "host_permissions": [
+    "https://wealthsimple.atlassian.net/*",
+    "https://atlas.wealthsimple.com/*",
+    "https://auth.atlassian.com/*",
+    "https://api.atlassian.com/*",
+    "https://wealthsimplecs.mycardplace.com/*",
+    "https://*.preset.io/*",
+    "https://admin.koho.ca/*",
+    "https://ledge.wealthsimple.com/*",
+    "https://app.slack.com/*",
+    "https://hooks.slack.com/*",
+    "https://tracking.i2cinc.com/*",
+    "https://script.google.com/*"
+  ]
+}

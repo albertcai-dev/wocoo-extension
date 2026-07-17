@@ -1,0 +1,26 @@
+{
+  "name": "wocoo-triage-extension",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "WOCOO Triage Chrome extension — ticket-in-context side panel for the Wealthsimple Cash & Card Operations team",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "watch": "vite build --watch --mode development",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@crxjs/vite-plugin": "^2.0.0-beta.32",
+    "@types/chrome": "^0.0.270",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.3",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.10"
+  }
+}
