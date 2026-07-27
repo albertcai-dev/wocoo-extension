@@ -21,10 +21,17 @@ type SortDirection = 'newest' | 'oldest';
  *  the top of the list — replies always win over sort order so nothing gets buried.
  *  'newest' = fewest days first (recently transitioned tickets at top).
  *  'oldest' = most days first (stalest tickets at top). */
+/** A reply "counts" as attention-grabbing only when it isn't acknowledged yet. Acked
+ *  replies remain in the map so the deeplink pill on the ticket panel can render,
+ *  but the home list shouldn't keep coloring those rows red. */
+function isUnacked(r: TicketReply | undefined): boolean {
+  return !!r && r.acked !== true;
+}
+
 function orderRows(rows: TicketRow[], replies: Record<string, TicketReply>, sort: SortDirection): TicketRow[] {
   const withKeys = rows.map((r) => ({
     r,
-    hasReply: !!replies[r.id],
+    hasReply: isUnacked(replies[r.id]),
     ts: new Date(r.statusCategoryChangedAt).getTime() || 0,
   }));
   withKeys.sort((a, b) => {
@@ -301,7 +308,7 @@ function EmptyRow({ text }: { text: string }) {
 }
 
 function TicketListRow({ row, reply, onClick }: { row: TicketRow; reply?: TicketReply; onClick: () => void }) {
-  const hasReply = !!reply;
+  const hasReply = isUnacked(reply);
   return (
     <button
       onClick={onClick}

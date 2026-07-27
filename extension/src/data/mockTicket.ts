@@ -14,6 +14,10 @@ export interface WocooTicket {
   clientEmail: string;
   tier: 'Core' | 'Premium' | 'Generation';
   totalReimbursementAmount: number | null;
+  /** Count of files attached to the Jira ticket. Used by detection to distinguish
+   *  fee-waiver tickets with supporting evidence (route to Reverse Fee) from those
+   *  without (route to Verify Eligible DD manually). */
+  attachmentCount: number;
   reporter: string;
   reporterAccountId?: string; // needed for @mention in Overpayment Triage comment step
   assignee: string;
@@ -43,6 +47,7 @@ export const MOCK_TICKET: WocooTicket = {
   clientEmail: 'client@example.com',
   tier: 'Core',
   totalReimbursementAmount: null,
+  attachmentCount: 0,
   reporter: 'Albert Manantan',
   assignee: 'Albert Cai',
   created: '2026-06-08T11:52:00Z',

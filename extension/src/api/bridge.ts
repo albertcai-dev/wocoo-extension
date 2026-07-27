@@ -350,10 +350,16 @@ export interface TicketReply {
   from: string;
   snippet: string;
   receivedAt: string;
+  /** True when the tracking-sheet row has `acknowledged=TRUE`. Missing on old bridge
+   *  deployments — treat undefined as false. When the bridge is updated to return
+   *  acked rows too, the pill renders them in a muted "seen" style rather than
+   *  disappearing, so the Gmail deeplink stays reachable. */
+  acked?: boolean;
 }
 
-/** Poll Gmail for new inbound replies to every unacknowledged tracked row.
- *  Returns the flat list — the caller keys it by wocooTicketId. */
+/** Poll Gmail for new inbound replies. The bridge returns every tracked reply row
+ *  it knows about (acked or not) so the extension can keep the deeplink visible
+ *  after ack. Old-bridge fallback: rows without `acked` are treated as unacked. */
 export async function checkForRepliesViaBridge(): Promise<TicketReply[]> {
   const res = await callBridge('checkForReplies', {}, 'repliesChecked', 60_000, true);
   const raw = (res.replies as unknown) ?? [];
@@ -367,6 +373,7 @@ export async function checkForRepliesViaBridge(): Promise<TicketReply[]> {
       from: String(o.from ?? ''),
       snippet: String(o.snippet ?? ''),
       receivedAt: String(o.receivedAt ?? ''),
+      acked: o.acked === true || o.acked === 'TRUE' || o.acked === 'true',
     };
   }).filter((r) => r.wocooTicketId && r.messageId);
 }

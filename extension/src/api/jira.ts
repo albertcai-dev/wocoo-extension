@@ -140,8 +140,18 @@ export async function resolveEocProblemAreaId(label: string): Promise<string> {
   return resolveOptionId('EOC', '10002', 'customfield_10334', label);
 }
 
-/** Common move target field shape used by the bulk-issues-move endpoint. */
-type MoveField = { retain: false; type: 'raw'; value: string[] };
+/** Common move target field shape used by the bulk-issues-move endpoint.
+ *  Two variants match Atlassian's OpenAPI schema:
+ *    • MandatoryFieldValue        → type='raw', value is a list of strings
+ *    • MandatoryFieldValueForADF  → type='adf', value is a SINGLE ADF doc (not an array)
+ *  Sending a raw string to an ADF-only field returns
+ *  "Because <fieldId> is a rich text field, you must set the input type to ADF."
+ *  Sending an array-wrapped ADF returns "You must provide a valid ADF object for
+ *  field <fieldId>." */
+type AdfDoc = { type: 'doc'; version: 1; content: unknown[] };
+export type MoveField =
+  | { retain: false; type: 'raw'; value: string[] }
+  | { retain: false; type: 'adf'; value: AdfDoc };
 
 /**
  * Perform a Jira bulk-issues-move from a WOCOO ticket to another project.
@@ -401,6 +411,24 @@ export async function postComment(ticketKey: string, segments: CommentSegment[])
 /** Build a MoveField from a single string value, the shape bulk-issues-move expects. */
 export function rawField(value: string): MoveField {
   return { retain: false, type: 'raw', value: [value] };
+}
+
+/** Build a MoveField for a rich-text (ADF-only) custom field. Wraps the plain
+ *  string in a minimal ADF document — one paragraph, one text run. Use for
+ *  Jira paragraph-type custom fields that reject `raw` input.
+ *  An empty value produces a paragraph node with no text (Jira accepts this).
+ *  Note: `value` is the ADF doc directly (not wrapped in an array) — this is
+ *  the MandatoryFieldValueForADF shape from Atlassian's OpenAPI schema. */
+export function adfField(value: string): MoveField {
+  const trimmed = value.trim();
+  const content = trimmed
+    ? [{ type: 'paragraph', content: [{ type: 'text', text: value }] }]
+    : [{ type: 'paragraph' }];
+  return {
+    retain: false,
+    type: 'adf',
+    value: { type: 'doc', version: 1, content },
+  };
 }
 
 /**
@@ -808,6 +836,7 @@ export async function getTicket(ticketKey: string): Promise<WocooTicket> {
       'reporter',
       'assignee',
       'comment',
+      'attachment',
       FIELD_IDENTITY_ID,
       FIELD_TIER,
       FIELD_ACCOUNT_ID_PRIMARY,
@@ -857,13 +886,15 @@ function mapJiraIssue(key: string, data: any): WocooTicket {
     body: extractDescription(c.body) || '',
   }));
 
+  // Total Reimbursement Amount is usually stored as a negative number on overpayment
+  // tickets (it mirrors the credit balance on the card), so normalise to a magnitude.
   const rawAmount = f[FIELD_TOTAL_REIMB_AMOUNT];
   let totalReimbursementAmount: number | null = null;
-  if (typeof rawAmount === 'number' && isFinite(rawAmount) && rawAmount > 0) {
-    totalReimbursementAmount = rawAmount;
+  if (typeof rawAmount === 'number' && isFinite(rawAmount) && rawAmount !== 0) {
+    totalReimbursementAmount = Math.abs(rawAmount);
   } else if (typeof rawAmount === 'string') {
-    const n = parseFloat(rawAmount);
-    if (isFinite(n) && n > 0) totalReimbursementAmount = n;
+    const n = parseFloat(rawAmount.replace(/[$,\s]/g, ''));
+    if (isFinite(n) && n !== 0) totalReimbursementAmount = Math.abs(n);
   }
 
   return {
@@ -879,6 +910,7 @@ function mapJiraIssue(key: string, data: any): WocooTicket {
     clientEmail,
     tier,
     totalReimbursementAmount,
+    attachmentCount: Array.isArray(f.attachment) ? f.attachment.length : 0,
     reporter: f.reporter?.displayName || 'Unknown',
     reporterAccountId: f.reporter?.accountId,
     assignee: f.assignee?.displayName || 'Unassigned',

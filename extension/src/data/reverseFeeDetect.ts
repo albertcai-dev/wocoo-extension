@@ -53,6 +53,24 @@ const REVERSE_FEE_ACTION_SIGNALS = [
   'monthly fee', 'waive the monthly',
 ];
 
+// Noun-form "fee waiver" phrasings — these are common on Verify-Eligible-DD tickets
+// where the client is asking to have a fee waived because they believe they meet DD
+// criteria. The action is ambiguous: agent might reverse the fee in i2c (if attachments
+// prove eligibility) or refuse and route to Verify Eligible DD (if no evidence). We
+// gate on attachment count: attachments present → Reverse Fee; none → no card (agent
+// clicks the manual Verify Eligible DD button).
+const FEE_WAIVER_NOUN_SIGNALS = [
+  'cc fee waiver', 'credit card fee waiver', 'fee waiver',
+];
+
+// Regex forms tolerate an optional adjective between the article and "fee"
+// (e.g. "waive the client fee", "refund the late fee") — a common phrasing the
+// static substring list above misses. Vetoes still run first, so "waive the
+// annual fee" is only reached when a leaving signal is also present.
+const REVERSE_FEE_ACTION_REGEXES: RegExp[] = [
+  /\b(?:reverse|refund|waive|remove|credit|reimburse)\s+(?:the|this|a)\s+(?:\w+\s+)?fee\b/,
+];
+
 // Veto signals — phrasing that puts the ticket on a different workflow.
 const VETOES = [
   'annual fee', 'overpayment', 'dispute', 'chargeback',
@@ -68,6 +86,7 @@ export function detectReverseFee(
   summary: string,
   description: string,
   workType: string | null | undefined,
+  attachmentCount: number = 0,
 ): ReverseFeeDetection {
   const text = `${summary || ''}\n${description || ''}`.toLowerCase();
   const workTypeInterest = isInterestRelatedWorkType(workType);
@@ -92,11 +111,26 @@ export function detectReverseFee(
   if (effectiveVetoes.length) return { matched: false, reasons: [`vetoed: ${effectiveVetoes[0]}`] };
 
   const action = findMatches(text, REVERSE_FEE_ACTION_SIGNALS);
+  const regexAction: string[] = [];
+  for (const p of REVERSE_FEE_ACTION_REGEXES) {
+    const m = text.match(p);
+    if (m) regexAction.push(m[0]);
+  }
+  const allAction = [...action, ...regexAction];
+
+  // Noun-form "fee waiver" phrasing (e.g. "CC fee waiver" in the ticket summary) only
+  // routes to Reverse Fee when the ticket has attachments — those are the evidence
+  // packages (paystubs / DD screenshots / statements) that make in-i2c reversal the
+  // right call. Without attachments, the same phrasing is a Verify-Eligible-DD ask that
+  // the agent handles via the manual button, so we don't fire the card.
+  const feeWaiverNoun = findMatches(text, FEE_WAIVER_NOUN_SIGNALS);
+  const feeWaiverWithEvidence = feeWaiverNoun.length > 0 && attachmentCount > 0;
 
   const reasons: string[] = [];
-  if (action.length) reasons.push(`Reverse-fee action: ${action[0].trim()}`);
+  if (allAction.length) reasons.push(`Reverse-fee action: ${allAction[0].trim()}`);
+  if (feeWaiverWithEvidence) reasons.push(`Fee-waiver ask with ${attachmentCount} attachment${attachmentCount === 1 ? '' : 's'}: ${feeWaiverNoun[0]}`);
   if (leaving.length) reasons.push(`Client closing: ${leaving[0].trim()}`);
 
-  const matched = action.length > 0;
+  const matched = allAction.length > 0 || feeWaiverWithEvidence;
   return { matched, reasons };
 }

@@ -5,7 +5,7 @@ import type { WocooTicket } from '../data/mockTicket';
 import { detectReverseFee } from '../data/reverseFeeDetect';
 
 export function ReverseFeeCard({ ticket, onStart }: { ticket: WocooTicket; onStart: () => void }) {
-  const detection = detectReverseFee(ticket.summary || '', ticket.description || '', ticket.workType);
+  const detection = detectReverseFee(ticket.summary || '', ticket.description || '', ticket.workType, ticket.attachmentCount || 0);
   if (!detection.matched) return null;
   // Interest-Related Issues tickets don't carry a clientEmail — the workflow fetches it
   // from Atlas on entry. Every other trigger still requires the email up front.

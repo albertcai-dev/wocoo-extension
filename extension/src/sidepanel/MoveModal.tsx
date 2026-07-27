@@ -2,14 +2,14 @@
 //
 // Layout:
 //   - Header: "Move WOCOO-XXXXX" + close X
-//   - Step 1: Destination picker (EOC / DBO / CRED / FRAUD / PRR)
+//   - Step 1: Destination picker (EOC / DBO / CRED / FRAUD / PRR / PFO)
 //   - Step 2: Source ticket details (read-only confirm card)
 //   - Step 3: Per-destination fields (EOC needs status + problem area + account id; etc.)
 //   - Confirm + execute: shows the bulk-move call's success/error state inline
 //
-// DBO (replaced PFO 2026-07) and FRAUD are UI-only — modal shows a "use Jira native
-// Move" affordance with link out to the ticket. DBO also lists its 9 work types so the
-// agent knows which one to pick in Jira's native dialog.
+// FRAUD is UI-only — modal shows a "use Jira native Move" affordance with link out
+// to the ticket. PFO (restored alongside DBO) handles Express Shipping Request card
+// reissues and Cheques: Delivery Issue via hardcoded issue-type IDs.
 
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
@@ -28,10 +28,27 @@ import {
   PRR_ISSUE_TYPES,
   type PrrIssueTypeConfig,
   type PrrRequiredField,
+  FRAUD_PROJECT_KEY,
+  FRAUD_ISSUE_TYPES,
+  PFO_PROJECT_ID,
+  PFO_EXPRESS_SHIPPING_ISSUETYPE_ID,
+  PFO_CHEQUES_DELIVERY_ISSUETYPE_ID,
+  EXPRESS_SHIPPING_FIELDS,
+  CARD_TYPE_LABELS,
+  type CardType,
+  USER_TIER_LABELS,
+  type UserTier,
+  REISSUE_REASON_LABELS,
+  PFO_API_SUPPORTED_WORK_TYPES,
+  type PfoWorkType,
+  recommendedCardType,
+  recommendedPfoWorkType,
+  tierToUserTierLabel,
 } from '../data/moveConfig';
 import {
   moveTicket,
   rawField,
+  adfField,
   MOVE_FIELDS,
   lookupProjectAndIssueType,
   resolveEocProblemAreaId,
@@ -83,12 +100,30 @@ export function MoveModal({ ticket, onClose, initialDestKey = 'EOC' }: { ticket:
   const [prrMetaError, setPrrMetaError] = useState<string | null>(null);
 
   // DBO: same shape as PRR (dynamic form driven by createmeta), but scoped to the DBO
-  // project + issue-type list. DBO replaced PFO in 2026-07 with 9 issue types.
+  // project + issue-type list.
   const [dboIssueTypeId, setDboIssueTypeId] = useState<string>('');
   const [dboFieldValues, setDboFieldValues] = useState<Record<string, string>>({});
   const [dboMeta, setDboMeta] = useState<CreateMetaField[] | null>(null);
   const [dboMetaState, setDboMetaState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
   const [dboMetaError, setDboMetaError] = useState<string | null>(null);
+
+  // FRAUD: dynamic form driven by createmeta (mirrors DBO/PRR). Two issue types
+  // (Task, Other) each with 3 required custom fields including the ~100-option
+  // Fraud Detection Method picker.
+  const [fraudIssueTypeId, setFraudIssueTypeId] = useState<string>('');
+  const [fraudFieldValues, setFraudFieldValues] = useState<Record<string, string>>({});
+  const [fraudMeta, setFraudMeta] = useState<CreateMetaField[] | null>(null);
+  const [fraudMetaState, setFraudMetaState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
+  const [fraudMetaError, setFraudMetaError] = useState<string | null>(null);
+
+  // PFO: hardcoded issue types (Express Shipping Request 14656, Cheques Delivery 14658).
+  // Express Shipping form has its own bespoke UI — auto-prefilled from ticket.workType /
+  // ticket.tier and driven by resolveOptionId at submit.
+  const [pfoWorkType, setPfoWorkType] = useState<PfoWorkType>(recommendedPfoWorkType(ticket.workType));
+  const [cardType, setCardType] = useState<CardType>(recommendedCardType(ticket.workType));
+  const [userTier, setUserTier] = useState<UserTier>(tierToUserTierLabel(ticket.tier));
+  const [reissueReason, setReissueReason] = useState<string>('');
+  const [dateNeeded, setDateNeeded] = useState<string>('ASAP');
 
   // Close on Esc
   useEffect(() => {
@@ -96,6 +131,13 @@ export function MoveModal({ ticket, onClose, initialDestKey = 'EOC' }: { ticket:
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose, status]);
+
+  // Keep Card Type in sync with the PFO work-type button. Always overwrites — the picker
+  // is the primary intent, so a stale toggle from a previous selection stays consistent.
+  useEffect(() => {
+    if (pfoWorkType === 'Credit Card: Delivery Issue') setCardType('Credit Card');
+    else if (pfoWorkType === 'Prepaid Card: Delivery Issue') setCardType('Prepaid Mastercard');
+  }, [pfoWorkType]);
 
   // Shared Atlas Account-ID fetch. Safe to call from any destination's field OR from the
   // Source Card fallback button — dedupes concurrent calls via `fetchState`.
@@ -138,6 +180,11 @@ export function MoveModal({ ticket, onClose, initialDestKey = 'EOC' }: { ticket:
     [dboIssueTypeId],
   );
 
+  const fraudConfig: PrrIssueTypeConfig | null = useMemo(
+    () => FRAUD_ISSUE_TYPES.find((t) => t.id === fraudIssueTypeId) || null,
+    [fraudIssueTypeId],
+  );
+
   // When the PRR issue type changes: reset field values (with prefill from ticket), and
   // fetch createmeta so option pickers have real labels to render.
   useEffect(() => {
@@ -171,6 +218,39 @@ export function MoveModal({ ticket, onClose, initialDestKey = 'EOC' }: { ticket:
       });
     return () => { cancelled = true; };
   }, [prrConfig, ticket.identityId, ticket.id]);
+
+  // Same effect for FRAUD — separate hook so it can coexist with DBO/PRR across dest switches.
+  useEffect(() => {
+    if (!fraudConfig) {
+      setFraudMeta(null);
+      setFraudMetaState('idle');
+      setFraudMetaError(null);
+      setFraudFieldValues({});
+      return;
+    }
+    const prefilled: Record<string, string> = {};
+    for (const f of fraudConfig.requiredFields) {
+      if (f.prefillFrom === 'identityId' && ticket.identityId) prefilled[f.fieldId] = ticket.identityId;
+      else if (f.prefillFrom === 'ticketUrl') prefilled[f.fieldId] = `https://wealthsimple.atlassian.net/browse/${ticket.id}`;
+    }
+    setFraudFieldValues(prefilled);
+    setFraudMetaState('loading');
+    setFraudMetaError(null);
+    let cancelled = false;
+    fetchCreateMetaFields(FRAUD_PROJECT_KEY, fraudConfig.id)
+      .then((fields) => {
+        if (cancelled) return;
+        setFraudMeta(fields);
+        setFraudMetaState('ready');
+      })
+      .catch((e: any) => {
+        if (cancelled) return;
+        setFraudMeta(null);
+        setFraudMetaError(e?.message || 'Failed to load FRAUD metadata');
+        setFraudMetaState('error');
+      });
+    return () => { cancelled = true; };
+  }, [fraudConfig, ticket.identityId, ticket.id]);
 
   // Same effect for DBO — separate hook so PRR and DBO can coexist across dest switches.
   useEffect(() => {
@@ -243,7 +323,13 @@ export function MoveModal({ ticket, onClose, initialDestKey = 'EOC' }: { ticket:
     !!ticket.identityId &&
     accountIdValid;
   const credReady = !!ticket.summary;
-  const fraudReady = false; // UI-only — never API-ready
+  const fraudReady =
+    !!fraudConfig &&
+    fraudMetaState === 'ready' &&
+    fraudConfig.requiredFields.every((f) => {
+      const v = fraudFieldValues[f.fieldId];
+      return !!v && !!v.trim();
+    });
   const dboReady =
     !!dboConfig &&
     dboMetaState === 'ready' &&
@@ -270,6 +356,13 @@ export function MoveModal({ ticket, onClose, initialDestKey = 'EOC' }: { ticket:
       return true;
     });
 
+  const isPfoCheques = pfoWorkType === 'Cheques: Delivery Issue';
+  const pfoReady = !!ticket.identityId && (
+    isPfoCheques
+      ? true
+      : !!reissueReason && !!dateNeeded.trim() && !!cardType && !!userTier
+  );
+
   const reasonReady = reason.trim().length > 0;
   const ready =
     reasonReady && (
@@ -277,7 +370,9 @@ export function MoveModal({ ticket, onClose, initialDestKey = 'EOC' }: { ticket:
       dest.key === 'DBO' ? dboReady :
       dest.key === 'CRED' ? credReady :
       dest.key === 'PRR' ? prrReady :
-      fraudReady
+      dest.key === 'PFO' ? pfoReady :
+      dest.key === 'FRAUD' ? fraudReady :
+      false
     );
 
   // ---- Execute ----
@@ -351,6 +446,8 @@ export function MoveModal({ ticket, onClose, initialDestKey = 'EOC' }: { ticket:
             fields[f.fieldId] = child
               ? { retain: false, type: 'raw', value: [v, child] }
               : rawField(v);
+          } else if (f.type === 'paragraph') {
+            fields[f.fieldId] = adfField(v);
           } else {
             fields[f.fieldId] = rawField(v);
           }
@@ -375,9 +472,11 @@ export function MoveModal({ ticket, onClose, initialDestKey = 'EOC' }: { ticket:
             fields[f.fieldId] = child
               ? { retain: false, type: 'raw', value: [v, child] }
               : rawField(v);
+          } else if (f.type === 'paragraph') {
+            fields[f.fieldId] = adfField(v);
           } else {
-            // string | number | paragraph | date | option | array-option all serialise
-            // the same way via rawField — Jira infers the shape from the target field.
+            // string | number | date | option | array-option all serialise the same
+            // way via rawField — Jira infers the shape from the target field.
             fields[f.fieldId] = rawField(v);
           }
         }
@@ -387,6 +486,78 @@ export function MoveModal({ ticket, onClose, initialDestKey = 'EOC' }: { ticket:
           destIssueTypeId: dboConfig.id,
           mandatoryFields: fields,
         });
+      } else if (dest.key === 'FRAUD') {
+        if (!fraudConfig) throw new Error('Select a FRAUD issue type first.');
+        const { projectId } = await lookupProjectAndIssueType(FRAUD_PROJECT_KEY, fraudConfig.name);
+        destLabel = `FRAUD (${fraudConfig.name})`;
+        const fields: Record<string, ReturnType<typeof rawField>> = {
+          [MOVE_FIELDS.SUMMARY]: rawField(ticket.summary),
+        };
+        for (const f of fraudConfig.requiredFields) {
+          const v = fraudFieldValues[f.fieldId];
+          if (f.type === 'option-with-child') {
+            const child = fraudFieldValues[`${f.fieldId}__child`];
+            fields[f.fieldId] = child
+              ? { retain: false, type: 'raw', value: [v, child] }
+              : rawField(v);
+          } else if (f.type === 'paragraph') {
+            fields[f.fieldId] = adfField(v);
+          } else {
+            fields[f.fieldId] = rawField(v);
+          }
+        }
+        moveCall = () => moveTicket({
+          sourceKey: ticket.id,
+          destProjectId: projectId,
+          destIssueTypeId: fraudConfig.id,
+          mandatoryFields: fields,
+        });
+      } else if (dest.key === 'PFO') {
+        if (!ticket.identityId) throw new Error('Source ticket has no Identity ID.');
+
+        if (isPfoCheques) {
+          destLabel = `PFO (${pfoWorkType})`;
+          moveCall = () => moveTicket({
+            sourceKey: ticket.id,
+            destProjectId: PFO_PROJECT_ID,
+            destIssueTypeId: PFO_CHEQUES_DELIVERY_ISSUETYPE_ID,
+            mandatoryFields: {
+              [EXPRESS_SHIPPING_FIELDS.SUMMARY]:     rawField(ticket.summary),
+              [EXPRESS_SHIPPING_FIELDS.IDENTITY_ID]: rawField(ticket.identityId),
+            },
+          });
+        } else {
+          if (!reissueReason) throw new Error('Pick a Reissue Reason first.');
+          if (!dateNeeded.trim()) throw new Error('Enter a Date that card is needed.');
+
+          const [cardTypeId, userTierId, reissueReasonId, didReissueId, cxKeepsId] = await Promise.all([
+            resolveOptionId('PFO', PFO_EXPRESS_SHIPPING_ISSUETYPE_ID, EXPRESS_SHIPPING_FIELDS.CARD_TYPE, cardType),
+            resolveOptionId('PFO', PFO_EXPRESS_SHIPPING_ISSUETYPE_ID, EXPRESS_SHIPPING_FIELDS.USER_TIER, userTier),
+            resolveOptionId('PFO', PFO_EXPRESS_SHIPPING_ISSUETYPE_ID, EXPRESS_SHIPPING_FIELDS.REISSUE_REASON, reissueReason),
+            resolveOptionId('PFO', PFO_EXPRESS_SHIPPING_ISSUETYPE_ID, EXPRESS_SHIPPING_FIELDS.DID_REISSUE, 'No'),
+            resolveOptionId('PFO', PFO_EXPRESS_SHIPPING_ISSUETYPE_ID, EXPRESS_SHIPPING_FIELDS.CX_KEEPS_OWNERSHIP, 'Yes'),
+          ]);
+
+          destLabel = `PFO (Express Shipping Request · ${cardType} · ${reissueReason})`;
+
+          moveCall = () => moveTicket({
+            sourceKey: ticket.id,
+            destProjectId: PFO_PROJECT_ID,
+            destIssueTypeId: PFO_EXPRESS_SHIPPING_ISSUETYPE_ID,
+            mandatoryFields: {
+              [EXPRESS_SHIPPING_FIELDS.SUMMARY]:               rawField(ticket.summary),
+              [EXPRESS_SHIPPING_FIELDS.IDENTITY_ID]:           rawField(ticket.identityId),
+              [EXPRESS_SHIPPING_FIELDS.CARD_TYPE]:             rawField(cardTypeId),
+              [EXPRESS_SHIPPING_FIELDS.USER_TIER]:             rawField(userTierId),
+              [EXPRESS_SHIPPING_FIELDS.REISSUE_REASON]:        rawField(reissueReasonId),
+              [EXPRESS_SHIPPING_FIELDS.DATE_NEEDED]:           rawField(dateNeeded.trim()),
+              [EXPRESS_SHIPPING_FIELDS.DID_REISSUE]:           rawField(didReissueId),
+              [EXPRESS_SHIPPING_FIELDS.CX_KEEPS_OWNERSHIP]:    rawField(cxKeepsId),
+              [EXPRESS_SHIPPING_FIELDS.UNABLE_REISSUE_REASON]: rawField('CX does not have tooling to perform the card reissue; requires PFO to action.'),
+              [EXPRESS_SHIPPING_FIELDS.KEEP_OWNERSHIP_REASON]: rawField('CX to send final comms to client.'),
+            },
+          });
+        }
       } else {
         // FRAUD path is handled by the UI-only branch (no execute button shown).
         throw new Error(`Destination ${dest.key} is not API-supported.`);
@@ -453,10 +624,20 @@ export function MoveModal({ ticket, onClose, initialDestKey = 'EOC' }: { ticket:
       setStatus('success');
     } catch (e: any) {
       const baseMsg = e?.message || String(e);
-      // If we created a clone before failing, surface it so the user can clean up manually.
-      const orphan = createdCloneKey
-        ? ` (clone ${createdCloneKey} was created and is now orphaned on the CXA board — move it to Done manually)`
-        : '';
+      // If we created a clone before failing, best-effort transition it to Done so the
+      // failed run doesn't leave board clutter. If the cleanup itself fails, fall back
+      // to the manual message + warn about the cleanup failure.
+      let orphan = '';
+      if (createdCloneKey) {
+        try {
+          await transitionTicket(createdCloneKey, '251');
+          orphan = ` (clone ${createdCloneKey} was created; auto-transitioned to Done)`;
+        } catch (cleanupErr) {
+          const cleanupMsg = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
+          warnings.push(`Auto-cleanup of clone ${createdCloneKey} failed: ${cleanupMsg}`);
+          orphan = ` (clone ${createdCloneKey} was created and is now orphaned on the CXA board — move it to Done manually)`;
+        }
+      }
       setError(baseMsg + orphan);
       setSoftWarnings(warnings);
       setStatus('error');
@@ -541,8 +722,38 @@ export function MoveModal({ ticket, onClose, initialDestKey = 'EOC' }: { ticket:
                 />
               )}
 
+              {dest.key === 'PFO' && (
+                <PfoFields
+                  workType={pfoWorkType}
+                  onWorkType={setPfoWorkType}
+                  locked={status === 'confirming' || status === 'executing'}
+                />
+              )}
+              {dest.key === 'PFO' && !isPfoCheques && (
+                <ExpressShippingFields
+                  cardType={cardType}
+                  onCardType={setCardType}
+                  userTier={userTier}
+                  onUserTier={setUserTier}
+                  reissueReason={reissueReason}
+                  onReissueReason={setReissueReason}
+                  dateNeeded={dateNeeded}
+                  onDateNeeded={setDateNeeded}
+                  locked={status === 'confirming' || status === 'executing'}
+                />
+              )}
+
               {dest.key === 'FRAUD' && (
-                <FraudPanel ticket={ticket} note={dest.notes!} />
+                <FraudFields
+                  issueTypeId={fraudIssueTypeId}
+                  onIssueTypeId={setFraudIssueTypeId}
+                  fieldValues={fraudFieldValues}
+                  onFieldValues={setFraudFieldValues}
+                  meta={fraudMeta}
+                  metaState={fraudMetaState}
+                  metaError={fraudMetaError}
+                  locked={status === 'confirming' || status === 'executing'}
+                />
               )}
 
               {/* Reason for move — required for the v3 sheet log */}
@@ -928,29 +1139,223 @@ function DboFields(props: {
   );
 }
 
-function FraudPanel({ ticket, note }: { ticket: WocooTicket; note: string }) {
-  const jiraUrl = `https://wealthsimple.atlassian.net/browse/${ticket.id}`;
+// PFO work-type picker — three-way button row (Credit Card / Prepaid Card / Cheques).
+// Credit Card + Prepaid Card both route to Express Shipping Request; Cheques routes
+// to the minimal Cheques: Delivery Issue path.
+function PfoFields(props: {
+  workType: PfoWorkType;
+  onWorkType: (w: PfoWorkType) => void;
+  locked: boolean;
+}) {
   return (
     <section style={sectionStyle}>
-      <InfoCard tone="warning">{note}</InfoCard>
-      <a
-        href={jiraUrl}
-        target="_blank"
-        rel="noreferrer"
-        style={{
-          display: 'inline-block',
-          marginTop: 'var(--mint-sp-2)',
-          padding: '8px 14px',
-          background: 'var(--mint-fg-strong)',
-          color: 'var(--mint-fg-inverted)',
-          borderRadius: 'var(--mint-radius-button)',
-          textDecoration: 'none',
-          fontWeight: 600,
-          fontSize: 'var(--mint-text-meta)',
-        }}
-      >
-        Open ticket in Jira ↗
-      </a>
+      <Label>Step 3: PFO work type</Label>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--mint-sp-2)' }}>
+        {PFO_API_SUPPORTED_WORK_TYPES.map((w) => {
+          const active = props.workType === w;
+          return (
+            <button
+              key={w}
+              disabled={props.locked}
+              onClick={() => props.onWorkType(w)}
+              style={{
+                padding: '8px 12px',
+                background: active ? 'var(--mint-fg-strong)' : 'var(--mint-bg-card)',
+                color: active ? 'var(--mint-fg-inverted)' : 'var(--mint-fg-strong)',
+                border: 'var(--mint-card-stroke)',
+                borderRadius: 'var(--mint-radius-button)',
+                fontWeight: 600,
+                fontSize: 'var(--mint-text-meta)',
+                cursor: props.locked ? 'not-allowed' : 'pointer',
+                textAlign: 'left',
+                opacity: props.locked ? 0.6 : 1,
+              }}
+            >
+              {w}
+            </button>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+// Express Shipping Request form — 4 visible fields. Four more (DID_REISSUE,
+// CX_KEEPS_OWNERSHIP, UNABLE_REISSUE_REASON, KEEP_OWNERSHIP_REASON) are hidden
+// and hardcoded at submit (the last two are Jira-required follow-ups to the
+// first two answers).
+function ExpressShippingFields(props: {
+  cardType: CardType;
+  onCardType: (c: CardType) => void;
+  userTier: UserTier;
+  onUserTier: (t: UserTier) => void;
+  reissueReason: string;
+  onReissueReason: (r: string) => void;
+  dateNeeded: string;
+  onDateNeeded: (d: string) => void;
+  locked: boolean;
+}) {
+  return (
+    <section style={sectionStyle}>
+      <Label>Step 4: Express Shipping Request details</Label>
+
+      <div style={{ marginBottom: 'var(--mint-sp-3)' }}>
+        <FieldLabel>Card Type</FieldLabel>
+        <div style={{ display: 'flex', gap: 'var(--mint-sp-2)' }}>
+          {CARD_TYPE_LABELS.map((ct) => {
+            const active = props.cardType === ct;
+            return (
+              <button
+                key={ct}
+                disabled={props.locked}
+                onClick={() => props.onCardType(ct)}
+                style={{
+                  flex: 1,
+                  padding: '6px 12px',
+                  background: active ? 'var(--mint-fg-strong)' : 'var(--mint-bg-card)',
+                  color: active ? 'var(--mint-fg-inverted)' : 'var(--mint-fg-strong)',
+                  border: 'var(--mint-card-stroke)',
+                  borderRadius: 'var(--mint-radius-button)',
+                  fontWeight: 600,
+                  fontSize: 'var(--mint-text-meta)',
+                  cursor: props.locked ? 'not-allowed' : 'pointer',
+                  opacity: props.locked ? 0.6 : 1,
+                }}
+              >
+                {ct}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div style={{ marginBottom: 'var(--mint-sp-3)' }}>
+        <FieldLabel>User Tier</FieldLabel>
+        <div style={{ display: 'flex', gap: 'var(--mint-sp-2)' }}>
+          {USER_TIER_LABELS.map((t) => {
+            const active = props.userTier === t;
+            return (
+              <button
+                key={t}
+                disabled={props.locked}
+                onClick={() => props.onUserTier(t)}
+                style={{
+                  flex: 1,
+                  padding: '6px 12px',
+                  background: active ? 'var(--mint-warning-fg-graphic)' : 'var(--mint-bg-card)',
+                  color: active ? '#fff' : 'var(--mint-fg-strong)',
+                  border: 'var(--mint-card-stroke)',
+                  borderRadius: 'var(--mint-radius-button)',
+                  fontWeight: 600,
+                  fontSize: 'var(--mint-text-meta)',
+                  cursor: props.locked ? 'not-allowed' : 'pointer',
+                  opacity: props.locked ? 0.6 : 1,
+                }}
+              >
+                {t}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div style={{ marginBottom: 'var(--mint-sp-3)' }}>
+        <FieldLabel>Reissue Reason <span style={{ color: 'var(--mint-negative-fg-strong)' }}>*</span></FieldLabel>
+        <select
+          value={props.reissueReason}
+          disabled={props.locked}
+          onChange={(e) => props.onReissueReason(e.target.value)}
+          style={selectStyle}
+        >
+          <option value="">Select a reason…</option>
+          {REISSUE_REASON_LABELS.map((r) => (
+            <option key={r} value={r}>{r}</option>
+          ))}
+        </select>
+      </div>
+
+      <div>
+        <FieldLabel>Date that card is needed <span style={{ color: 'var(--mint-negative-fg-strong)' }}>*</span></FieldLabel>
+        <input
+          type="text"
+          value={props.dateNeeded}
+          disabled={props.locked}
+          onChange={(e) => props.onDateNeeded(e.target.value)}
+          placeholder="e.g. ASAP, June 26 2026, Not urgent"
+          style={inputStyle}
+        />
+      </div>
+    </section>
+  );
+}
+
+// FRAUD destination fields — same shape as DboFields / PrrFields (issue-type picker
+// plus dynamic required fields resolved via createmeta). Kept as its own component
+// so the "Step 3: FRAUD fields" copy + FRAUD_ISSUE_TYPES source can diverge from
+// DBO / PRR without conditional logic in a shared renderer.
+function FraudFields(props: {
+  issueTypeId: string;
+  onIssueTypeId: (id: string) => void;
+  fieldValues: Record<string, string>;
+  onFieldValues: (updater: (prev: Record<string, string>) => Record<string, string>) => void;
+  meta: CreateMetaField[] | null;
+  metaState: 'idle' | 'loading' | 'ready' | 'error';
+  metaError: string | null;
+  locked: boolean;
+}) {
+  const { issueTypeId, onIssueTypeId, fieldValues, onFieldValues, meta, metaState, metaError, locked } = props;
+  const cfg = FRAUD_ISSUE_TYPES.find((t) => t.id === issueTypeId) || null;
+
+  const setField = (fieldId: string, value: string) =>
+    onFieldValues((prev) => ({ ...prev, [fieldId]: value }));
+
+  return (
+    <section style={sectionStyle}>
+      <Label>Step 3: FRAUD fields</Label>
+
+      <div style={{ marginBottom: 'var(--mint-sp-3)' }}>
+        <FieldLabel>Issue Type</FieldLabel>
+        <select
+          value={issueTypeId}
+          disabled={locked}
+          onChange={(e) => onIssueTypeId(e.target.value)}
+          style={selectStyle}
+        >
+          <option value="">— Pick an issue type —</option>
+          {FRAUD_ISSUE_TYPES.map((t) => (
+            <option key={t.id} value={t.id}>{t.name}</option>
+          ))}
+        </select>
+        {cfg && (
+          <div style={{ marginTop: 6, fontSize: 'var(--mint-text-nano)', color: 'var(--mint-fg-soft)', lineHeight: 1.4 }}>
+            {cfg.description}
+          </div>
+        )}
+      </div>
+
+      {cfg && metaState === 'loading' && (
+        <InfoCard tone="info">Loading FRAUD field options from Jira…</InfoCard>
+      )}
+      {cfg && metaState === 'error' && (
+        <InfoCard tone="negative">Failed to load FRAUD fields: {metaError || 'unknown error'}. Reopen the modal to retry.</InfoCard>
+      )}
+
+      {cfg && metaState === 'ready' && meta && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--mint-sp-3)' }}>
+          {cfg.requiredFields.map((f) => (
+            <PrrFieldInput
+              key={f.fieldId}
+              field={f}
+              meta={meta}
+              value={fieldValues[f.fieldId] || ''}
+              childValue={fieldValues[`${f.fieldId}__child`] || ''}
+              onChange={(v) => setField(f.fieldId, v)}
+              onChildChange={(v) => setField(`${f.fieldId}__child`, v)}
+              locked={locked}
+            />
+          ))}
+        </div>
+      )}
     </section>
   );
 }

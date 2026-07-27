@@ -44,7 +44,13 @@ export type TicketRepliesMap = Record<string, TicketReply>;
  *
  *  Alarm-driven polls skip when nothing has been tracked yet (no Koho send / i2c
  *  submit ever fired). Manual polls (reason='sidepanel-trigger') bypass that gate
- *  so the Refresh button always feels responsive. */
+ *  so the Refresh button always feels responsive.
+ *
+ *  Merge semantics: the new bridge returns every known tracked reply (acked or not)
+ *  so the poll fully rebuilds the map from scratch. On old bridge deployments that
+ *  only return unacked, this would silently drop previously-seen acked entries —
+ *  we intentionally preserve prior entries whose messageId wasn't in the new poll
+ *  and mark them `acked=true` so the deeplink survives the bridge upgrade window. */
 export async function runReplyPollNow(reason: string): Promise<TicketRepliesMap> {
   try {
     if (reason !== 'sidepanel-trigger') {
@@ -56,18 +62,28 @@ export async function runReplyPollNow(reason: string): Promise<TicketRepliesMap>
     }
     log('polling (' + reason + ')');
     const replies = await checkForRepliesViaBridge();
+    const prior = await chrome.storage.local.get(REPLIES_STORAGE_KEY);
+    const priorMap = (prior[REPLIES_STORAGE_KEY] as TicketRepliesMap | undefined) || {};
+
     const map: TicketRepliesMap = {};
-    // If Gmail returns multiple replies for the same ticket (unlikely — the sheet has
-    // one row per send + i2c-open — but possible when both a Koho and i2c thread
+    // If the bridge returns multiple replies for the same ticket (unlikely — the sheet
+    // has one row per send + i2c-open — but possible when both a Koho and i2c thread
     // exist for the same WOCOO ticket), keep the latest by receivedAt.
     for (const r of replies) {
-      const prior = map[r.wocooTicketId];
-      if (!prior || (r.receivedAt || '') > (prior.receivedAt || '')) {
+      const cur = map[r.wocooTicketId];
+      if (!cur || (r.receivedAt || '') > (cur.receivedAt || '')) {
         map[r.wocooTicketId] = r;
       }
     }
+    // Carry forward prior entries the bridge no longer returned (old-bridge fallback:
+    // the deployment still filters unacked, so an ack causes a row to vanish). Mark
+    // them acked so the pill renders in the muted state.
+    for (const [id, entry] of Object.entries(priorMap)) {
+      if (!(id in map)) map[id] = { ...entry, acked: true };
+    }
+
     await chrome.storage.local.set({ [REPLIES_STORAGE_KEY]: map });
-    log('poll complete —', replies.length, 'unacknowledged replies across', Object.keys(map).length, 'tickets');
+    log('poll complete —', replies.length, 'replies across', Object.keys(map).length, 'tickets');
     return map;
   } catch (e) {
     log('poll failed', e);

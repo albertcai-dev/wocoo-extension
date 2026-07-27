@@ -1,7 +1,7 @@
 // Configuration for the Move workflow — destinations, per-destination required fields,
 // and the EOC Problem Area master list (157 options).
 
-export type MoveDestination = 'EOC' | 'DBO' | 'CRED' | 'FRAUD' | 'PRR';
+export type MoveDestination = 'EOC' | 'DBO' | 'CRED' | 'FRAUD' | 'PRR' | 'PFO';
 
 export interface DestinationConfig {
   key: MoveDestination;
@@ -40,9 +40,9 @@ export const DESTINATIONS: DestinationConfig[] = [
     key: 'FRAUD',
     name: 'FRAUD',
     fullName: 'Fraud Operation',
-    apiEnabled: false,
+    apiEnabled: true,
     boardUrl: 'https://wealthsimple.atlassian.net/jira/software/c/projects/FRAUD/boards/292',
-    notes: 'API move not wired for FRAUD — use Jira’s native Move dialog from the ticket.',
+    notes: 'Pick an issue type below — required fields render dynamically from Jira.',
   },
   {
     key: 'PRR',
@@ -51,6 +51,14 @@ export const DESTINATIONS: DestinationConfig[] = [
     apiEnabled: true,
     boardUrl: 'https://wealthsimple.atlassian.net/jira/software/projects/PRR/boards/1076',
     notes: 'Pick an issue type below — required fields render dynamically from Jira.',
+  },
+  {
+    key: 'PFO',
+    name: 'PFO',
+    fullName: 'Payment Fulfillment Ops',
+    apiEnabled: true,
+    boardUrl: 'https://wealthsimple.atlassian.net/jira/software/c/projects/PFO',
+    notes: 'Card reissues (Express Shipping) and Cheques delivery. DBO handles other operational asks.',
   },
 ];
 
@@ -237,15 +245,77 @@ export const EOC_CLIENT_STATUS_IDS = {
   Generation: '17690',
 } as const;
 
-// User Tier — labels match Jira AND WOCOO ticket.tier values. Still used by REIMB
-// ticket creation (reimbConfig re-exports it), so this block stays even though PFO is
-// gone.
+// User Tier — labels match Jira AND WOCOO ticket.tier values. Shared by REIMB
+// ticket creation (reimbConfig re-exports it) and PFO Express Shipping.
 export const USER_TIER_LABELS = ['Core', 'Premium', 'Generation'] as const;
 export type UserTier = (typeof USER_TIER_LABELS)[number];
 
 export function tierToUserTierLabel(tier: string | null | undefined): UserTier {
   if (tier === 'Premium' || tier === 'Generation' || tier === 'Core') return tier;
   return 'Core';
+}
+
+// ── PFO (Payment Fulfillment Ops) ─────────────────────────────────────────────
+// DBO covers most operational asks but PFO still owns two flows:
+//   • Cheques: Delivery Issue (14658) — minimal form (Summary + Identity ID)
+//   • Express Shipping Request (14656) — card reissues, 7 required custom fields
+// Project + issue-type IDs are hardcoded (stable, not looked up by name).
+
+export const PFO_PROJECT_ID = '13086';
+export const PFO_EXPRESS_SHIPPING_ISSUETYPE_ID = '14656';
+export const PFO_CHEQUES_DELIVERY_ISSUETYPE_ID = '14658';
+
+// Express Shipping Request (issuetype 14656) required-field IDs. Four fields
+// (DID_REISSUE, CX_KEEPS_OWNERSHIP, UNABLE_REISSUE_REASON, KEEP_OWNERSHIP_REASON)
+// are hidden in the UI and hardcoded on submit — the flow only fires for tickets
+// that aren't already card-reissued and where CX keeps ownership, and the two
+// text follow-ups are conditionally required by Jira whenever those answers are
+// "No" / "Yes".
+export const EXPRESS_SHIPPING_FIELDS = {
+  SUMMARY:               'summary',
+  IDENTITY_ID:           'customfield_11458',
+  CARD_TYPE:             'customfield_25816',
+  USER_TIER:             'customfield_11416',
+  REISSUE_REASON:        'customfield_25797',
+  DATE_NEEDED:           'customfield_25817',
+  DID_REISSUE:           'customfield_25819',
+  CX_KEEPS_OWNERSHIP:    'customfield_25821',
+  UNABLE_REISSUE_REASON: 'customfield_25818',
+  KEEP_OWNERSHIP_REASON: 'customfield_25825',
+} as const;
+
+// Card Type options — labels match Jira; resolved to option IDs via resolveOptionId at submit.
+export const CARD_TYPE_LABELS = ['Credit Card', 'Prepaid Mastercard'] as const;
+export type CardType = (typeof CARD_TYPE_LABELS)[number];
+
+// Reissue Reason — 4 labels observed in real PFO tickets. Others exist in Jira
+// (visible in the createmeta call); add on demand.
+export const REISSUE_REASON_LABELS = [
+  'Failed Delivery (It\'s been > 15 days)',
+  'Upgrade Card Material',
+  'Fraud',
+  'Other',
+] as const;
+
+// PFO work-type picker labels — three-way choice at the top of the PFO branch.
+// Credit Card / Prepaid Card both route to Express Shipping Request (14656);
+// Cheques routes to Cheques: Delivery Issue (14658).
+export const PFO_API_SUPPORTED_WORK_TYPES = [
+  'Credit Card: Delivery Issue',
+  'Prepaid Card: Delivery Issue',
+  'Cheques: Delivery Issue',
+] as const;
+export type PfoWorkType = (typeof PFO_API_SUPPORTED_WORK_TYPES)[number];
+
+export function recommendedCardType(workType: string | null | undefined): CardType {
+  return /prepaid/i.test(workType || '') ? 'Prepaid Mastercard' : 'Credit Card';
+}
+
+export function recommendedPfoWorkType(workType: string | null | undefined): PfoWorkType {
+  const wt = (workType || '').toLowerCase();
+  if (/prepaid/.test(wt)) return 'Prepaid Card: Delivery Issue';
+  if (/cheque/.test(wt)) return 'Cheques: Delivery Issue';
+  return 'Credit Card: Delivery Issue';
 }
 
 // ── DBO (Digital Branch Operations) — replaces PFO as of 2026-07 ──────────────
@@ -338,6 +408,43 @@ export const DBO_ISSUE_TYPES: PrrIssueTypeConfig[] = [
     description: 'Dispute-related letter workflow.',
     requiredFields: [
       F_DBO_CLIENT_ID,
+    ],
+  },
+];
+
+// ── FRAUD (Fraud Operation) ───────────────────────────────────────────────────
+// Two issue types (Task, Other) with the same 3 required custom fields:
+//   • Suspicious User Slugs (paragraph)
+//   • Suspicious Identity Slug (paragraph)
+//   • Fraud Detection Method (option — resolved via createmeta at runtime)
+// Option labels come back empty from jira_get_project_metadata but render correctly
+// via /rest/api/3/issue/createmeta (same endpoint DBO/PRR use).
+
+export const FRAUD_PROJECT_KEY = 'FRAUD';
+
+const F_FRAUD_USER_SLUGS         = { fieldId: 'customfield_10163', name: 'Suspicious User Slugs',    type: 'paragraph' as const };
+const F_FRAUD_IDENTITY_SLUG      = { fieldId: 'customfield_10421', name: 'Suspicious Identity Slug', type: 'paragraph' as const };
+const F_FRAUD_DETECTION_METHOD   = { fieldId: 'customfield_10414', name: 'Fraud Detection Method',   type: 'option' as const };
+
+export const FRAUD_ISSUE_TYPES: PrrIssueTypeConfig[] = [
+  {
+    id: '10002',
+    name: 'Task',
+    description: 'Fraud investigation task — most common shape for a moved WOCOO ticket.',
+    requiredFields: [
+      F_FRAUD_USER_SLUGS,
+      F_FRAUD_IDENTITY_SLUG,
+      F_FRAUD_DETECTION_METHOD,
+    ],
+  },
+  {
+    id: '10737',
+    name: 'Other',
+    description: 'Catch-all Fraud work that doesn\'t map to a specific Task shape.',
+    requiredFields: [
+      F_FRAUD_USER_SLUGS,
+      F_FRAUD_IDENTITY_SLUG,
+      F_FRAUD_DETECTION_METHOD,
     ],
   },
 ];

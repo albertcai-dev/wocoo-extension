@@ -1267,8 +1267,15 @@ function SuccessPanel({ reimbKey, reimbUrl, ticketId, fmtAmt, onCloseToTicket, o
 
 function extractAmountFromDescription(desc: string): number | null {
   if (!desc) return null;
-  const m = desc.match(/\$\s?([\d,]+\.\d{2})/);
-  if (m) {
+  // Overpayments are often written as a negative ("-$7,405.79" / "-7405.79"), so
+  // match an optional sign on either side of the $ and normalise to a magnitude.
+  const patterns = [
+    /-?\$\s?-?([\d,]+\.\d{2})/, // $7,405.79 / -$7,405.79 / $-7,405.79
+    /-?\b(\d[\d,]*\.\d{2})\b/,  // bare 7405.79 / -7405.79
+  ];
+  for (const re of patterns) {
+    const m = desc.match(re);
+    if (!m) continue;
     const n = parseFloat(m[1].replace(/,/g, ''));
     if (isFinite(n) && n > 0) return n;
   }

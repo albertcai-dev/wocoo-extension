@@ -1,8 +1,7 @@
 // Heuristic to detect a "waive CC fee for N months" retention request. Mutually
-// exclusive with QCFeeWaiver (QC signals veto) and QCAutoReimb (eligibility flip
-// signals veto) so at most one fee-waiver card shows on a given ticket.
+// exclusive with QCFeeWaiver (QC signal vetoes) — QCAutoReimb sits alongside but
+// requires QC + fee + flip, so it can't collide once we've dropped the QC path.
 
-import { ELIGIBILITY_FLIP_SIGNALS } from './qcAutoReimbDetect';
 import { CLIENT_LEAVING_SIGNALS } from './clientLeavingSignals';
 
 export interface RetentionFeeWaiverDetection {
@@ -50,8 +49,10 @@ export function detectRetentionFeeWaiver(
   const qc = findMatches(text, QC_SIGNALS);
   if (qc.length) return { matched: false, reasons: [`vetoed (handled by QCFeeWaiver): ${qc[0]}`] };
 
-  const eligibilityFlips = findMatches(text, ELIGIBILITY_FLIP_SIGNALS);
-  if (eligibilityFlips.length) return { matched: false, reasons: [`vetoed (handled by QCAutoReimb): ${eligibilityFlips[0]}`] };
+  // No flip veto here: retention offers commonly reference "direct deposit" as a
+  // condition ("waive fees WHILE client brings DD over"). QCAutoReimb requires
+  // QC+fee+flip, so once we've cleared the QC check above it can't match either
+  // path — vetoing on flip alone was silently dropping retention tickets.
 
   // Client is closing / cancelling / hasn't used the card → this is a reversal,
   // not retention. Let ReverseFee handle it.
