@@ -32,6 +32,8 @@ import { QCFeeWaiverWorkflow } from './QCFeeWaiverWorkflow';
 import { RetentionFeeWaiverWorkflow } from './RetentionFeeWaiverWorkflow';
 import { VisaCompanionRpinWorkflow } from './VisaCompanionRpinWorkflow';
 import { QCAutoReimbCard } from './QCAutoReimbCard';
+import { L3EscalationCard } from './L3EscalationCard';
+import { detectL3Escalation } from '../data/l3EscalationDetect';
 import { HomeView } from './HomeView';
 import { WiresPendingPosting } from './WiresPendingPosting';
 import { SettingsView } from './SettingsView';
@@ -268,6 +270,10 @@ function TicketViewInner({ ticket, onTicketUpdate, onStartTriage, onStartReverse
     ? description.slice(0, 220) + '…'
     : description;
 
+  // When the ticket routes to L3, that card owns the ticket — hide the in-panel
+  // fee-handling cards it supersedes so there's only one recommended action.
+  const l3Matched = detectL3Escalation(ticket.summary || '', ticket.description || '', ticket.workType, ticket.attachmentCount || 0).matched;
+
   // Phase 1 Ticket Log: track the most recent transition event and the row_number
   // returned from logTicketViaBridge, so NotePrompt can update it. `unsavedChips`
   // holds dismissed prompts the user can restore for up to 5 minutes.
@@ -463,17 +469,20 @@ function TicketViewInner({ ticket, onTicketUpdate, onStartTriage, onStartReverse
         />
       ) : null}
 
+      {/* L3 ESCALATION DETECTION — Reverse Fee / Code 450 / joint account / DD timing */}
+      <L3EscalationCard ticket={ticket} onTicketUpdate={onTicketUpdate} />
+
       {/* QC AUTO-REIMB DETECTION — shows when ticket looks like a newly-eligible QC client */}
-      <QCAutoReimbCard ticket={ticket} onTicketUpdate={onTicketUpdate} />
+      {l3Matched ? null : <QCAutoReimbCard ticket={ticket} onTicketUpdate={onTicketUpdate} />}
 
       {/* OVERPAYMENT TRIAGE DETECTION — credit card overpayment refund flow */}
       <OverpaymentTriageCard ticket={ticket} onStart={onStartTriage} />
 
       {/* REVERSE FEE DETECTION — fee reversal request (FX/ATM/foreign transaction) */}
-      <ReverseFeeCard ticket={ticket} onStart={onStartReverseFee} />
+      {l3Matched ? null : <ReverseFeeCard ticket={ticket} onStart={onStartReverseFee} />}
 
       {/* QC FEE WAIVER DETECTION — Quebec client needs MANUAL annual-fee waiver */}
-      <QCFeeWaiverCard ticket={ticket} onStart={onStartQCFeeWaiver} />
+      {l3Matched ? null : <QCFeeWaiverCard ticket={ticket} onStart={onStartQCFeeWaiver} />}
 
       {/* RETENTION FEE WAIVER DETECTION — non-QC "waive CC fee for N months" retention ask */}
       <RetentionFeeWaiverCard ticket={ticket} onStart={onStartRetentionFeeWaiver} />
@@ -1027,9 +1036,15 @@ function ActionButton({ variant, children, onClick, title, disabled }: { variant
 // ---------- reply pill (Koho / i2c inbox notification) ----------
 //
 // Subscribes to chrome.storage.local[`ticket_replies`] — a map keyed by wocooTicketId
-// that the background reply-poll updates every 5 min (and on manual refresh). If the
-// current ticket has an entry, we render a red pill; click opens the Gmail permalink
-// and acknowledges the reply so the pill goes away.
+// that the background reply-poll updates every 5 min (and on manual refresh).
+//
+// The pill renders in one of two states:
+//   • unacked (red): "New reply from …" — needs attention
+//   • acked (muted): a compact "Reopen last reply in Gmail" chip — the deeplink
+//     stays accessible after ack so the agent can revisit the email
+//
+// Main click opens the Gmail permalink without touching ack state (idempotent —
+// safe to click as many times as needed). The ✕ button flips ack (unacked → acked).
 
 const REPLIES_STORAGE_KEY = 'ticket_replies';
 
@@ -1053,28 +1068,64 @@ function ReplyPill({ ticketId }: { ticketId: string }) {
 
   if (!reply) return null;
 
-  const openAndAck = () => {
+  const openEmail = () => {
     // Gmail permalink accepts a raw message ID after the folder anchor.
     const url = `https://mail.google.com/mail/u/0/#inbox/${reply.messageId}`;
     window.open(url, '_blank', 'noopener,noreferrer');
-    // Optimistically remove the pill locally + tell the bridge to persist ack.
+  };
+
+  const markAsRead = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    // Optimistically flip local acked=true + tell the bridge to persist. The pill
+    // stays visible in muted style so the deeplink remains reachable.
     void chrome.storage.local.get(REPLIES_STORAGE_KEY).then((res) => {
       const map = { ...(res[REPLIES_STORAGE_KEY] as Record<string, TicketReply> | undefined || {}) };
-      delete map[ticketId];
+      if (map[ticketId]) map[ticketId] = { ...map[ticketId], acked: true };
       void chrome.storage.local.set({ [REPLIES_STORAGE_KEY]: map });
     });
-    void acknowledgeReplyViaBridge(ticketId, reply.messageId).catch((e) => {
-      console.warn('[wocoo-reply-pill] ack failed:', e);
+    void acknowledgeReplyViaBridge(ticketId, reply.messageId).catch((err) => {
+      console.warn('[wocoo-reply-pill] ack failed:', err);
     });
   };
 
   const label = reply.kind === 'koho' ? 'Koho' : 'i2c';
   const truncated = reply.snippet.length > 140 ? reply.snippet.slice(0, 140) + '…' : reply.snippet;
+  const acked = reply.acked === true;
+
+  if (acked) {
+    // Muted "seen" chip — small, single-line, still deep-links to Gmail.
+    return (
+      <button
+        type="button"
+        onClick={openEmail}
+        title={`Reopen the ${label} reply in Gmail`}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          padding: '4px 10px',
+          margin: '0 var(--mint-sp-3)',
+          background: 'var(--mint-bg-subtle)',
+          border: 'var(--mint-card-stroke)',
+          borderRadius: 'var(--mint-radius-card)',
+          cursor: 'pointer',
+          textAlign: 'left',
+          width: 'calc(100% - 2 * var(--mint-sp-3))',
+          boxSizing: 'border-box',
+          font: 'inherit',
+          color: 'var(--mint-fg-soft)',
+        }}
+      >
+        <span style={{ fontSize: 12, lineHeight: 1, flexShrink: 0 }}>📭</span>
+        <span style={{ fontSize: 'var(--mint-text-nano)', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          ↗ Reopen {label} reply — {new Date(reply.receivedAt).toLocaleString('en-CA', { month: 'short', day: 'numeric' })}
+        </span>
+      </button>
+    );
+  }
+
   return (
-    <button
-      type="button"
-      onClick={openAndAck}
-      title={`Open the ${label} reply in Gmail`}
+    <div
       style={{
         display: 'flex',
         alignItems: 'flex-start',
@@ -1084,25 +1135,65 @@ function ReplyPill({ ticketId }: { ticketId: string }) {
         background: 'var(--mint-negative-bg-soft)',
         border: '1px solid var(--mint-negative-fg-graphic)',
         borderRadius: 'var(--mint-radius-card)',
-        cursor: 'pointer',
-        textAlign: 'left',
         width: 'calc(100% - 2 * var(--mint-sp-3))',
         boxSizing: 'border-box',
       }}
     >
-      <span style={{ fontSize: 16, lineHeight: 1.2, flexShrink: 0 }}>📬</span>
-      <span style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0, flex: 1 }}>
-        <span style={{ fontSize: 'var(--mint-text-micro)', fontWeight: 700, color: 'var(--mint-negative-fg-strong)' }}>
-          New reply from {label} · {new Date(reply.receivedAt).toLocaleString('en-CA', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+      <button
+        type="button"
+        onClick={openEmail}
+        title={`Open the ${label} reply in Gmail (stays available after mark as read)`}
+        style={{
+          display: 'flex',
+          alignItems: 'flex-start',
+          gap: 8,
+          background: 'transparent',
+          border: 'none',
+          padding: 0,
+          cursor: 'pointer',
+          textAlign: 'left',
+          flex: 1,
+          minWidth: 0,
+          color: 'inherit',
+          font: 'inherit',
+        }}
+      >
+        <span style={{ fontSize: 16, lineHeight: 1.2, flexShrink: 0 }}>📬</span>
+        <span style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0, flex: 1 }}>
+          <span style={{ fontSize: 'var(--mint-text-micro)', fontWeight: 700, color: 'var(--mint-negative-fg-strong)' }}>
+            New reply from {label} · {new Date(reply.receivedAt).toLocaleString('en-CA', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+          </span>
+          <span style={{ fontSize: 'var(--mint-text-nano)', color: 'var(--mint-fg-strong)', lineHeight: 1.4 }}>
+            {truncated || <em style={{ color: 'var(--mint-fg-soft)' }}>(no preview)</em>}
+          </span>
+          <span style={{ fontSize: 'var(--mint-text-nano)', color: 'var(--mint-fg-soft)', fontStyle: 'italic' }}>
+            Click to open in Gmail
+          </span>
         </span>
-        <span style={{ fontSize: 'var(--mint-text-nano)', color: 'var(--mint-fg-strong)', lineHeight: 1.4 }}>
-          {truncated || <em style={{ color: 'var(--mint-fg-soft)' }}>(no preview)</em>}
-        </span>
-        <span style={{ fontSize: 'var(--mint-text-nano)', color: 'var(--mint-fg-soft)', fontStyle: 'italic' }}>
-          Click to open in Gmail
-        </span>
-      </span>
-    </button>
+      </button>
+      <button
+        type="button"
+        onClick={markAsRead}
+        title="Mark as read — pill turns into a small persistent Gmail deeplink"
+        aria-label="Mark reply notification as read"
+        style={{
+          flexShrink: 0,
+          width: 22,
+          height: 22,
+          padding: 0,
+          background: 'transparent',
+          border: 'none',
+          borderRadius: 4,
+          color: 'var(--mint-negative-fg-strong)',
+          fontSize: 16,
+          lineHeight: 1,
+          cursor: 'pointer',
+          alignSelf: 'flex-start',
+        }}
+      >
+        ×
+      </button>
+    </div>
   );
 }
 
