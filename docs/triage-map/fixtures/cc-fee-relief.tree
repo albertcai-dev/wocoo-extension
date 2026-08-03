@@ -1,0 +1,21 @@
+CC Fee Relief
+  # Annual fee | i2c → Current Statement
+    ? Is the posted fee $20 or $220?
+      ~ Match the fee amount on the current statement
+      Yes = Run ReverseFeeWorkflow (reverse_fee) | known annual fee amount
+      No  = Escalate to team for further triage | unrecognised fee amount
+  # Interest fee | i2c → Recent Activity, paginate Next
+    ? Is the interest charge found in Recent Activity?
+      ~ If not found, fall back to Current Statement and re-iterate
+      Yes = Run ReverseFeeWorkflow (reverse_interest_fee) | charge located
+      No  = Escalate to team for further triage | charge not located
+  # Quebec annual fee | Atlas → province
+    ?AND Does the client reside in Quebec?
+    ?AND Is this a cancellation or newly-eligible case?
+      Yes = Run QCFeeWaiverWorkflow | QC admin credit + REIMB
+      No  = Escalate to team for further triage | outside QC waiver policy
+  # Retention credit | Retention tracker + "Fee Credit Offer" summary
+    ? Is there a Fee Credit Offer on the ticket?
+      ~ Credit is $20 × months; plural "months" or "a/per month" only
+      Yes = Run RetentionFeeWaiverWorkflow | offer confirmed
+      No  = Escalate to team for further triage | no offer on record

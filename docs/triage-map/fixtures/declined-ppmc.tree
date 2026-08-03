@@ -1,0 +1,8 @@
+Declined Prepaid Mastercard Transaction
+  - Open CXO-KOHO NSF Declines dashboard | Preset 5871
+  - Input client's identity ID
+  - Review decline transaction date + merchant
+  - Read the FIRST code in verified_decline_codes | later codes mislead
+  ? Verified decline code present?
+    Yes = Reply with decline reason from Guru | code is the true reason
+    No  = Escalate to team for further triage | no verified code on dashboard
