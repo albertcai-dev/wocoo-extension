@@ -5,6 +5,7 @@
 import { detectReverseFee } from './reverseFeeDetect';
 import { detectQCFeeWaiver } from './qcFeeWaiverDetect';
 import { detectQCAutoReimb } from './qcAutoReimbDetect';
+import { detectInterestInvestigation } from './interestInvestigationDetect';
 
 export interface L3EscalationDetection {
   matched: boolean;
@@ -70,6 +71,14 @@ export function detectL3Escalation(
   const raw = `${summary || ''}\n${description || ''}`;
   const text = raw.toLowerCase();
   const reasons: string[] = [];
+
+  // "Why was I charged this interest?" tickets look like Reverse Fee to the detector
+  // below (interest mentioned in summary/description) but the agent's first move is the
+  // Interest Validation tool, not an L3 handoff.
+  const investigation = detectInterestInvestigation(summary, description, workType);
+  if (investigation.matched) {
+    return { matched: false, reasons: [`vetoed (handled by Interest Investigation): ${investigation.reasons[0] || 'matched'}`] };
+  }
 
   const reverseFee = detectReverseFee(summary, description, workType, attachmentCount);
   if (reverseFee.matched) reasons.push(`Reverse Fee: ${reverseFee.reasons[0] || 'matched'}`);

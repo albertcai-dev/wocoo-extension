@@ -89,18 +89,33 @@ import {
   scheduleReplyPoll,
   runReplyPollNow,
 } from './replyPollScheduler';
+import {
+  sweepExpiredBridgeTabs,
+  sweepAllBridgeTabsOnStartup,
+  unregisterBridgeTab,
+} from '../api/bridgeTabs';
+
+// Keep the bridge-tab registry honest when the user closes a tab by hand, so the sweep
+// isn't chasing tab IDs that are already gone (and can't collide with a recycled ID).
+chrome.tabs.onRemoved.addListener((tabId) => { void unregisterBridgeTab(tabId); });
 
 // On install / startup, seed once. `scheduleReplyPoll` just registers a chrome.alarms
 // entry — no bridge tab opens. The first actual poll runs at the +5 min mark, and only
 // if the user has actually sent a Koho email or opened an i2c form (the `has_tracked_replies`
 // gate inside `runReplyPollNow`). This keeps startup silent when there's nothing to check.
+//
+// The startup sweep runs first: a fresh worker holds no pending callBridge promises, so any
+// surviving `?action=` bridge tab is abandoned — including tabs stranded when the previous
+// worker was evicted mid-call.
 chrome.runtime.onInstalled.addListener(() => {
+  void sweepAllBridgeTabsOnStartup();
   rebroadcastActiveTab();
   void scheduleNextMcvAlarm();
   void runMcvIfMissed();
   void scheduleReplyPoll();
 });
 chrome.runtime.onStartup.addListener(() => {
+  void sweepAllBridgeTabsOnStartup();
   rebroadcastActiveTab();
   void scheduleNextMcvAlarm();
   void runMcvIfMissed();
@@ -110,6 +125,9 @@ chrome.runtime.onStartup.addListener(() => {
 // Daily 9 AM Mobile Cheque Validation alarm — one-shot, re-schedules itself.
 // Plus the 5-min reply-poll alarm.
 chrome.alarms.onAlarm.addListener((alarm) => {
+  // Any alarm wake-up is a chance to sweep. The 5-min reply poll makes this the effective
+  // sweep cadence, and it also collects tabs the *previous* poll leaked.
+  void sweepExpiredBridgeTabs();
   if (alarm.name === MCV_ALARM_NAME) void handleMcvAlarm();
   if (alarm.name === REPLY_POLL_ALARM_NAME) void runReplyPollNow('alarm');
 });

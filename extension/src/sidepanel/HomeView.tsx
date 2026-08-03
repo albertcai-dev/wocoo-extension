@@ -4,7 +4,13 @@
 import { useEffect, useState } from 'react';
 import { searchTickets, type TicketRow } from '../api/jira';
 import { MobileChequeValidationTile } from './MobileChequeValidation';
-import { checkForRepliesViaBridge, backfillI2cViaBridge, type TicketReply } from '../api/bridge';
+import {
+  backfillI2cViaBridge,
+  backfillKohoTrackKeysViaBridge,
+  listKohoRowsNeedingEmailViaBridge,
+  type TicketReply,
+} from '../api/bridge';
+import { runReplyPollNow } from '../background/replyPollScheduler';
 import { getTicket } from '../api/jira';
 
 type LoadState = { kind: 'loading' } | { kind: 'error'; message: string } | { kind: 'ready'; rows: TicketRow[] };
@@ -21,11 +27,12 @@ type SortDirection = 'newest' | 'oldest';
  *  the top of the list — replies always win over sort order so nothing gets buried.
  *  'newest' = fewest days first (recently transitioned tickets at top).
  *  'oldest' = most days first (stalest tickets at top). */
-/** A reply "counts" as attention-grabbing only when it isn't acknowledged yet. Acked
- *  replies remain in the map so the deeplink pill on the ticket panel can render,
- *  but the home list shouldn't keep coloring those rows red. */
+/** A reply "counts" as attention-grabbing only when it isn't acknowledged yet and an
+ *  actual inbound message was matched. Acked entries — and tracked-but-no-reply-yet
+ *  rows — remain in the map so the deeplink pill on the ticket panel can render, but
+ *  the home list shouldn't keep coloring those rows red. */
 function isUnacked(r: TicketReply | undefined): boolean {
-  return !!r && r.acked !== true;
+  return !!r && r.acked !== true && !!r.messageId;
 }
 
 function orderRows(rows: TicketRow[], replies: Record<string, TicketReply>, sort: SortDirection): TicketRow[] {
@@ -116,7 +123,37 @@ export function HomeView({ onOpenTicket, onOpenWiresPending, header }: { onOpenT
         return;
       }
       const { added, skipped } = await backfillI2cViaBridge(entries);
-      alert(`i2c backfill: added ${added} rows, skipped ${skipped} duplicates. Click Refresh replies to check Gmail.`);
+
+      // Repoint legacy koho rows, which were keyed by ticket id and so could only ever
+      // match threads the extension composed itself. The sheet decides which rows need
+      // it — driving this off `entries` covered only the Home list (assigned + not Done,
+      // max 50) and so matched none of the older koho rows.
+      const needIds = await listKohoRowsNeedingEmailViaBridge();
+      const emailById = new Map(entries.map((en) => [en.wocooTicketId, en.clientEmail]));
+      const kohoEntries: Array<{ wocooTicketId: string; clientEmail: string }> = [];
+      for (const id of needIds) {
+        let email = emailById.get(id);
+        if (!email) {
+          try {
+            email = (await getTicket(id)).clientEmail || '';
+          } catch (err) {
+            console.warn('[wocoo-backfill-koho] ticket fetch failed for', id, err);
+            continue;
+          }
+        }
+        if (email) kohoEntries.push({ wocooTicketId: id, clientEmail: email });
+      }
+      const koho = kohoEntries.length
+        ? await backfillKohoTrackKeysViaBridge(kohoEntries)
+        : { updated: 0, skipped: 0 };
+
+      alert(
+        `i2c backfill: added ${added} rows, skipped ${skipped} duplicates.\n` +
+        `Koho trackKeys: ${needIds.length} rows needed a client email, ` +
+        `${koho.updated} repointed, ${needIds.length - koho.updated} left alone ` +
+        `(no client email on the ticket).\n` +
+        `Click Refresh replies to check Gmail.`,
+      );
     } catch (e: any) {
       console.warn('[wocoo-backfill-i2c] failed:', e);
       alert('Backfill failed: ' + (e?.message || String(e)));
@@ -129,19 +166,13 @@ export function HomeView({ onOpenTicket, onOpenWiresPending, header }: { onOpenT
     if (refreshing) return;
     setRefreshing(true);
     try {
-      // Call the bridge directly from the sidepanel — bounded by the bridge's own
-      // 60s timeout. Skips the service-worker sendMessage round-trip that was
-      // making the button feel indefinite. Result mirrors into chrome.storage.local
-      // so the alarm-driven poll and this button stay in sync.
-      const replies = await checkForRepliesViaBridge();
-      const map: Record<string, TicketReply> = {};
-      for (const r of replies) {
-        const prior = map[r.wocooTicketId];
-        if (!prior || (r.receivedAt || '') > (prior.receivedAt || '')) {
-          map[r.wocooTicketId] = r;
-        }
-      }
-      await chrome.storage.local.set({ [REPLIES_STORAGE_KEY]: map });
+      // Share the scheduler's poll so this button gets the same merge semantics as the
+      // alarm: carry forward acked/archived entries instead of rebuilding the map from
+      // the bridge response alone. Rebuilding here used to drop every already-read
+      // ticket's Gmail deeplink on each Refresh. 'sidepanel-trigger' bypasses the
+      // has-tracked gate so the button always actually polls. Runs in-panel rather
+      // than via the service worker so it's bounded by the bridge's own 60s timeout.
+      await runReplyPollNow('sidepanel-trigger');
     } catch (e) {
       console.warn('[wocoo-refresh-replies] poll failed:', e);
     } finally {

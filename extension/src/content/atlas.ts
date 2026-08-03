@@ -462,3 +462,127 @@
     observer.disconnect();
   }, 10_000);
 })();
+
+// =============================================================================
+// Full Client Details lookup — name + mailing address for the Refund Auth Letter.
+// Triggered when the side panel writes `pending_atlas_client_details_lookup:
+// {sourceTicketId}` to chrome.storage.local. Reads the "Full Client Details" grid on
+// the identity overview page (CLIENT INFORMATION → Name, ADDRESS INFORMATION →
+// Mailing*/Residential*).
+//
+// Atlas is styled-components, so class names are content-hashed and unusable as
+// selectors. Everything here matches on the visible LABEL text and takes the next
+// leaf node as its value — with KNOWN_LABELS as a guard so a missing value can't
+// silently return the following label instead.
+// =============================================================================
+
+(function clientDetailsLookup() {
+  const log = (msg: string, ...args: unknown[]) => console.log('[wocoo-atlas-details]', msg, ...args);
+
+  // Atlas prints these for empty fields; treat them as "no value".
+  const NOT_SET = /^(not specified|null|n\/a|none|undefined|-|—)$/i;
+
+  // Every label rendered in the Full Client Details grid. Used only to detect that a
+  // field's value is missing (the next leaf is another label, not a value).
+  const KNOWN_LABELS = new Set([
+    'name', 'preferred first name', 'language', 'email', 'phone', 'jurisdiction', 'age',
+    'date of birth', 'email confirmed', 'email confirmed date', 'email confirmed time',
+    'unconfirmed email', 'client jira tickets',
+    'residential apartment', 'residential address', 'residential city', 'residential country',
+    'residential postal/zip', 'mailing apartment', 'mailing address', 'mailing city',
+    'mailing country', 'mailing postal/zip', 'primary citizenship', 'all citizenships',
+    'remaining card allowance', 'maximum monthly card allowance',
+    'submitted kyc', 'communication opt-in', 'given name', 'middle names', 'surname',
+    'sin', 'gender', 'occupation', 'employment status', 'employer',
+    'client information', 'account information', 'address information', 'kyc information',
+  ]);
+
+  interface Leaf { text: string }
+
+  function leafTexts(): Leaf[] {
+    const out: Leaf[] = [];
+    for (const el of Array.from(document.querySelectorAll<HTMLElement>('*'))) {
+      if (el.children.length > 0) continue;
+      const text = (el.textContent || '').trim();
+      if (!text) continue;
+      out.push({ text });
+    }
+    return out;
+  }
+
+  function readValue(leaves: Leaf[], label: string): string | null {
+    const target = label.toLowerCase();
+    for (let i = 0; i < leaves.length; i++) {
+      if (leaves[i].text.toLowerCase().replace(/:$/, '') !== target) continue;
+      const next = leaves[i + 1];
+      if (!next) return null;
+      const v = next.text;
+      // The next leaf being another label means this field rendered without a value.
+      if (KNOWN_LABELS.has(v.toLowerCase().replace(/:$/, ''))) return null;
+      if (NOT_SET.test(v)) return null;
+      return v;
+    }
+    return null;
+  }
+
+  /** "L3T2N7" → "L3T 2N7"; already-spaced or non-Canadian values pass through. */
+  function formatPostal(raw: string | null): string | null {
+    if (!raw) return null;
+    const compact = raw.replace(/\s+/g, '').toUpperCase();
+    if (/^[A-Z]\d[A-Z]\d[A-Z]\d$/.test(compact)) return `${compact.slice(0, 3)} ${compact.slice(3)}`;
+    return raw.trim();
+  }
+
+  let detailsWrittenRan = false;
+  const startedAt = Date.now();
+
+  async function tick() {
+    if (detailsWrittenRan) return;
+    const res = await chrome.storage.local.get('pending_atlas_client_details_lookup');
+    const ctx = res.pending_atlas_client_details_lookup as { sourceTicketId?: string } | undefined;
+    if (!ctx) return;
+
+    const leaves = leafTexts();
+    const name = readValue(leaves, 'Name');
+
+    // Mailing address is what the letter should use; fall back to residential when the
+    // client has no separate mailing address on file.
+    const apartment = readValue(leaves, 'Mailing Apartment') ?? readValue(leaves, 'Residential Apartment');
+    const address = readValue(leaves, 'Mailing Address') ?? readValue(leaves, 'Residential Address');
+    const city = readValue(leaves, 'Mailing City') ?? readValue(leaves, 'Residential City');
+    const postal = formatPostal(readValue(leaves, 'Mailing Postal/ZIP') ?? readValue(leaves, 'Residential Postal/ZIP'));
+
+    const street = [apartment, address].filter(Boolean).join(', ') || null;
+
+    const complete = Boolean(name && street && city && postal);
+    // After 20s, emit whatever we have rather than timing out — the fields are editable
+    // in the workflow, so partial beats nothing.
+    const relaxed = Date.now() - startedAt > 20_000 && Boolean(name && street);
+    if (!complete && !relaxed) return;
+
+    log('captured client details', { name, street, city, postal, complete });
+    await chrome.storage.local.set({
+      atlas_client_details: {
+        sourceTicketId: ctx.sourceTicketId || '',
+        name: name || '',
+        street: street || '',
+        cityProvince: city || '',
+        postal: postal || '',
+        complete,
+        capturedAt: new Date().toISOString(),
+      },
+    });
+    try { await chrome.storage.local.remove('pending_atlas_client_details_lookup'); } catch { /* fine */ }
+    detailsWrittenRan = true;
+  }
+
+  const deadline = Date.now() + 30_000;
+  const interval = window.setInterval(() => {
+    if (Date.now() > deadline || detailsWrittenRan) {
+      window.clearInterval(interval);
+      return;
+    }
+    void tick();
+  }, 400);
+  void tick();
+})();

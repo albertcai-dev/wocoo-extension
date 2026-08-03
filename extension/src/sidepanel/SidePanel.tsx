@@ -33,7 +33,11 @@ import { RetentionFeeWaiverWorkflow } from './RetentionFeeWaiverWorkflow';
 import { VisaCompanionRpinWorkflow } from './VisaCompanionRpinWorkflow';
 import { QCAutoReimbCard } from './QCAutoReimbCard';
 import { L3EscalationCard } from './L3EscalationCard';
+import { InterestInvestigationCard } from './InterestInvestigationCard';
+import { RefundAuthLetterWorkflow } from './RefundAuthLetterWorkflow';
+import { useInterestTool } from './useInterestTool';
 import { detectL3Escalation } from '../data/l3EscalationDetect';
+import { detectInterestInvestigation } from '../data/interestInvestigationDetect';
 import { HomeView } from './HomeView';
 import { WiresPendingPosting } from './WiresPendingPosting';
 import { SettingsView } from './SettingsView';
@@ -183,6 +187,15 @@ function TicketView({ ticket, onTicketUpdate, onGoHome, onOpenSettings }: { tick
   const [qcFeeWaiverActive, setQCFeeWaiverActive] = useState(false);
   const [retentionFeeWaiverActive, setRetentionFeeWaiverActive] = useState(false);
   const [visaCompanionRpinActive, setVisaCompanionRpinActive] = useState(false);
+  const [refundAuthLetterActive, setRefundAuthLetterActive] = useState(false);
+  if (refundAuthLetterActive) {
+    return (
+      <RefundAuthLetterWorkflow
+        ticket={ticket}
+        onClose={() => setRefundAuthLetterActive(false)}
+      />
+    );
+  }
   if (triageActive) {
     return (
       <OverpaymentTriage
@@ -246,13 +259,14 @@ function TicketView({ ticket, onTicketUpdate, onGoHome, onOpenSettings }: { tick
       onStartWalletTriage={() => setWalletTriageActive(true)}
       onStartRetentionFeeWaiver={() => setRetentionFeeWaiverActive(true)}
       onStartVisaCompanionRpin={() => setVisaCompanionRpinActive(true)}
+      onStartRefundAuthLetter={() => setRefundAuthLetterActive(true)}
       onGoHome={onGoHome}
       onOpenSettings={onOpenSettings}
     />
   );
 }
 
-function TicketViewInner({ ticket, onTicketUpdate, onStartTriage, onStartReverseFee, onStartQCFeeWaiver, onStartWalletTriage, onStartRetentionFeeWaiver, onStartVisaCompanionRpin, onGoHome, onOpenSettings }: { ticket: WocooTicket; onTicketUpdate: (t: WocooTicket) => void; onStartTriage: () => void; onStartReverseFee: () => void; onStartQCFeeWaiver: () => void; onStartWalletTriage: () => void; onStartRetentionFeeWaiver: () => void; onStartVisaCompanionRpin: () => void; onGoHome: () => void; onOpenSettings: () => void }) {
+function TicketViewInner({ ticket, onTicketUpdate, onStartTriage, onStartReverseFee, onStartQCFeeWaiver, onStartWalletTriage, onStartRetentionFeeWaiver, onStartVisaCompanionRpin, onStartRefundAuthLetter, onGoHome, onOpenSettings }: { ticket: WocooTicket; onTicketUpdate: (t: WocooTicket) => void; onStartTriage: () => void; onStartReverseFee: () => void; onStartQCFeeWaiver: () => void; onStartWalletTriage: () => void; onStartRetentionFeeWaiver: () => void; onStartVisaCompanionRpin: () => void; onStartRefundAuthLetter: () => void; onGoHome: () => void; onOpenSettings: () => void }) {
   const [showFullDescription, setShowFullDescription] = useState(false);
   const [showComments, setShowComments] = useState(false);
   // Lifted from QuickActions so other surfaces (e.g. CredRouteCard recommendation banner)
@@ -273,6 +287,10 @@ function TicketViewInner({ ticket, onTicketUpdate, onStartTriage, onStartReverse
   // When the ticket routes to L3, that card owns the ticket — hide the in-panel
   // fee-handling cards it supersedes so there's only one recommended action.
   const l3Matched = detectL3Escalation(ticket.summary || '', ticket.description || '', ticket.workType, ticket.attachmentCount || 0).matched;
+  // Same idea for interest investigations: "find out why this was charged" and "start a
+  // fee waiver" are contradictory recommendations, and Reverse Fee stays available as a
+  // quick action if the investigation concludes the charge was wrong.
+  const interestInvestigationMatched = detectInterestInvestigation(ticket.summary || '', ticket.description || '', ticket.workType).matched;
 
   // Phase 1 Ticket Log: track the most recent transition event and the row_number
   // returned from logTicketViaBridge, so NotePrompt can update it. `unsavedChips`
@@ -407,7 +425,7 @@ function TicketViewInner({ ticket, onTicketUpdate, onStartTriage, onStartReverse
       </section>
 
       {/* REPLY PILL — shown when the current ticket has an unacknowledged Koho/i2c reply. */}
-      <ReplyPill ticketId={ticket.id} />
+      <ReplyPill ticketId={ticket.id} clientEmail={ticket.clientEmail} />
 
       {/* EXTERNAL TOOLS ROW — Atlas always, then i2c (Credit Card) or Koho (Prepaid Card) */}
       <ExternalToolsRow ticket={ticket} />
@@ -469,6 +487,9 @@ function TicketViewInner({ ticket, onTicketUpdate, onStartTriage, onStartReverse
         />
       ) : null}
 
+      {/* INTEREST INVESTIGATION DETECTION — "why was I charged interest?" → validation tool */}
+      <InterestInvestigationCard ticket={ticket} />
+
       {/* L3 ESCALATION DETECTION — Reverse Fee / Code 450 / joint account / DD timing */}
       <L3EscalationCard ticket={ticket} onTicketUpdate={onTicketUpdate} />
 
@@ -479,7 +500,7 @@ function TicketViewInner({ ticket, onTicketUpdate, onStartTriage, onStartReverse
       <OverpaymentTriageCard ticket={ticket} onStart={onStartTriage} />
 
       {/* REVERSE FEE DETECTION — fee reversal request (FX/ATM/foreign transaction) */}
-      {l3Matched ? null : <ReverseFeeCard ticket={ticket} onStart={onStartReverseFee} />}
+      {l3Matched || interestInvestigationMatched ? null : <ReverseFeeCard ticket={ticket} onStart={onStartReverseFee} />}
 
       {/* QC FEE WAIVER DETECTION — Quebec client needs MANUAL annual-fee waiver */}
       {l3Matched ? null : <QCFeeWaiverCard ticket={ticket} onStart={onStartQCFeeWaiver} />}
@@ -506,6 +527,7 @@ function TicketViewInner({ ticket, onTicketUpdate, onStartTriage, onStartReverse
         onStartWalletTriage={onStartWalletTriage}
         onStartRetentionFeeWaiver={onStartRetentionFeeWaiver}
         onStartVisaCompanionRpin={onStartVisaCompanionRpin}
+        onStartRefundAuthLetter={onStartRefundAuthLetter}
         onOpenCloneMove={openCloneMove}
         onOpenCreateReimb={() => setCreateReimbActive(true)}
       />
@@ -726,17 +748,19 @@ function ExternalToolsRow({ ticket }: { ticket: WocooTicket }) {
 
 const TRANSITION_TO_DONE_ID = '251'; // matches v3 / Apps Script bridge convention
 
-function QuickActions({ ticket, onTicketUpdate, onStartTriage, onStartReverseFee, onStartQCFeeWaiver, onStartWalletTriage, onStartRetentionFeeWaiver, onStartVisaCompanionRpin, onOpenCloneMove, onOpenCreateReimb }: { ticket: WocooTicket; onTicketUpdate: (t: WocooTicket) => void; onStartTriage: () => void; onStartReverseFee: () => void; onStartQCFeeWaiver: () => void; onStartWalletTriage: () => void; onStartRetentionFeeWaiver: () => void; onStartVisaCompanionRpin: () => void; onOpenCloneMove: (initialDestKey?: MoveDestination) => void; onOpenCreateReimb: () => void }) {
+function QuickActions({ ticket, onTicketUpdate, onStartTriage, onStartReverseFee, onStartQCFeeWaiver, onStartWalletTriage, onStartRetentionFeeWaiver, onStartVisaCompanionRpin, onStartRefundAuthLetter, onOpenCloneMove, onOpenCreateReimb }: { ticket: WocooTicket; onTicketUpdate: (t: WocooTicket) => void; onStartTriage: () => void; onStartReverseFee: () => void; onStartQCFeeWaiver: () => void; onStartWalletTriage: () => void; onStartRetentionFeeWaiver: () => void; onStartVisaCompanionRpin: () => void; onStartRefundAuthLetter: () => void; onOpenCloneMove: (initialDestKey?: MoveDestination) => void; onOpenCreateReimb: () => void }) {
   const [doneState, setDoneState] = useState<'idle' | 'pending' | 'done' | 'error'>(
     ticket.status === 'Done' ? 'done' : 'idle',
   );
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const { busy: interestBusy, note: interestNote, setNote: setInterestNote, run: runInterestTool } = useInterestTool();
 
   // Re-sync local action state when the ticket changes (e.g. agent switched to another ticket).
   useEffect(() => {
     setDoneState(ticket.status === 'Done' ? 'done' : 'idle');
     setErrorMsg(null);
-  }, [ticket.id, ticket.status]);
+    setInterestNote(null);
+  }, [ticket.id, ticket.status, setInterestNote]);
 
   const handleDone = async () => {
     if (doneState === 'pending' || doneState === 'done') return;
@@ -841,7 +865,37 @@ function QuickActions({ ticket, onTicketUpdate, onStartTriage, onStartReverseFee
         <ActionButton variant="warning" onClick={onStartVisaCompanionRpin} disabled={!ticket.identityId} title="Visa Companion RPIN diagnostic — open Preset dashboard 7666, then optionally create an i2c ticket to add RPIN">
           🛫 Visa Companion
         </ActionButton>
+        <ActionButton
+          variant="special"
+          onClick={() => { void runInterestTool({ identityId: ticket.identityId, ticketId: ticket.id }); }}
+          disabled={interestBusy}
+          title="Open the Interest Validation tool (localhost:8501) — starts it locally via Start App.command if it isn't already running"
+        >
+          {interestBusy ? '… Starting tool' : '🔎 Investigate Interest'}
+        </ActionButton>
+        <ActionButton
+          variant="highlight"
+          onClick={onStartRefundAuthLetter}
+          title="Generate a refund authorization letter — pulls the client's name and mailing address from Atlas, fills the template, exports a PDF and attaches it to this ticket"
+        >
+          ✉ Refund Auth Letter
+        </ActionButton>
       </div>
+      {interestNote ? (
+        <div
+          role={interestNote.kind === 'error' ? 'alert' : undefined}
+          style={{
+            fontSize: 'var(--mint-text-micro)',
+            lineHeight: 1.45,
+            color: interestNote.kind === 'error' ? 'var(--mint-negative-fg-strong)' : 'var(--mint-positive-fg-strong)',
+            background: interestNote.kind === 'error' ? 'var(--mint-negative-bg-soft)' : 'var(--mint-positive-bg-soft)',
+            padding: '4px 8px',
+            borderRadius: 'var(--mint-radius-button)',
+          }}
+        >
+          {interestNote.text}
+        </div>
+      ) : null}
       {doneState === 'error' && errorMsg ? (
         <div
           role="alert"
@@ -1043,24 +1097,54 @@ function ActionButton({ variant, children, onClick, title, disabled }: { variant
 //   • acked (muted): a compact "Reopen last reply in Gmail" chip — the deeplink
 //     stays accessible after ack so the agent can revisit the email
 //
+// It is deliberately sticky: once a ticket has been tracked, the chip stays on the
+// panel for good. Reading the reply only downgrades red → muted, and the lookup falls
+// back to the append-only archive so a poll that no longer returns the row (bridge
+// filters acked rows, transient short response) can't make the deeplink vanish.
+//
 // Main click opens the Gmail permalink without touching ack state (idempotent —
 // safe to click as many times as needed). The ✕ button flips ack (unacked → acked).
 
 const REPLIES_STORAGE_KEY = 'ticket_replies';
+const REPLIES_ARCHIVE_KEY = 'ticket_replies_archive';
 
-function ReplyPill({ ticketId }: { ticketId: string }) {
+/** Sheet-derived entries have no received date (the tracking sheet only records when we
+ *  sent), so every label that shows one has to cope with an empty/garbage value. */
+function fmtReplyDate(iso: string, opts: Intl.DateTimeFormatOptions): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  return isNaN(d.getTime()) ? null : d.toLocaleString('en-CA', opts);
+}
+
+/** What to put in a Gmail search when there's no message ID to permalink to.
+ *
+ *  i2c rows already track the client's address, so their trackKey is the right query.
+ *  Koho rows track the WOCOO id instead — and searching that mostly turns up Jira
+ *  notification mail, not the Koho thread. The client's address finds the real thread,
+ *  so prefer it whenever the panel has one. */
+function gmailSearchKey(reply: TicketReply, clientEmail: string | undefined, ticketId: string): string {
+  const trackKey = reply.trackKey || '';
+  if (trackKey.includes('@')) return trackKey;
+  return clientEmail || trackKey || ticketId;
+}
+
+function ReplyPill({ ticketId, clientEmail }: { ticketId: string; clientEmail?: string }) {
   const [reply, setReply] = useState<TicketReply | null>(null);
 
   useEffect(() => {
     const read = () => {
-      chrome.storage.local.get(REPLIES_STORAGE_KEY).then((res) => {
+      chrome.storage.local.get([REPLIES_STORAGE_KEY, REPLIES_ARCHIVE_KEY]).then((res) => {
         const map = res[REPLIES_STORAGE_KEY] as Record<string, TicketReply> | undefined;
-        setReply(map?.[ticketId] || null);
+        const archive = res[REPLIES_ARCHIVE_KEY] as Record<string, TicketReply> | undefined;
+        const live = map?.[ticketId];
+        // Archive-only hits are by definition already-seen, so render them muted.
+        const archived = archive?.[ticketId];
+        setReply(live || (archived ? { ...archived, acked: true } : null));
       });
     };
     read();
     const onChange = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
-      if (area === 'local' && REPLIES_STORAGE_KEY in changes) read();
+      if (area === 'local' && (REPLIES_STORAGE_KEY in changes || REPLIES_ARCHIVE_KEY in changes)) read();
     };
     chrome.storage.onChanged.addListener(onChange);
     return () => chrome.storage.onChanged.removeListener(onChange);
@@ -1069,8 +1153,11 @@ function ReplyPill({ ticketId }: { ticketId: string }) {
   if (!reply) return null;
 
   const openEmail = () => {
-    // Gmail permalink accepts a raw message ID after the folder anchor.
-    const url = `https://mail.google.com/mail/u/0/#inbox/${reply.messageId}`;
+    // Gmail permalink accepts a raw message ID after the folder anchor. With no reply
+    // matched yet there's nothing to permalink to, so search the thread instead.
+    const url = reply.messageId
+      ? `https://mail.google.com/mail/u/0/#inbox/${reply.messageId}`
+      : `https://mail.google.com/mail/u/0/#search/${encodeURIComponent(gmailSearchKey(reply, clientEmail, ticketId))}`;
     window.open(url, '_blank', 'noopener,noreferrer');
   };
 
@@ -1090,7 +1177,11 @@ function ReplyPill({ ticketId }: { ticketId: string }) {
 
   const label = reply.kind === 'koho' ? 'Koho' : 'i2c';
   const truncated = reply.snippet.length > 140 ? reply.snippet.slice(0, 140) + '…' : reply.snippet;
-  const acked = reply.acked === true;
+  // No messageId = tracked but nothing inbound yet. There's no reply to shout about,
+  // so it shares the muted chip and links to a Gmail search for the outbound thread.
+  const awaiting = !reply.messageId;
+  const acked = reply.acked === true || awaiting;
+  const seenDate = fmtReplyDate(reply.receivedAt, { month: 'short', day: 'numeric' });
 
   if (acked) {
     // Muted "seen" chip — small, single-line, still deep-links to Gmail.
@@ -1098,7 +1189,10 @@ function ReplyPill({ ticketId }: { ticketId: string }) {
       <button
         type="button"
         onClick={openEmail}
-        title={`Reopen the ${label} reply in Gmail`}
+        title={awaiting
+          ? `Search Gmail for the ${label} thread. No reply has been captured for this ticket — ` +
+            `that can mean none has arrived, or that reply detection didn't match the thread.`
+          : `Reopen the ${label} reply in Gmail`}
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -1116,9 +1210,14 @@ function ReplyPill({ ticketId }: { ticketId: string }) {
           color: 'var(--mint-fg-soft)',
         }}
       >
-        <span style={{ fontSize: 12, lineHeight: 1, flexShrink: 0 }}>📭</span>
+        <span style={{ fontSize: 12, lineHeight: 1, flexShrink: 0 }}>{awaiting ? '📤' : '📭'}</span>
         <span style={{ fontSize: 'var(--mint-text-nano)', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-          ↗ Reopen {label} reply — {new Date(reply.receivedAt).toLocaleString('en-CA', { month: 'short', day: 'numeric' })}
+          {/* Deliberately makes no claim about whether a reply exists — detection can
+              miss a thread, and asserting "no reply yet" over a real reply is worse
+              than saying nothing. */}
+          {awaiting
+            ? `↗ Find ${label} thread in Gmail`
+            : `↗ Reopen ${label} reply${seenDate ? ` — ${seenDate}` : ''}`}
         </span>
       </button>
     );
@@ -1161,7 +1260,11 @@ function ReplyPill({ ticketId }: { ticketId: string }) {
         <span style={{ fontSize: 16, lineHeight: 1.2, flexShrink: 0 }}>📬</span>
         <span style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0, flex: 1 }}>
           <span style={{ fontSize: 'var(--mint-text-micro)', fontWeight: 700, color: 'var(--mint-negative-fg-strong)' }}>
-            New reply from {label} · {new Date(reply.receivedAt).toLocaleString('en-CA', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+            New reply from {label}
+            {(() => {
+              const at = fmtReplyDate(reply.receivedAt, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+              return at ? ` · ${at}` : '';
+            })()}
           </span>
           <span style={{ fontSize: 'var(--mint-text-nano)', color: 'var(--mint-fg-strong)', lineHeight: 1.4 }}>
             {truncated || <em style={{ color: 'var(--mint-fg-soft)' }}>(no preview)</em>}

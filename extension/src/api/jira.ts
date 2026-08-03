@@ -153,36 +153,199 @@ export type MoveField =
   | { retain: false; type: 'raw'; value: string[] }
   | { retain: false; type: 'adf'; value: AdfDoc };
 
+/** Pull the human messages out of a bulk-move error body:
+ *  {"errors":[{"message":"For issue WOCOO-1 To Account is required."}, ...]} */
+function parseMoveErrorMessages(body: string): string[] {
+  try {
+    const errors = (JSON.parse(body) as any)?.errors;
+    if (!Array.isArray(errors)) return [];
+    return errors.map((e: any) => String(e?.message ?? e).trim()).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+/** Field names from "For issue <KEY> <Field Name> is required." messages, deduped.
+ *  Returns [] if any message is a different kind of error — a missing-mandatory-field
+ *  retry only makes sense when that's ALL Jira complained about. */
+function missingMandatoryFieldNames(messages: string[]): string[] {
+  if (messages.length === 0) return [];
+  const names: string[] = [];
+  for (const msg of messages) {
+    const m = /^For issue \S+ (.+?) is required\.?$/.exec(msg);
+    if (!m) return [];
+    if (!names.includes(m[1])) names.push(m[1]);
+  }
+  return names;
+}
+
+/** Every field on the instance, by lowercased name. `/rest/api/3/field` needs no admin
+ *  rights, unlike the field-context/options endpoints. Cached for the session. */
+let cachedFieldIndex: Map<string, { id: string; name: string; schemaType?: string }> | null = null;
+
+async function fieldIndexByName(): Promise<Map<string, { id: string; name: string; schemaType?: string }>> {
+  if (cachedFieldIndex) return cachedFieldIndex;
+  const resp = await jiraFetch('/rest/api/3/field');
+  if (!resp.ok) throw new Error(`Failed to list Jira fields (HTTP ${resp.status})`);
+  const all = (await resp.json()) as Array<{ id: string; name: string; schema?: { type?: string } }>;
+  const index = new Map<string, { id: string; name: string; schemaType?: string }>();
+  for (const f of all) {
+    const key = (f.name || '').toLowerCase().trim();
+    // First definition wins — duplicate display names exist and either resolves the same way.
+    if (key && !index.has(key)) index.set(key, { id: f.id, name: f.name, schemaType: f.schema?.type });
+  }
+  cachedFieldIndex = index;
+  return index;
+}
+
+/** "N/A" filler for a destination field the panel can't collect, shaped by the field's type.
+ *  Option/user/array fields can't be filled blind — a valid option ID is required and reading
+ *  a field's options needs Jira admin — so those come back as unsatisfiable. */
+function placeholderFor(schemaType: string | undefined): MoveField | null {
+  switch (schemaType) {
+    case 'string':
+      return { retain: false, type: 'raw', value: ['N/A'] };
+    case 'number':
+      return { retain: false, type: 'raw', value: ['0'] };
+    case 'date':
+      return { retain: false, type: 'raw', value: [new Date().toISOString().slice(0, 10)] };
+    case 'datetime':
+      return { retain: false, type: 'raw', value: [new Date().toISOString()] };
+    case 'doc':
+      return {
+        retain: false,
+        type: 'adf',
+        value: { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: 'N/A' }] }] },
+      };
+    default:
+      return null;
+  }
+}
+
+/**
+ * Turn Jira's "<Field Name> is required." complaints into fillable placeholder values.
+ * `alreadySent` guards against re-sending something we provided (Jira only complains about
+ * fields we omitted, but a field we sent being echoed back would mean a value problem, not a
+ * missing one, and a placeholder would make it worse).
+ */
+async function placeholdersForRequiredFields(
+  names: string[],
+  alreadySent: Set<string>,
+): Promise<{ fields: Record<string, MoveField>; filled: string[]; unsatisfiable: string[] }> {
+  const index = await fieldIndexByName();
+  const fields: Record<string, MoveField> = {};
+  const filled: string[] = [];
+  const unsatisfiable: string[] = [];
+
+  for (const name of names) {
+    const meta = index.get(name.toLowerCase().trim());
+    if (!meta || alreadySent.has(meta.id)) {
+      unsatisfiable.push(name);
+      continue;
+    }
+    const placeholder = placeholderFor(meta.schemaType);
+    if (!placeholder) {
+      unsatisfiable.push(`${name} (${meta.schemaType || 'unknown'} field — needs a real option)`);
+      continue;
+    }
+    fields[meta.id] = placeholder;
+    filled.push(name);
+  }
+  return { fields, filled, unsatisfiable };
+}
+
 /**
  * Perform a Jira bulk-issues-move from a WOCOO ticket to another project.
  * Returns the optional taskId Jira gives back for tracking the async move.
+ *
+ * Two-attempt shape, because the bulk-move API validates required fields against the
+ * DESTINATION PROJECT'S FIELD CONFIGURATION, while createmeta (what moveConfig.ts and the
+ * modal's field pickers are built from) only reports fields on the destination's create
+ * screen. Fields that are field-config-required but off-screen are therefore invisible to
+ * us and can't be collected from the user — EOC currently has five of them
+ * ("To Account", "Transfer Canonical ID", ...). Ticket creation in EOC is unaffected,
+ * which is why this surfaces as moves-only breakage.
+ *
+ * Attempt 1 sends just the values the panel collected. If Jira rejects the move ONLY for
+ * missing mandatory fields, attempt 2 re-sends the same payload plus an "N/A" placeholder for
+ * each field Jira named, with the field IDs and types resolved from /rest/api/3/field at
+ * runtime (nothing hardcoded — the next field an admin makes required is handled too).
+ * A rejected bulk-move request applies nothing, so the retry is safe.
+ *
+ * `inferFieldDefaults: true` is NOT a way out of this: it's mutually exclusive with
+ * targetMandatoryFields ("Target mandatory fields mapping cannot be present when
+ * inferFieldDefaults is true"), and tried on its own against EOC it defaulted nothing —
+ * it came back demanding all eight fields, including the ones the panel had been supplying.
  */
 export async function moveTicket(args: {
   sourceKey: string;
   destProjectId: string;
   destIssueTypeId: string;
   mandatoryFields: Record<string, MoveField>;
-}): Promise<{ taskId: string | null }> {
-  const mapping: Record<string, any> = {};
-  mapping[args.destProjectId + ',' + args.destIssueTypeId] = {
-    inferClassificationDefaults: true,
-    inferFieldDefaults: false,
-    inferStatusDefaults: true,
-    inferSubtaskTypeDefault: true,
-    issueIdsOrKeys: [args.sourceKey],
-    targetMandatoryFields: [{ fields: args.mandatoryFields }],
+}): Promise<{
+  taskId: string | null;
+  /** Human names of off-screen destination fields we had to fill with "N/A" to get the move through. */
+  placeholderedFields: string[];
+}> {
+  const attempt = async (extraFields?: Record<string, MoveField>): Promise<Response> => {
+    const fields = extraFields ? { ...args.mandatoryFields, ...extraFields } : args.mandatoryFields;
+    return jiraFetch('/rest/api/3/bulk/issues/move', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sendBulkNotification: false,
+        targetToSourcesMapping: {
+          [args.destProjectId + ',' + args.destIssueTypeId]: {
+            inferClassificationDefaults: true,
+            inferFieldDefaults: false,
+            inferStatusDefaults: true,
+            inferSubtaskTypeDefault: true,
+            issueIdsOrKeys: [args.sourceKey],
+            targetMandatoryFields: [{ fields }],
+          },
+        },
+      }),
+    });
   };
-  const resp = await jiraFetch('/rest/api/3/bulk/issues/move', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sendBulkNotification: false, targetToSourcesMapping: mapping }),
-  });
+
+  let resp = await attempt();
+  let placeholderedFields: string[] = [];
+
   if (!resp.ok) {
-    const txt = await resp.text();
-    throw new Error('Jira bulk-move failed (HTTP ' + resp.status + '): ' + txt);
+    const firstBody = await resp.text();
+    const missing = missingMandatoryFieldNames(parseMoveErrorMessages(firstBody));
+    if (missing.length === 0) {
+      throw new Error('Jira bulk-move failed (HTTP ' + resp.status + '): ' + firstBody);
+    }
+
+    const { fields, filled, unsatisfiable } = await placeholdersForRequiredFields(
+      missing,
+      new Set(Object.keys(args.mandatoryFields)),
+    );
+    if (unsatisfiable.length > 0) {
+      throw new Error(
+        `Jira won't accept the move: the destination requires ${unsatisfiable.join(', ')} — ` +
+        `field(s) that aren't on its create screen, so the panel can't collect them, and that ` +
+        `can't be filled blind. A Jira admin needs to un-require them in the destination's field ` +
+        `configuration. Until then, move this one by hand (ticket ⋯ menu → Move) — the Jira UI ` +
+        `doesn't enforce off-screen required fields.`,
+      );
+    }
+
+    resp = await attempt(fields);
+    if (!resp.ok) {
+      const secondBody = await resp.text();
+      throw new Error(
+        `Jira won't accept the move even with placeholder values for ${filled.join(', ')}. ` +
+        `Move this one by hand (ticket ⋯ menu → Move) and ask a Jira admin to un-require those ` +
+        `fields in the destination's field configuration. Raw response: ${secondBody}`,
+      );
+    }
+    placeholderedFields = filled;
   }
+
   const data = await resp.json().catch(() => ({}));
-  return { taskId: (data as any).taskId || null };
+  return { taskId: (data as any).taskId || null, placeholderedFields };
 }
 
 export const MOVE_FIELDS = {
@@ -435,6 +598,7 @@ export function adfField(value: string): MoveField {
  * Transition a Jira issue to a new state by transition ID.
  * Common transition IDs in WOCOO:
  *   - 251: Move to Done
+ *   - 201: Cancel request → status "Cancelled/ No Action"
  * Returns void on success (Jira returns 204 No Content).
  *
  * On success this ALSO emits a ticketTransition event so the Phase 1 Capture flow
@@ -664,6 +828,40 @@ async function discoverCloneLinkTypeName(): Promise<string> {
 export async function linkAsClone(cloneKey: string, originalKey: string): Promise<void> {
   const name = await discoverCloneLinkTypeName();
   await linkIssues(cloneKey, originalKey, name);
+}
+
+/**
+ * Find a clone the Clone/Move flow already created for `originalKey`: a same-project issue
+ * on the other end of one of its links, summarised "CLONE - …". Lets a retry after a failed
+ * move reuse that clone instead of leaving a second reporting artifact on the board — which
+ * matters most across panel sessions, where the modal's in-memory handle is gone.
+ *
+ * Best-effort: any failure returns null and the caller clones fresh.
+ */
+export async function findExistingClone(
+  originalKey: string,
+): Promise<{ key: string; url: string; done: boolean } | null> {
+  try {
+    const resp = await jiraFetch(`/rest/api/3/issue/${encodeURIComponent(originalKey)}?fields=issuelinks`);
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    const links: any[] = data?.fields?.issuelinks ?? [];
+    const projectPrefix = originalKey.split('-')[0] + '-';
+    for (const link of links) {
+      const other = link?.outwardIssue ?? link?.inwardIssue;
+      const key: string | undefined = other?.key;
+      if (!key || !key.startsWith(projectPrefix)) continue;
+      if (!/^CLONE - /.test(other?.fields?.summary ?? '')) continue;
+      return {
+        key,
+        url: `https://wealthsimple.atlassian.net/browse/${key}`,
+        done: (other?.fields?.status?.statusCategory?.key ?? '') === 'done',
+      };
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 // Minimal shape for the Home view ticket list — full WocooTicket is overkill for a list row.
@@ -951,4 +1149,40 @@ function extractDescription(adfOrString: any): string {
   }
   walk(adfOrString);
   return parts.join('').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+/**
+ * Attach a file to a Jira issue. Jira's attachment endpoint needs multipart/form-data
+ * plus the `X-Atlassian-Token: no-check` XSRF opt-out, and the Content-Type boundary
+ * must be set by fetch (so don't pass Content-Type explicitly).
+ */
+export async function addAttachment(ticketKey: string, fileName: string, blob: Blob): Promise<void> {
+  const token = await getValidAccessToken();
+  const cloudId = await getCloudId();
+  const form = new FormData();
+  form.append('file', blob, fileName);
+  const resp = await fetch(
+    `https://api.atlassian.com/ex/jira/${cloudId}/rest/api/3/issue/${encodeURIComponent(ticketKey)}/attachments`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer ' + token,
+        Accept: 'application/json',
+        'X-Atlassian-Token': 'no-check',
+      },
+      body: form,
+    },
+  );
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => '');
+    throw new Error(`Attachment upload failed (HTTP ${resp.status})${body ? ': ' + body.slice(0, 200) : ''}`);
+  }
+}
+
+/** base64 (as returned by the GAS bridge) → Blob, for addAttachment. */
+export function base64ToBlob(base64: string, mimeType: string): Blob {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new Blob([bytes], { type: mimeType });
 }

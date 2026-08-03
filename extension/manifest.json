@@ -63,10 +63,16 @@
       "matches": ["https://script.google.com/*"],
       "js": ["src/content/gasBridge.ts"],
       "run_at": "document_start"
+    },
+    {
+      "matches": ["http://localhost:8501/*"],
+      "js": ["src/content/interestTool.ts"],
+      "run_at": "document_idle"
     }
   ],
-  "permissions": ["sidePanel", "storage", "scripting", "tabs", "identity", "alarms"],
+  "permissions": ["sidePanel", "storage", "scripting", "tabs", "identity", "alarms", "nativeMessaging"],
   "host_permissions": [
+    "http://localhost:8501/*",
     "https://wealthsimple.atlassian.net/*",
     "https://atlas.wealthsimple.com/*",
     "https://auth.atlassian.com/*",

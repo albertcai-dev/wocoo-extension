@@ -102,7 +102,7 @@ export function KohoCard({ ticket }: { ticket: WocooTicket }) {
       setState('sent');
       // Register the send for reply-tracking. Fire-and-forget — a tracking-sheet
       // failure shouldn't roll back the successful send.
-      void logKohoSendViaBridge(ticket.id).catch((err) => {
+      void logKohoSendViaBridge(ticket.id, ticket.clientEmail).catch((err) => {
         console.warn('[wocoo-koho-card] logKohoSend failed:', err);
       });
     } catch (e: any) {

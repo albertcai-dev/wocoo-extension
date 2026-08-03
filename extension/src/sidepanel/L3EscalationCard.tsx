@@ -1,6 +1,6 @@
 // Pre-workflow banner for tickets that must route to an L3 agent (Reverse Fee,
 // Code 450, joint account, DD deposit timing analysis). One click posts the
-// templated reply and moves the ticket to Done. The reply is always visible —
+// templated reply and cancels the ticket. The reply is always visible —
 // matching the Overpayment Step 6 pattern — with an Edit toggle for tweaks.
 
 import { useMemo, useState } from 'react';
@@ -10,7 +10,10 @@ import { postComment, transitionTicket } from '../api/jira';
 
 type Status = 'idle' | 'posting' | 'done' | 'error';
 
-const DONE_TRANSITION_ID = '251';
+// "Cancel request" → status "Cancelled/ No Action". L3 work is owned by the L3 agent
+// after the handoff comment, so the WOCOO ticket is closed as no-action rather than Done
+// (which would count it as work this team completed).
+const CANCEL_TRANSITION_ID = '201';
 
 export function L3EscalationCard({ ticket, onTicketUpdate }: { ticket: WocooTicket; onTicketUpdate: (t: WocooTicket) => void }) {
   const detection = useMemo(
@@ -20,18 +23,17 @@ export function L3EscalationCard({ ticket, onTicketUpdate }: { ticket: WocooTick
   const [status, setStatus] = useState<Status>('idle');
   const [error, setError] = useState<string | null>(null);
   const [commentText, setCommentText] = useState<string>(() => buildL3EscalationComment(ticket.reporter));
-  const [editing, setEditing] = useState<boolean>(false);
 
   if (!detection.matched) return null;
   if (status === 'done') {
     return (
       <div style={{ ...wrap, background: 'var(--mint-positive-bg-soft)', border: '1px solid var(--mint-positive-fg-graphic)', color: 'var(--mint-positive-fg-strong)' }}>
-        ✓ L3 escalation comment posted &amp; ticket moved to Done.
+        ✓ L3 escalation comment posted &amp; ticket moved to Cancelled/No Action.
       </div>
     );
   }
 
-  async function doPostAndDone() {
+  async function doPostAndCancel() {
     if (!commentText.trim()) { setError('Comment is empty.'); return; }
     setStatus('posting');
     setError(null);
@@ -39,11 +41,11 @@ export function L3EscalationCard({ ticket, onTicketUpdate }: { ticket: WocooTick
       const segments = buildSegments(commentText, ticket.reporter, ticket.reporterAccountId);
       await postComment(ticket.id, segments);
       try {
-        await transitionTicket(ticket.id, DONE_TRANSITION_ID);
-        onTicketUpdate({ ...ticket, status: 'Done' });
+        await transitionTicket(ticket.id, CANCEL_TRANSITION_ID);
+        onTicketUpdate({ ...ticket, status: 'Cancelled' });
       } catch (e) {
         // Comment succeeded — surface the transition failure as a soft warning.
-        setError(`Comment posted, but Move-to-Done failed: ${e instanceof Error ? e.message : String(e)}. Move manually.`);
+        setError(`Comment posted, but Cancel failed: ${e instanceof Error ? e.message : String(e)}. Cancel manually.`);
         setStatus('error');
         return;
       }
@@ -63,7 +65,7 @@ export function L3EscalationCard({ ticket, onTicketUpdate }: { ticket: WocooTick
             Escalate to L3 agent
           </div>
           <div style={{ fontSize: 'var(--mint-text-nano)', color: 'var(--mint-fg-strong)', lineHeight: 1.45 }}>
-            These cases (Reverse Fee, Code 450, joint account, DD deposit timing analysis) route to an L3 agent. One click posts the templated reply and moves to Done.
+            These cases (Reverse Fee, Code 450, joint account, DD deposit timing analysis) route to an L3 agent. One click posts the templated reply and moves to Cancelled/No Action.
           </div>
           {detection.reasons.length > 0 ? (
             <div style={{ fontSize: 'var(--mint-text-nano)', color: 'var(--mint-fg-subdued-title)', marginTop: 4 }}>
@@ -71,50 +73,32 @@ export function L3EscalationCard({ ticket, onTicketUpdate }: { ticket: WocooTick
             </div>
           ) : null}
 
-          {/* Comment preview — always visible; Edit swaps it for a textarea */}
-          {editing ? (
-            <textarea
-              value={commentText}
-              onChange={(e) => setCommentText(e.target.value)}
-              disabled={status === 'posting'}
-              rows={3}
-              autoFocus
-              style={{
-                width: '100%',
-                marginTop: 'var(--mint-sp-2)',
-                padding: '8px 10px',
-                fontFamily: 'var(--mint-font-family)',
-                fontSize: 'var(--mint-text-nano)',
-                border: 'var(--mint-card-stroke)',
-                borderRadius: 'var(--mint-radius-button)',
-                background: 'var(--mint-bg-card)',
-                color: 'var(--mint-fg-strong)',
-                boxSizing: 'border-box',
-                lineHeight: 1.45,
-                resize: 'vertical',
-              }}
-            />
-          ) : (
-            <div
-              style={{
-                marginTop: 'var(--mint-sp-2)',
-                padding: '8px 10px',
-                background: 'var(--mint-bg-card)',
-                border: 'var(--mint-card-stroke)',
-                borderRadius: 'var(--mint-radius-button)',
-                fontSize: 'var(--mint-text-nano)',
-                lineHeight: 1.45,
-                color: 'var(--mint-fg-strong)',
-                whiteSpace: 'pre-wrap',
-              }}
-            >
-              <CommentPreview text={commentText} reporter={ticket.reporter} />
-            </div>
-          )}
+          {/* Comment — always visible and directly editable */}
+          <textarea
+            value={commentText}
+            onChange={(e) => setCommentText(e.target.value)}
+            disabled={status === 'posting'}
+            rows={3}
+            aria-label="L3 escalation comment"
+            style={{
+              width: '100%',
+              marginTop: 'var(--mint-sp-2)',
+              padding: '8px 10px',
+              fontFamily: 'var(--mint-font-family)',
+              fontSize: 'var(--mint-text-nano)',
+              border: 'var(--mint-card-stroke)',
+              borderRadius: 'var(--mint-radius-button)',
+              background: 'var(--mint-bg-card)',
+              color: 'var(--mint-fg-strong)',
+              boxSizing: 'border-box',
+              lineHeight: 1.45,
+              resize: 'vertical',
+            }}
+          />
 
           <div style={{ marginTop: 'var(--mint-sp-2)', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             <button
-              onClick={doPostAndDone}
+              onClick={doPostAndCancel}
               disabled={status === 'posting'}
               style={{
                 padding: '6px 12px',
@@ -128,23 +112,7 @@ export function L3EscalationCard({ ticket, onTicketUpdate }: { ticket: WocooTick
                 opacity: status === 'posting' ? 0.6 : 1,
               }}
             >
-              {status === 'posting' ? 'Posting…' : '✓ Post Comment & Move to Done'}
-            </button>
-            <button
-              onClick={() => setEditing((v) => !v)}
-              disabled={status === 'posting'}
-              style={{
-                padding: '6px 12px',
-                background: 'transparent',
-                color: 'var(--mint-negative-fg-strong)',
-                border: '1px solid var(--mint-negative-fg-graphic)',
-                borderRadius: 'var(--mint-radius-button)',
-                fontSize: 'var(--mint-text-nano)',
-                fontWeight: 700,
-                cursor: status === 'posting' ? 'not-allowed' : 'pointer',
-              }}
-            >
-              {editing ? '✓ Done editing' : '✏ Edit'}
+              {status === 'posting' ? 'Posting…' : '✓ Post Comment & Cancel Ticket'}
             </button>
           </div>
 
@@ -166,20 +134,6 @@ const wrap: React.CSSProperties = {
   borderRadius: 'var(--mint-radius-card)',
   fontSize: 'var(--mint-text-meta)',
 };
-
-/** Styles the @<reporter> segment as a mention pill so the preview reads like the posted comment. */
-function CommentPreview({ text, reporter }: { text: string; reporter: string }) {
-  const mention = reporter ? `@${reporter}` : '';
-  const i = mention ? (text || '').indexOf(mention) : -1;
-  if (i === -1) return <>{text}</>;
-  return (
-    <>
-      {text.slice(0, i)}
-      <span style={{ background: 'var(--mint-highlight-bg-soft)', color: 'var(--mint-highlight-fg-strong)', padding: '0 4px', borderRadius: 4, fontWeight: 600 }}>{mention}</span>
-      {text.slice(i + mention.length)}
-    </>
-  );
-}
 
 /**
  * Split the comment text into ADF segments so the @<reporter> mention renders as a real

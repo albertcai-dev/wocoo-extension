@@ -8,9 +8,12 @@
 // names + reply-action strings; this file just adapts to it.
 
 import type { TicketLogPayload, TicketLogUpdatePayload } from '../data/ticketLogTypes';
-
-const BRIDGE_URL =
-  'https://script.google.com/a/macros/wealthsimple.com/s/AKfycbzWtgcWj8MgRW-MV9Yf9O5cLgDdktBsMw7vno760EJTjTMQsQKrKg9sZK7LCA73XuA-rA/exec';
+import {
+  BRIDGE_URL,
+  registerBridgeTab,
+  unregisterBridgeTab,
+  sweepExpiredBridgeTabs,
+} from './bridgeTabs';
 
 /** Append a row to the v3 Moves sheet. Fire-and-warn — if the sheet write fails, the
  *  Jira move itself still succeeded. */
@@ -150,16 +153,26 @@ function callBridge(
     // reply. The window.postMessage path is dropped here (a background tab has no
     // window.opener), so we rely on the gasBridge content script forwarding via
     // chrome.runtime.sendMessage.
+    //
+    // Tabs opened here are also recorded in the persistent registry in ./bridgeTabs, so a
+    // worker eviction mid-call (which kills the timeout below before it can close the tab)
+    // degrades to "swept a bit late" instead of "leaked forever".
     return new Promise<Record<string, unknown>>((resolve, reject) => {
       let settled = false;
       let tabId: number | null = null;
+
+      // Opportunistic: clear anything already abandoned before adding another tab. Keeps
+      // leaks bounded even if the alarms that normally drive the sweep never fire.
+      void sweepExpiredBridgeTabs();
 
       const cleanup = () => {
         settled = true;
         chrome.runtime.onMessage.removeListener(onChromeMessage);
         clearTimeout(timeoutId);
         if (tabId != null) {
-          void chrome.tabs.remove(tabId).catch(() => { /* tab may already be closed */ });
+          const id = tabId;
+          void unregisterBridgeTab(id);
+          void chrome.tabs.remove(id).catch(() => { /* tab may already be closed */ });
         }
       };
 
@@ -198,6 +211,7 @@ function callBridge(
           return;
         }
         tabId = tab.id ?? null;
+        if (tabId != null) void registerBridgeTab(tabId, action, timeoutMs);
       }).catch((e: any) => {
         if (settled) return;
         cleanup();
@@ -329,11 +343,42 @@ export async function updateTicketLogViaBridge(p: TicketLogUpdatePayload): Promi
 // ticket panel.
 
 /** Register that a Koho email was just sent for this WOCOO ticket. Fire-and-forget —
- *  the reply-poll later locates the thread by searching Sent for `[WOCOO-XXXXX]`.
- *  Also flips `has_tracked_replies` so the alarm-driven poll starts running. */
-export async function logKohoSendViaBridge(wocooTicketId: string): Promise<void> {
-  await callBridge('logKohoSend', { wocooTicketId }, 'kohoSendLogged', 30_000, true);
+ *  also flips `has_tracked_replies` so the alarm-driven poll starts running.
+ *
+ *  clientEmail becomes the row's trackKey, mirroring i2c. Searching Sent for
+ *  `[WOCOO-XXXXX]` only ever found threads the extension itself composed; a Koho email
+ *  written by hand carries no ticket id anywhere, so those rows never matched a reply.
+ *  The client's address appears in the thread either way. */
+export async function logKohoSendViaBridge(wocooTicketId: string, clientEmail?: string): Promise<void> {
+  await callBridge('logKohoSend', { wocooTicketId, clientEmail: clientEmail || '' }, 'kohoSendLogged', 30_000, true);
   try { await chrome.storage.local.set({ has_tracked_replies: true }); } catch { /* fine */ }
+}
+
+/** WOCOO ids of koho rows still keyed by ticket id. The sheet names the work rather than
+ *  the caller guessing, because the rows needing migration are mostly closed tickets that
+ *  never appear in the Home list. */
+export async function listKohoRowsNeedingEmailViaBridge(): Promise<string[]> {
+  const res = await callBridge('listKohoRowsNeedingEmail', {}, 'kohoRowsNeedingEmailListed', 30_000, true);
+  const raw = res.ids;
+  return Array.isArray(raw) ? raw.map((x) => String(x)).filter(Boolean) : [];
+}
+
+/** Repoint existing koho rows from ticket-id trackKeys to client-email ones. GAS only
+ *  touches koho rows whose trackKey has no '@', so it's idempotent and can't clobber
+ *  rows already migrated (or i2c rows). Chunked for the same URL-length reason as the
+ *  i2c backfill. */
+export async function backfillKohoTrackKeysViaBridge(
+  entries: Array<{ wocooTicketId: string; clientEmail: string }>,
+): Promise<{ updated: number; skipped: number }> {
+  let updated = 0;
+  let skipped = 0;
+  for (let i = 0; i < entries.length; i += I2C_BACKFILL_CHUNK) {
+    const chunk = entries.slice(i, i + I2C_BACKFILL_CHUNK);
+    const res = await callBridge('backfillKohoTrackKeys', { entries: JSON.stringify(chunk) }, 'kohoTrackKeysBackfilled', 60_000, true);
+    updated += Number(res.updated || 0);
+    skipped += Number(res.skipped || 0);
+  }
+  return { updated, skipped };
 }
 
 /** Register that the user just opened the i2c "Open & Fill Form" for this WOCOO ticket.
@@ -346,7 +391,12 @@ export async function logI2cSubmitViaBridge(wocooTicketId: string, clientEmail: 
 export interface TicketReply {
   wocooTicketId: string;
   kind: 'koho' | 'i2c';
+  /** Empty when the tracking row exists but no inbound reply has been matched yet —
+   *  the pill then falls back to a Gmail search on `trackKey`. */
   messageId: string;
+  /** The tracking sheet's trackKey (ticket id for Koho, client email for i2c). Used
+   *  to build the Gmail search fallback. */
+  trackKey?: string;
   from: string;
   snippet: string;
   receivedAt: string;
@@ -368,14 +418,47 @@ export async function checkForRepliesViaBridge(): Promise<TicketReply[]> {
     const o = r as Record<string, unknown>;
     return {
       wocooTicketId: String(o.wocooTicketId ?? ''),
-      kind: (o.kind === 'i2c' ? 'i2c' : 'koho') as 'koho' | 'i2c',
+      kind: (String(o.kind ?? '').toLowerCase() === 'i2c' ? 'i2c' : 'koho') as 'koho' | 'i2c',
       messageId: String(o.messageId ?? ''),
+      trackKey: o.trackKey != null ? String(o.trackKey) : undefined,
       from: String(o.from ?? ''),
       snippet: String(o.snippet ?? ''),
       receivedAt: String(o.receivedAt ?? ''),
       acked: o.acked === true || o.acked === 'TRUE' || o.acked === 'true',
     };
-  }).filter((r) => r.wocooTicketId && r.messageId);
+    // A row with no messageId is still a tracked ticket — keep it so the panel can
+    // offer a Gmail search for the outbound thread instead of showing nothing.
+  }).filter((r) => r.wocooTicketId);
+}
+
+/** Every row of the reply-tracking sheet, verbatim — no Gmail work, no filtering on
+ *  `acknowledged`. `checkForReplies` only surfaces tickets it matched a live inbound
+ *  message for, so this is what guarantees a ticket that's merely *present* in the
+ *  sheet keeps an "open the email" chip on the panel forever.
+ *
+ *  Deliberately tolerant: an Apps Script deployment that doesn't know the action never
+ *  posts a reply, so callBridge times out. Callers swallow that and fall back to the
+ *  checkForReplies-only behaviour. */
+export async function listTrackedTicketsViaBridge(): Promise<TicketReply[]> {
+  const res = await callBridge('listTrackedTickets', {}, 'trackedTicketsListed', 30_000, true);
+  const raw = (res.tickets as unknown) ?? [];
+  if (!Array.isArray(raw)) return [];
+  return raw.map((r) => {
+    const o = r as Record<string, unknown>;
+    return {
+      wocooTicketId: String(o.wocooTicketId ?? ''),
+      kind: (String(o.kind ?? '').toLowerCase() === 'i2c' ? 'i2c' : 'koho') as 'koho' | 'i2c',
+      // The sheet's lastSeenMsgId. Blank until a reply has been matched.
+      messageId: String(o.messageId ?? ''),
+      trackKey: o.trackKey != null ? String(o.trackKey) : undefined,
+      from: '',
+      snippet: '',
+      // The sheet has no reply timestamp, only when we sent. Leave blank rather than
+      // passing createdAt off as a received date — the chip hides the date when empty.
+      receivedAt: '',
+      acked: o.acked === true || o.acked === 'TRUE' || o.acked === 'true',
+    };
+  }).filter((r) => r.wocooTicketId);
 }
 
 /** Flip a tracking row's `acknowledged` flag so the red dot / pill goes away.
@@ -388,15 +471,78 @@ export async function acknowledgeReplyViaBridge(wocooTicketId: string, messageId
  *  already has Jira access, so it walks the assigned-ticket list and hands GAS a
  *  {wocooTicketId, clientEmail, createdAt} tuple per ticket with a client email.
  *  GAS dedupes on (wocooId + email). Anchor createdAt in the past so the poll
- *  actually searches historical i2c messages. */
+ *  actually searches historical i2c messages.
+ *
+ *  Sent in chunks because every bridge call is a GET: the whole batch rides in the query
+ *  string, and a full Home list (~50 entries × ~150 URL-encoded bytes) lands right on the
+ *  ~8KB request-line limit. Chunking is safe — GAS dedupes server-side, so a retried or
+ *  overlapping chunk adds nothing. */
+const I2C_BACKFILL_CHUNK = 20;
+
 export async function backfillI2cViaBridge(
   entries: Array<{ wocooTicketId: string; clientEmail: string; createdAt: string }>,
 ): Promise<{ added: number; skipped: number }> {
-  const res = await callBridge('backfillI2cBatch', { entries: JSON.stringify(entries) }, 'i2cBackfillLogged', 60_000, true);
-  const added = Number(res.added || 0);
-  const skipped = Number(res.skipped || 0);
+  let added = 0;
+  let skipped = 0;
+  for (let i = 0; i < entries.length; i += I2C_BACKFILL_CHUNK) {
+    const chunk = entries.slice(i, i + I2C_BACKFILL_CHUNK);
+    const res = await callBridge('backfillI2cBatch', { entries: JSON.stringify(chunk) }, 'i2cBackfillLogged', 60_000, true);
+    added += Number(res.added || 0);
+    skipped += Number(res.skipped || 0);
+  }
   if (added > 0) {
     try { await chrome.storage.local.set({ has_tracked_replies: true }); } catch { /* fine */ }
   }
   return { added, skipped };
+}
+
+export interface RefundLetterParams {
+  clientName: string;
+  addressStreet: string;
+  addressCityProvince: string;
+  addressPostal: string;
+  closedCardLast4: string;
+  newCardLast4: string;
+  refundDates: string;
+  declineReason: string;
+  agentFirstName: string;
+  letterDate?: string;
+  wocooTicketId?: string;
+  /** Ask the bridge for base64 PDF bytes so we can attach it to the Jira ticket. */
+  includePdfBase64?: boolean;
+}
+
+export interface RefundLetterResult {
+  docId: string;
+  docUrl: string;
+  pdfId: string;
+  pdfUrl: string;
+  fileName: string;
+  pdfBase64?: string;
+}
+
+/** Copy the tokenized template, fill it, export a PDF. See RefundLetter.gs in the
+ *  wocoo-gas-bridge repo — 90s because a Doc copy + PDF export is slower than a
+ *  sheet append. */
+export async function createRefundLetterViaBridge(p: RefundLetterParams): Promise<RefundLetterResult> {
+  const params: Record<string, string> = {
+    clientName: p.clientName,
+    addressStreet: p.addressStreet,
+    addressCityProvince: p.addressCityProvince,
+    addressPostal: p.addressPostal,
+    closedCardLast4: p.closedCardLast4,
+    newCardLast4: p.newCardLast4,
+    refundDates: p.refundDates,
+    declineReason: p.declineReason,
+    agentFirstName: p.agentFirstName,
+    wocooTicketId: p.wocooTicketId || '',
+  };
+  if (p.letterDate) params.letterDate = p.letterDate;
+  if (p.includePdfBase64) params.includePdfBase64 = '1';
+
+  const res = await callBridge('createRefundLetter', params, 'refundLetterCreated', 90_000, true);
+  if (res.ok === false) throw new Error(String(res.error || 'Bridge could not create the letter'));
+  const result = res.result as RefundLetterResult | undefined;
+  if (!result || !result.docUrl) throw new Error('Bridge returned no letter links.');
+  return result;
 }

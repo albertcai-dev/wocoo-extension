@@ -121,3 +121,78 @@ export async function fetchAtlasClientEmailHeadless(args: FetchAtlasClientEmailA
     }, timeoutMs);
   });
 }
+
+// -----------------------------------------------------------------------------
+// Headless Atlas client-details lookup (name + mailing address).
+//
+// Backs the Refund Auth Letter workflow's "Fetch from Atlas" step. Opens Atlas in a
+// background tab, waits for the atlas.ts clientDetailsLookup IIFE to scrape the Full
+// Client Details grid into `chrome.storage.local.atlas_client_details`, then closes it.
+//
+// `complete: false` means Atlas rendered without one of city/postal — the values still
+// come back and the workflow leaves them editable.
+// -----------------------------------------------------------------------------
+
+export interface FetchAtlasClientDetailsArgs {
+  identityId: string;
+  sourceTicketId: string;
+  timeoutMs?: number;
+}
+
+export interface AtlasClientDetails {
+  name: string;
+  street: string;
+  cityProvince: string;
+  postal: string;
+  complete: boolean;
+}
+
+export async function fetchAtlasClientDetailsHeadless(args: FetchAtlasClientDetailsArgs): Promise<AtlasClientDetails> {
+  const { identityId, sourceTicketId, timeoutMs = 35_000 } = args;
+  if (!identityId) throw new Error('identityId is required');
+  if (!sourceTicketId) throw new Error('sourceTicketId is required');
+
+  await chrome.storage.local.set({ pending_atlas_client_details_lookup: { sourceTicketId } });
+  const url = `https://atlas.wealthsimple.com/identity/${identityId}/overview/?ticketId=${sourceTicketId}`;
+  const tab = await chrome.tabs.create({ url, active: false });
+  const tabId = tab.id ?? null;
+
+  return new Promise<AtlasClientDetails>((resolve, reject) => {
+    let settled = false;
+    const cleanup = () => {
+      settled = true;
+      chrome.storage.onChanged.removeListener(onChange);
+      window.clearTimeout(timer);
+      if (tabId != null) {
+        void chrome.tabs.remove(tabId).catch(() => { /* tab may already be closed */ });
+      }
+    };
+    const onChange = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
+      if (settled || area !== 'local' || !('atlas_client_details' in changes)) return;
+      const v = changes.atlas_client_details.newValue as {
+        sourceTicketId?: string;
+        name?: string;
+        street?: string;
+        cityProvince?: string;
+        postal?: string;
+        complete?: boolean;
+      } | undefined;
+      if (v && v.sourceTicketId === sourceTicketId && (v.name || v.street)) {
+        cleanup();
+        resolve({
+          name: v.name || '',
+          street: v.street || '',
+          cityProvince: v.cityProvince || '',
+          postal: v.postal || '',
+          complete: Boolean(v.complete),
+        });
+      }
+    };
+    chrome.storage.onChanged.addListener(onChange);
+    const timer = window.setTimeout(() => {
+      if (settled) return;
+      cleanup();
+      reject(new Error('Atlas client details lookup timed out — check the Full Client Details section rendered'));
+    }, timeoutMs);
+  });
+}

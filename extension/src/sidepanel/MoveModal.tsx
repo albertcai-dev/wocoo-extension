@@ -58,6 +58,7 @@ import {
   type CreateMetaAllowedValue,
   getMyself,
   cloneTicket,
+  findExistingClone,
   linkAsClone,
   postComment,
   transitionTicket,
@@ -89,6 +90,10 @@ export function MoveModal({ ticket, onClose, initialDestKey = 'EOC' }: { ticket:
   // Clone/Move flow: the clone we create before reassigning the original; tracked so that
   // partial-failure errors can point the user at it for manual cleanup.
   const [cloneKey, setCloneKey] = useState<string | null>(null);
+  // Survives failed attempts (unlike cloneKey, which resets per run) so "Try Again" reuses
+  // the clone it already made instead of minting a new one on every retry. `done` records
+  // whether the failure path already transitioned it, so the retry skips a doomed re-transition.
+  const cloneRef = useRef<{ key: string; url: string; done: boolean } | null>(null);
   // Non-fatal warnings (clone comment failed, done-transition failed). Listed alongside success.
   const [softWarnings, setSoftWarnings] = useState<string[]>([]);
 
@@ -400,7 +405,7 @@ export function MoveModal({ ticket, onClose, initialDestKey = 'EOC' }: { ticket:
       // --- Pre-validate destination args BEFORE creating the clone, so we don't leave an
       // orphan clone if the user has a missing field. ---
       let destLabel = '';
-      let moveCall: () => Promise<unknown>;
+      let moveCall: () => ReturnType<typeof moveTicket>;
 
       if (dest.key === 'EOC') {
         if (!ticket.identityId) throw new Error('Source ticket has no Identity ID.');
@@ -563,22 +568,35 @@ export function MoveModal({ ticket, onClose, initialDestKey = 'EOC' }: { ticket:
         throw new Error(`Destination ${dest.key} is not API-supported.`);
       }
 
-      // --- Hard step 1: clone ---
-      const clone = await cloneTicket(ticket.id);
+      // --- Hard step 1: clone (reused across retries) ---
+      // A retry after a failed move must NOT clone again — the first attempt's clone is
+      // already on the board, linked to the original, and is just as valid a reporting artifact.
+      const reusedClone = cloneRef.current ?? await findExistingClone(ticket.id);
+      const clone = reusedClone ?? await cloneTicket(ticket.id);
+      cloneRef.current = reusedClone ?? { key: clone.key, url: clone.url, done: false };
       createdCloneKey = clone.key;
       setCloneKey(clone.key);
 
       // --- Hard step 2: link clone --clones--> original ---
       // outwardIssue is the side that "clones"; inwardIssue is the side "cloned by".
-      try {
-        await linkAsClone(clone.key, ticket.id);
-      } catch (e) {
-        warnings.push(`Clone link failed: ${e instanceof Error ? e.message : String(e)} (link manually if needed)`);
+      if (!reusedClone) {
+        try {
+          await linkAsClone(clone.key, ticket.id);
+        } catch (e) {
+          warnings.push(`Clone link failed: ${e instanceof Error ? e.message : String(e)} (link manually if needed)`);
+        }
       }
 
       // --- Hard step 3: reassign the ORIGINAL to destination ---
       // If this fails, the clone is orphaned and the error message points to it.
-      await moveCall();
+      const moveResult = await moveCall();
+      if (moveResult.placeholderedFields.length > 0) {
+        warnings.push(
+          `${destLabel.split(' ')[0]} required ${moveResult.placeholderedFields.join(', ')} — ` +
+          `off-screen fields the panel can't collect, so they were set to "N/A" to get the move ` +
+          `through. Worth asking a Jira admin to un-require them.`,
+        );
+      }
 
       // --- Soft step 4a: comment on original referencing the clone ---
       try {
@@ -602,10 +620,14 @@ export function MoveModal({ ticket, onClose, initialDestKey = 'EOC' }: { ticket:
       }
 
       // --- Soft step 5: transition the clone to Done ---
-      try {
-        await transitionTicket(clone.key, '251');
-      } catch (e) {
-        warnings.push(`Clone Done-transition failed: ${e instanceof Error ? e.message : String(e)} (move ${clone.key} to Done manually)`);
+      // Skipped when a previous failed attempt already Done'd this clone.
+      if (!cloneRef.current?.done) {
+        try {
+          await transitionTicket(clone.key, '251');
+          if (cloneRef.current) cloneRef.current.done = true;
+        } catch (e) {
+          warnings.push(`Clone Done-transition failed: ${e instanceof Error ? e.message : String(e)} (move ${clone.key} to Done manually)`);
+        }
       }
 
       // --- Soft step 6: audit log ---
@@ -620,7 +642,10 @@ export function MoveModal({ ticket, onClose, initialDestKey = 'EOC' }: { ticket:
       }
 
       setSoftWarnings(warnings);
-      setResultNote(`Original ${ticket.id} reassigned to ${destLabel}. Clone ${clone.key} created and moved to Done.`);
+      setResultNote(
+        `Original ${ticket.id} reassigned to ${destLabel}. Clone ${clone.key} ` +
+        `${reusedClone ? 'reused from the earlier attempt' : 'created'} and moved to Done.`,
+      );
       setStatus('success');
     } catch (e: any) {
       const baseMsg = e?.message || String(e);
@@ -628,10 +653,13 @@ export function MoveModal({ ticket, onClose, initialDestKey = 'EOC' }: { ticket:
       // failed run doesn't leave board clutter. If the cleanup itself fails, fall back
       // to the manual message + warn about the cleanup failure.
       let orphan = '';
-      if (createdCloneKey) {
+      if (createdCloneKey && cloneRef.current?.done) {
+        orphan = ` (clone ${createdCloneKey} from the earlier attempt is still on the board, already Done — Try Again reuses it)`;
+      } else if (createdCloneKey) {
         try {
           await transitionTicket(createdCloneKey, '251');
-          orphan = ` (clone ${createdCloneKey} was created; auto-transitioned to Done)`;
+          if (cloneRef.current) cloneRef.current.done = true;
+          orphan = ` (clone ${createdCloneKey} was created; auto-transitioned to Done and reused if you Try Again)`;
         } catch (cleanupErr) {
           const cleanupMsg = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
           warnings.push(`Auto-cleanup of clone ${createdCloneKey} failed: ${cleanupMsg}`);
