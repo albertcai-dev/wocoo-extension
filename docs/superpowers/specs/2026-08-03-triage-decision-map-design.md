@@ -127,8 +127,8 @@ is worthless, "fee disputed as fraud → `investigation`" is actionable.
 | `must_have` | signal phrases that select this leaf |
 | `rule_out` | veto phrases, each naming the sibling it belongs to instead |
 | `lookup_first` | external check before deciding, and what each answer implies |
-| `owner` | `CXA` or destination board (`EOC`/`DBO`/`CRED`/`FRAUD`/`PRR`/`PFO`) |
-| `owner_reason` | why it moves — **required when `owner ≠ CXA`** |
+| `owner` | `CXA` and/or destination board (`EOC`/`DBO`/`CRED`/`FRAUD`/`PRR`/`PFO`); may hold more than one |
+| `owner_reason` | why it moves — **required when `owner ≠ CXA`**; when multiple owners, what decides between them |
 | `jira_issue_type` | which of the 37 WOCOO issue types to set |
 | `required_jira_fields` | **derived** from `jira_issue_type` — never hand-authored |
 | `automation` | extension workflow name, or blank if manual |
@@ -192,10 +192,37 @@ Reverse Fee
 |---|---|---|
 | *(none, first line)* | `root` | the procedure |
 | `#` | `branch_header` | a subtype; subtitle names where you validate it |
+| `-` | `step` | an ordered action taken every time; no branching |
 | `?` | `decision` | a yes/no test |
 | `?AND` | conjoined decision | two or more consecutive siblings, all must hold |
-| `~` | `annotation` | how to validate the decision above it |
+| `~` | `annotation` | how to validate the decision or step above it |
 | `=` | `outcome` | terminal triage action; subtitle is the reason |
+
+### Checklist-shaped procedures
+
+Not every procedure branches. Some are linear: the same steps every time, with
+at most one exit condition at the end. These are recorded as `step` chains and
+**must not be dressed up as trees** — a diagram of a straight line with fake
+decision diamonds is worse than an honest numbered list.
+
+`Declined Prepaid Mastercard Transaction` is the reference case:
+
+```
+Declined Prepaid Mastercard Transaction
+  - Open CXO-KOHO NSF Declines dashboard | Preset 5871
+  - Input client's identity ID
+  - Review decline transaction date + merchant
+  - Read the FIRST code in verified_decline_codes | later codes mislead
+  ? Verified decline code present?
+    Yes = Reply with decline reason from Guru | code is the true reason
+    No  = Escalate to team for further triage | no verified code on dashboard
+```
+
+Source: [Automation Test - Ticket Type: Decline PPMC](https://docs.google.com/document/d/1qye8kQFsNIjaVe_NxUo1HVO_65stkngcMKQRb0xobrE/edit).
+
+Gotcha for that procedure's `gotchas` cell: the dashboard URL carries a
+`native_filters_key` param that must be stripped before the extension can drive
+it — the content script cannot clear the overflow filter chips it bakes in.
 
 Outcome vocabulary is open, but reads as an action plus reason: `Run
 <Workflow>`, `Move to <BOARD>`, `Reply + close`, `Bounce to agent`, `Close — no
@@ -211,6 +238,7 @@ Matches the approved exemplar.
 |---|---|
 | `root` | cream `#EDE9E0` pill, bold, centered |
 | `branch_header` | bold label + gray subtitle, **no box** |
+| `step` | white rounded rect, `#D8D5CE` border, left-aligned, auto-numbered |
 | `decision` | cream `#EDE9E0` rounded rect; bold on load-bearing values |
 | `annotation` | dashed `#C9C5BC` border, no fill, gray text |
 | `outcome` | white fill, `#D8D5CE` border, bold title + gray reason line |
@@ -291,6 +319,23 @@ regenerated, never hand-edited.
 
 Step 5 precedes bulk authoring so visual feedback arrives on tree #1 rather
 than tree #20.
+
+## Seeded content decisions (2026-08-03)
+
+- **Fee relief is one procedure, not four.** Reverse Fee, QC Fee Waiver, QC
+  Auto-Reimburse and Retention Fee Waiver collapse into a single `CC Fee Relief`
+  procedure with subtypes. Confirmed as genuinely overlapping. Its tree answers
+  "which fee-relief path does this take," which is the shape of the reference
+  exemplar. Each subtype row keeps its own `automation` value, so the merge
+  costs nothing operationally.
+- **Credit Limit Increase/Decrease is shared.** Both WOCOO and DBO own it —
+  hence `owner` accepting multiple values. What decides between them is not yet
+  known and gets filled in from live tickets.
+- **Enumeration is incremental.** The full procedure list cannot be recalled
+  away from the queue, so there is no one-shot brain-dump milestone. Rows get
+  added as unmapped procedures are encountered; `status` reports coverage. The
+  renderer is therefore built against two or three real procedures rather than
+  waiting for a complete taxonomy.
 
 ## Decisions deferred to evidence
 
