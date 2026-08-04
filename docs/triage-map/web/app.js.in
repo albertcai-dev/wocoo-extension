@@ -1,0 +1,466 @@
+// ---------------------------------------------------------------------------
+// Browser glue. The only DOM-coupled file; all logic lives in the pure modules
+// exposed on globalThis.TriageMap by the bundler.
+// ---------------------------------------------------------------------------
+var T = globalThis.TriageMap;
+var SHEET = '1Uc8QcM0zA9Dvv0vVnZ-oD3ueESg1D7ZNXXpRRxFRGto';
+var SAVE_DELAY = 800;
+
+var state = {
+  rows: [],        // { rowNumber, procedure, dsl, tree, error, remote }
+  active: -1,
+  selected: null,  // uid
+  undo: {},        // rowNumber -> { stack: [dsl], pos }
+  timers: {},      // rowNumber -> timeout id
+  readOnly: false,
+};
+
+var el = function (id) { return document.getElementById(id); };
+
+// ---- MCP helper -----------------------------------------------------------
+function mcp(tool, args) {
+  if (!window.MagicTools) return Promise.reject(new Error('no-magictools'));
+  return window.MagicTools.call(tool, args).then(function (res) {
+    var part = (res.content || []).find(function (p) { return p.type === 'text'; });
+    return part ? JSON.parse(part.text) : {};
+  });
+}
+
+function banner(kind, html) {
+  var b = el('banner');
+  b.className = kind || '';
+  b.innerHTML = html || '';
+}
+
+function status(text) { el('status').textContent = text || ''; }
+
+// ---- load -----------------------------------------------------------------
+function load() {
+  if (!window.MagicTools) {
+    state.readOnly = true;
+    banner('err', 'Read-only: the MCPLocker browser extension is not available. ' +
+      'Connect it at <a href="https://mcplocker.w10external.com">mcplocker.w10external.com</a>, then reload.');
+    status('');
+    // Still render the shell, otherwise the sidebar sits on "loading…" forever
+    // and the toolbar looks clickable when nothing can actually be edited.
+    renderNav();
+    renderCanvas();
+    return Promise.resolve();
+  }
+  status('loading…');
+  return mcp('google_sheets_get', { spreadsheet_id: SHEET, range: 'Trees!A2:C100' })
+    .then(function (data) {
+      var values = data.values || [];
+      state.rows = [];
+      values.forEach(function (row, i) {
+        if (!row || !row[0]) return;
+        var dsl = row[1] || '';
+        var entry = {
+          rowNumber: i + 2, procedure: row[0], dsl: dsl,
+          tree: null, error: null, remote: dsl,
+        };
+        try { entry.tree = T.parseTree(dsl); }
+        catch (e) { entry.error = e.message; }
+        state.rows.push(entry);
+      });
+      state.active = state.rows.length ? 0 : -1;
+      renderNav();
+      renderCanvas();
+      status('');
+    })
+    .catch(function (e) {
+      banner('err', 'Could not read the sheet: ' + e.message);
+      status('');
+    });
+}
+
+// ---- sidebar --------------------------------------------------------------
+function renderNav() {
+  var n = state.rows.length;
+  el('procCount').textContent = n + (n === 1 ? ' procedure' : ' procedures');
+  var nav = el('nav');
+  nav.innerHTML = '';
+  state.rows.forEach(function (row, i) {
+    var b = document.createElement('button');
+    b.className = 'nav-item' + (i === state.active ? ' active' : '');
+    var name = document.createElement('span');
+    name.textContent = row.procedure;
+    b.appendChild(name);
+    if (row.error) {
+      var bad = document.createElement('span');
+      bad.className = 'bad';
+      bad.textContent = 'invalid';
+      b.appendChild(bad);
+    } else {
+      var kill = document.createElement('span');
+      kill.className = 'kill';
+      kill.textContent = '⌫';
+      kill.onclick = function (ev) { ev.stopPropagation(); deleteProcedure(i); };
+      b.appendChild(kill);
+    }
+    b.onclick = function () { state.active = i; state.selected = null; renderNav(); renderCanvas(); };
+    nav.appendChild(b);
+  });
+}
+
+// ---- canvas ---------------------------------------------------------------
+function current() { return state.active < 0 ? null : state.rows[state.active]; }
+
+function renderCanvas() {
+  var row = current();
+  var canvas = el('canvas');
+  Array.prototype.slice.call(canvas.querySelectorAll('svg,.msg')).forEach(function (n) { n.remove(); });
+  hideEditor();
+  if (!row) { syncToolbar(); return; }
+
+  if (row.error) {
+    var p = document.createElement('div');
+    p.className = 'msg';
+    p.style.padding = '12px';
+    p.style.color = '#8C2A1A';
+    p.style.whiteSpace = 'pre-wrap';
+    p.textContent = 'This tree does not parse, so it cannot be edited here:\n\n' + row.error;
+    canvas.appendChild(p);
+    syncToolbar();
+    return;
+  }
+
+  var diagram = T.layout(row.tree);
+  var holder = document.createElement('div');
+  holder.innerHTML = T.toSvg(diagram, row.procedure);
+  var svg = holder.firstElementChild;
+  canvas.appendChild(svg);
+
+  Array.prototype.forEach.call(svg.querySelectorAll('g[data-node-uid]'), function (g) {
+    var uid = Number(g.getAttribute('data-node-uid'));
+    if (uid === state.selected) g.classList.add('sel');
+    g.addEventListener('click', function (ev) {
+      ev.stopPropagation();
+      state.selected = uid;
+      renderCanvas();
+    });
+    g.addEventListener('dblclick', function (ev) {
+      ev.stopPropagation();
+      state.selected = uid;
+      showEditor(uid, g);
+    });
+    g.addEventListener('pointerdown', function (ev) { beginDrag(ev, uid, svg); });
+  });
+
+  validateCurrent();
+  syncToolbar();
+}
+
+function validateCurrent() {
+  var row = current();
+  if (!row || !row.tree) return;
+  try {
+    T.parseTree(T.serialize(row.tree));
+    if (!/changed in the sheet/.test(el('banner').innerHTML)) banner('', '');
+  } catch (e) {
+    banner('warn', '<strong>This tree is currently invalid.</strong> It is still being saved, ' +
+      'but <code>render.mjs</code> will refuse it until fixed.<br>' + e.message.replace(/\n/g, '<br>'));
+  }
+}
+
+function syncToolbar() {
+  var row = current();
+  var has = !!(row && row.tree && state.selected);
+  ['kind', 'addChild', 'addSib', 'del'].forEach(function (id) {
+    el(id).disabled = state.readOnly || !has;
+  });
+  var u = row ? state.undo[row.rowNumber] : null;
+  el('undo').disabled = state.readOnly || !u || u.pos <= 0;
+  el('redo').disabled = state.readOnly || !u || u.pos >= u.stack.length - 1;
+  if (has) {
+    var found = T.locate(row.tree, state.selected);
+    if (found) {
+      el('kind').value = found.node.kind === 'decision' && found.node.conjoined
+        ? 'decision_and' : found.node.kind;
+    }
+  } else {
+    el('kind').value = '';
+  }
+}
+
+// ---- edits ----------------------------------------------------------------
+function applyEdit(fn) {
+  var row = current();
+  if (!row || !row.tree || state.readOnly) return;
+  var next;
+  try { next = fn(row.tree); }
+  catch (e) {
+    banner('err', e.name === 'EditError' ? e.message : 'Edit failed: ' + e.message);
+    return;
+  }
+  banner('', '');
+  row.tree = next;
+  row.dsl = T.serialize(next);
+  pushUndo(row);
+  renderCanvas();
+  scheduleSave(row);
+}
+
+function pushUndo(row) {
+  var u = state.undo[row.rowNumber];
+  if (!u) {
+    // Seed with the state as loaded, so the first undo can get back to it.
+    u = { stack: [row.remote], pos: 0 };
+    state.undo[row.rowNumber] = u;
+  }
+  u.stack = u.stack.slice(0, u.pos + 1);
+  u.stack.push(row.dsl);
+  if (u.stack.length > 50) u.stack.shift();
+  u.pos = u.stack.length - 1;
+}
+
+function timeTravel(delta) {
+  var row = current();
+  if (!row || state.readOnly) return;
+  var u = state.undo[row.rowNumber];
+  if (!u) return;
+  var pos = u.pos + delta;
+  if (pos < 0 || pos >= u.stack.length) return;
+  u.pos = pos;
+  row.dsl = u.stack[pos];
+  try { row.tree = T.parseTree(row.dsl); row.error = null; }
+  catch (e) { row.error = e.message; }
+  state.selected = null;
+  renderNav();
+  renderCanvas();
+  scheduleSave(row);
+}
+
+// ---- save -----------------------------------------------------------------
+function scheduleSave(row) {
+  if (state.readOnly) return;
+  status('unsaved…');
+  clearTimeout(state.timers[row.rowNumber]);
+  state.timers[row.rowNumber] = setTimeout(function () { saveNow(row); }, SAVE_DELAY);
+}
+
+function saveNow(row) {
+  status('saving…');
+  return mcp('google_sheets_get', { spreadsheet_id: SHEET, range: 'Trees!B' + row.rowNumber })
+    .then(function (data) {
+      var remote = (data.values && data.values[0] && data.values[0][0]) || '';
+      if (remote !== row.remote) {
+        status('');
+        banner('warn', '<strong>' + row.procedure + ' changed in the sheet</strong> since you ' +
+          'loaded it. Saving now would overwrite that change.' +
+          '<button id="ovr">Overwrite</button><button id="rel">Reload from sheet</button>');
+        el('ovr').onclick = function () { row.remote = remote; banner('', ''); saveNow(row); };
+        el('rel').onclick = function () { banner('', ''); load(); };
+        return null;
+      }
+      var today = new Date().toISOString().slice(0, 10);
+      return mcp('google_sheets_batch_update_values', {
+        spreadsheet_id: SHEET,
+        value_input_option: 'RAW',
+        data: [
+          { range: 'Trees!B' + row.rowNumber, values: [[row.dsl]] },
+          { range: 'Trees!C' + row.rowNumber, values: [[today]] },
+        ],
+      }).then(function () {
+        row.remote = row.dsl;
+        status('saved');
+        setTimeout(function () { if (el('status').textContent === 'saved') status(''); }, 1500);
+      });
+    })
+    .catch(function (e) {
+      status('');
+      banner('err', 'Save failed: ' + e.message);
+    });
+}
+
+// ---- inline text editor ---------------------------------------------------
+var editingUid = null;
+
+function showEditor(uid, g) {
+  var row = current();
+  var found = T.locate(row.tree, uid);
+  if (!found || state.readOnly) return;
+  editingUid = uid;
+  var box = g.querySelector('rect');
+  var ed = el('editor');
+  ed.style.display = 'block';
+  ed.style.left = (Number(box.getAttribute('x')) + 6) + 'px';
+  ed.style.top = (Number(box.getAttribute('y')) + 6) + 'px';
+  el('fTitle').value = found.node.title;
+  el('fSub').value = found.node.subtitle || '';
+  el('fLabel').value = found.node.edgeLabel || '';
+  el('fLabel').style.display = found.node.kind === 'outcome' ? 'block' : 'none';
+  el('fTitle').focus();
+  el('fTitle').select();
+}
+
+function hideEditor() { editingUid = null; el('editor').style.display = 'none'; }
+
+function commitEditor() {
+  if (editingUid === null) return;
+  var uid = editingUid;
+  var title = el('fTitle').value;
+  var sub = el('fSub').value;
+  var label = el('fLabel').value;
+  var wasOutcome = el('fLabel').style.display !== 'none';
+  hideEditor();
+  applyEdit(function (tree) {
+    var next = T.setText(tree, uid, { title: title, subtitle: sub });
+    if (wasOutcome) next = T.setEdgeLabel(next, uid, label);
+    return next;
+  });
+}
+
+// ---- drag -----------------------------------------------------------------
+var drag = null;
+
+function beginDrag(ev, uid, svg) {
+  if (state.readOnly || ev.button !== 0) return;
+  var row = current();
+  var found = T.locate(row.tree, uid);
+  if (!found || !found.parent) return; // root is not draggable
+  drag = { uid: uid, svg: svg, startX: ev.clientX, startY: ev.clientY, active: false, target: null };
+  ev.preventDefault();
+}
+
+document.addEventListener('pointermove', function (ev) {
+  if (!drag) return;
+  if (!drag.active) {
+    if (Math.abs(ev.clientX - drag.startX) + Math.abs(ev.clientY - drag.startY) < 5) return;
+    drag.active = true;
+  }
+  clearDropMarks();
+  var g = groupUnder(ev, drag.svg);
+  drag.target = null;
+  if (!g) return;
+  var uid = Number(g.getAttribute('data-node-uid'));
+  if (uid === drag.uid) return;
+  var rect = g.querySelector('rect').getBoundingClientRect();
+  var edge = (ev.clientY - rect.top) / rect.height;
+  drag.target = { uid: uid, mode: edge < 0.25 || edge > 0.75 ? 'between' : 'onto' };
+  g.classList.add('drop');
+});
+
+document.addEventListener('pointerup', function () {
+  if (!drag) return;
+  var d = drag;
+  drag = null;
+  clearDropMarks();
+  if (!d.active || !d.target) return;
+
+  var uid = d.uid;
+  var target = d.target;
+  applyEdit(function (tree) {
+    if (target.mode === 'onto') return T.reparent(tree, uid, target.uid);
+    var found = T.locate(tree, target.uid);
+    if (!found.parent) return T.reparent(tree, uid, target.uid);
+    return T.reorderSibling(tree, uid, found.parent.uid, found.index + 1);
+  });
+});
+
+function groupUnder(ev, svg) {
+  var stack = document.elementsFromPoint(ev.clientX, ev.clientY);
+  for (var i = 0; i < stack.length; i++) {
+    var g = stack[i].closest ? stack[i].closest('g[data-node-uid]') : null;
+    if (g && svg.contains(g)) return g;
+  }
+  return null;
+}
+
+function clearDropMarks() {
+  Array.prototype.forEach.call(document.querySelectorAll('g.drop'), function (g) {
+    g.classList.remove('drop');
+  });
+}
+
+// ---- procedure lifecycle --------------------------------------------------
+function newProcedure() {
+  if (state.readOnly) return;
+  var name = window.prompt('Procedure name');
+  if (!name) return;
+  name = name.trim();
+  if (!name) return;
+  var problem = T.titleProblem(name, { isRoot: true });
+  if (problem) {
+    banner('err', 'That cannot be a procedure name: ' + problem);
+    return;
+  }
+  var rowNumber = state.rows.reduce(function (m, r) { return Math.max(m, r.rowNumber); }, 1) + 1;
+  var today = new Date().toISOString().slice(0, 10);
+  status('creating…');
+  mcp('google_sheets_batch_update_values', {
+    spreadsheet_id: SHEET,
+    value_input_option: 'RAW',
+    data: [{ range: 'Trees!A' + rowNumber + ':C' + rowNumber, values: [[name, name + '\n', today]] }],
+  }).then(function () { return load(); })
+    .then(function () {
+      var idx = state.rows.findIndex(function (r) { return r.procedure === name; });
+      if (idx >= 0) { state.active = idx; renderNav(); renderCanvas(); }
+    })
+    .catch(function (e) { status(''); banner('err', 'Could not create: ' + e.message); });
+}
+
+function deleteProcedure(index) {
+  var row = state.rows[index];
+  if (state.readOnly) return;
+  var typed = window.prompt('Type the procedure name to delete it from the sheet:\n' + row.procedure);
+  if (typed !== row.procedure) return;
+  status('deleting…');
+  mcp('google_sheets_batch_update_values', {
+    spreadsheet_id: SHEET,
+    value_input_option: 'RAW',
+    data: [{ range: 'Trees!A' + row.rowNumber + ':C' + row.rowNumber, values: [['', '', '']] }],
+  }).then(function () { return load(); })
+    .catch(function (e) { status(''); banner('err', 'Could not delete: ' + e.message); });
+}
+
+// ---- wiring ---------------------------------------------------------------
+el('addChild').onclick = function () {
+  var uid = state.selected;
+  applyEdit(function (tree) { return T.addChild(tree, uid).tree; });
+};
+el('addSib').onclick = function () {
+  var uid = state.selected;
+  applyEdit(function (tree) { return T.addSibling(tree, uid).tree; });
+};
+el('del').onclick = function () {
+  var row = current();
+  var uid = state.selected;
+  var found = row && row.tree ? T.locate(row.tree, uid) : null;
+  if (!found) return;
+  if (found.node.children.length && !window.confirm('Delete this node and its ' +
+      found.node.children.length + ' child node(s)?')) return;
+  state.selected = null;
+  applyEdit(function (tree) { return T.deleteNode(tree, uid); });
+};
+el('kind').onchange = function () {
+  var token = el('kind').value;
+  var uid = state.selected;
+  if (!token) return;
+  applyEdit(function (tree) { return T.setKind(tree, uid, token); });
+};
+el('undo').onclick = function () { timeTravel(-1); };
+el('redo').onclick = function () { timeTravel(1); };
+el('newProc').onclick = newProcedure;
+
+el('editor').addEventListener('keydown', function (ev) {
+  if (ev.key === 'Enter') { ev.preventDefault(); commitEditor(); }
+  if (ev.key === 'Escape') { ev.preventDefault(); hideEditor(); }
+});
+
+document.addEventListener('keydown', function (ev) {
+  if (editingUid !== null) return;
+  var meta = ev.metaKey || ev.ctrlKey;
+  if (meta && ev.key.toLowerCase() === 'z') {
+    ev.preventDefault();
+    timeTravel(ev.shiftKey ? 1 : -1);
+    return;
+  }
+  if (!state.selected) return;
+  if (ev.key === 'Enter') { ev.preventDefault(); el(ev.shiftKey ? 'addSib' : 'addChild').click(); }
+  if (ev.key === 'Delete' || ev.key === 'Backspace') { ev.preventDefault(); el('del').click(); }
+});
+
+el('canvas').addEventListener('click', function () { state.selected = null; renderCanvas(); });
+
+load();

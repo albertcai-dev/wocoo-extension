@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WOCOO Triage Map Editor</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif;
+         margin: 0; background: #FAF9F7; color: #1F2421; display: flex; min-height: 100vh; }
+  aside { width: 258px; flex: 0 0 258px; background: #fff; border-right: 1px solid #E5E2DC;
+          padding: 24px 16px; height: 100vh; overflow-y: auto; }
+  h1 { font-size: 15px; margin: 0 0 2px; font-weight: 700; }
+  .sub { color: #7A756C; font-size: 12px; margin: 0 0 18px; }
+  .nav-item { display: flex; justify-content: space-between; align-items: center; width: 100%;
+              text-align: left; border: 0; background: none; font: inherit; font-size: 13px;
+              color: #1F2421; padding: 8px 10px; border-radius: 6px; cursor: pointer; margin-bottom: 2px; }
+  .nav-item:hover { background: #F2F0EB; }
+  .nav-item.active { background: #EDE9E0; font-weight: 600; }
+  .nav-item .bad { color: #C0392B; font-size: 11px; }
+  .nav-item .kill { visibility: hidden; color: #7A756C; }
+  .nav-item:hover .kill { visibility: visible; }
+  #newProc { margin-top: 10px; font: inherit; font-size: 12px; border: 1px dashed #D8D5CE;
+             background: none; border-radius: 6px; padding: 6px 10px; cursor: pointer; width: 100%; }
+  main { flex: 1; padding: 20px 28px 56px; min-width: 0; }
+  .bar { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+  .bar button, .bar select { font: inherit; font-size: 12px; border: 1px solid #E5E2DC;
+                             background: #fff; border-radius: 6px; padding: 5px 10px;
+                             cursor: pointer; color: #1F2421; }
+  .bar button:hover { background: #F2F0EB; }
+  .bar button[disabled], .bar select[disabled] { opacity: .4; cursor: default; }
+  .spacer { flex: 1; }
+  #status { font-size: 12px; color: #7A756C; }
+  #banner { display: none; margin-bottom: 12px; padding: 10px 12px; border-radius: 8px;
+            font-size: 13px; border: 1px solid; }
+  #banner.warn { display: block; background: #FDF6E3; border-color: #E4D9B0; color: #6B5A16; }
+  #banner.err  { display: block; background: #FDEDEA; border-color: #F0C4BC; color: #8C2A1A; }
+  #banner button { font: inherit; font-size: 12px; margin-left: 8px; padding: 3px 8px;
+                   border-radius: 5px; border: 1px solid currentColor; background: none;
+                   color: inherit; cursor: pointer; }
+  .canvas { border: 1px solid #E5E2DC; border-radius: 10px; background: #fff; padding: 10px;
+            overflow: auto; max-height: calc(100vh - 170px); position: relative; }
+  .canvas svg { display: block; }
+  .canvas g[data-node-uid] { cursor: pointer; }
+  .canvas g[data-node-uid].sel > rect { stroke: #1B7F4B; stroke-width: 2; }
+  .canvas g[data-node-uid].drop > rect { stroke: #1B7F4B; stroke-width: 2; stroke-dasharray: 3 2; }
+  #editor { position: absolute; display: none; background: #fff; border: 1px solid #1B7F4B;
+            border-radius: 8px; padding: 8px; box-shadow: 0 4px 14px rgba(0,0,0,.12); z-index: 5; }
+  #editor input { display: block; font: inherit; font-size: 13px; width: 260px; margin-bottom: 6px;
+                  border: 1px solid #E5E2DC; border-radius: 5px; padding: 5px 7px; }
+  #editor .hint { font-size: 11px; color: #7A756C; }
+</style>
+</head>
+<body>
+<aside>
+  <h1>Triage Map Editor</h1>
+  <p class="sub" id="procCount">loading…</p>
+  <div id="nav"></div>
+  <button id="newProc">+ New procedure</button>
+</aside>
+<main>
+  <div id="banner"></div>
+  <div class="bar">
+    <select id="kind" title="Node kind">
+      <option value="">kind…</option>
+      <option value="branch_header">#  branch header</option>
+      <option value="step">-  step</option>
+      <option value="decision">?  decision</option>
+      <option value="decision_and">?AND  conjoined</option>
+      <option value="annotation">~  annotation</option>
+      <option value="outcome">=  outcome</option>
+    </select>
+    <button id="addChild">+ child</button>
+    <button id="addSib">+ sibling</button>
+    <button id="del">Delete</button>
+    <button id="undo">Undo</button>
+    <button id="redo">Redo</button>
+    <span class="spacer"></span>
+    <span id="status"></span>
+  </div>
+  <div class="canvas" id="canvas"><div id="editor">
+    <input id="fTitle" placeholder="title">
+    <input id="fSub" placeholder="subtitle (optional)">
+    <input id="fLabel" placeholder="edge label (outcomes only)">
+    <div class="hint">⏎ save · Esc cancel</div>
+  </div></div>
+</main>
+<script src="app.js"></script>
+</body>
+</html>
