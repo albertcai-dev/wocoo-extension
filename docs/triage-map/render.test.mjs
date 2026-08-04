@@ -36,9 +36,37 @@ test('renderAll skips rows with an empty tree_dsl', () => {
   assert.deepEqual(out.map((r) => r.procedure), ['Real']);
 });
 
-test('indexHtml links every rendered diagram', () => {
-  const html = indexHtml([{ slug: 'a', procedure: 'A' }, { slug: 'b', procedure: 'B' }]);
-  assert.ok(html.includes('a.svg'));
-  assert.ok(html.includes('b.svg'));
+test('indexHtml inlines every diagram rather than linking a file', () => {
+  const html = indexHtml([
+    { slug: 'a', procedure: 'A', svg: '<svg width="10" height="10"><title>A</title></svg>' },
+    { slug: 'b', procedure: 'B', svg: '<svg width="20" height="20"><title>B</title></svg>' },
+  ]);
+  assert.ok(html.includes('<svg width="10" height="10">'), 'first svg inlined');
+  assert.ok(html.includes('<svg width="20" height="20">'), 'second svg inlined');
+  assert.ok(!html.includes('.svg"'), 'must not reference external svg files');
   assert.ok(html.includes('<h2>A</h2>'));
+});
+
+test('indexHtml marks exactly one nav item and one panel active', () => {
+  const html = indexHtml([
+    { slug: 'a', procedure: 'A', svg: '<svg width="10" height="10"></svg>' },
+    { slug: 'b', procedure: 'B', svg: '<svg width="20" height="20"></svg>' },
+  ]);
+  assert.equal((html.match(/class="nav-item active"/g) || []).length, 1);
+  assert.equal((html.match(/class="panel active"/g) || []).length, 1);
+});
+
+test('indexHtml pluralises the procedure count', () => {
+  const one = indexHtml([{ slug: 'a', procedure: 'A', svg: '<svg width="1" height="1"></svg>' }]);
+  assert.ok(one.includes('1 procedure mapped'));
+  const two = indexHtml([
+    { slug: 'a', procedure: 'A', svg: '<svg width="1" height="1"></svg>' },
+    { slug: 'b', procedure: 'B', svg: '<svg width="1" height="1"></svg>' },
+  ]);
+  assert.ok(two.includes('2 procedures mapped'));
+});
+
+test('indexHtml links back to the sheet as the source of truth', () => {
+  const html = indexHtml([{ slug: 'a', procedure: 'A', svg: '<svg width="1" height="1"></svg>' }]);
+  assert.ok(html.includes('1Uc8QcM0zA9Dvv0vVnZ-oD3ueESg1D7ZNXXpRRxFRGto'));
 });

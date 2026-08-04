@@ -18,14 +18,16 @@ alternative was rejected, the rejection is recorded so it isn't silently revisit
 
 | Decision | Choice | Alternatives rejected |
 |---|---|---|
-| Automation exclusion | **None needed** — the `resolutiondate` filter already drops them (see Findings) | By issue type (chosen during brainstorming, then invalidated by data); changelog actor check; label/resolution marker; bot-assignee heuristic |
+| Completion timestamp | `statusCategoryChangedDate`, as a **query bound only** (Findings §4) | `resolutiondate` (chosen first, then found dead in WOCOO); `updated` (drifts when closed tickets are commented on) |
+| Automation exclusion | `summary !~ "Eligibility Confirmation Request"` — load-bearing | By issue type (invalidated: not an issue type); by reporter (display name doesn't resolve in JQL); none needed (only true under `resolutiondate`) |
 | Data source | Live JQL on every page load | Scheduled aggregation into `MagicStorage.public`; hybrid cached-history + live-today |
-| Fetch structure | Lazy per-tab with cumulative cache | Single year-window fetch on load; count-only queries for tiles |
+| Fetch structure | One query per calendar day; windows are unions of days | Single window query per tab; single year fetch on load; count-only queries for tiles |
+| Chart bucketing | One query per day, day carried by the query | Weekly buckets for long windows; drop the chart |
 | Completion definition | Done and Cancelled counted **separately** | Done only; both merged into one number |
 | Assignee set | Fixed roster of five | Derived from data; derived plus zero-rows |
 | Period layout | Four tabs, one board at a time | All four as table columns; summary tiles + one board |
 | Chart | One line per assignee plus total, legend toggles | Total only; window follows the tab |
-| Chart window | Own selector: 30 / 90 / 365, default 90 (sets the initial fetch size) | Fixed 90; follows the period tab |
+| Chart window | Own selector: 30 / 90 / 365, default 30 (sets the initial fetch size) | Default 90 (dropped once a day costs a request); fixed 90; follows the period tab |
 | Drill-down | Inline accordion, multiple rows open at once | Right-hand drawer; fixed detail pane below |
 | Default sort | Ranked by count, highest first | Alphabetical with sortable header; configurable |
 | Design system | Patchwork tokens — greyscale read from Figma, categorical sampled from screenshots (see Findings) | Reuse extension's `mint-tokens.css`; Figma tokens + hand-rolled components |
@@ -34,7 +36,10 @@ alternative was rejected, the rejection is recorded so it isn't silently revisit
 
 ### Stated as decisions, not asked
 
-- **Rolling windows**, not calendar days — "past day" is the last 24 hours, matching JQL's `-1d`.
+- **Calendar days**, not rolling windows. The earlier draft specified rolling 24-hour windows
+  to match JQL's `-1d`; Findings §4 replaced that with per-day queries, so "past day" now means
+  today so far, and "past 7 days" means the last 7 calendar days including today. Boundaries
+  are Jira's, in the viewer's Jira timezone.
 - **`Other` is a visible row**, so totals reconcile rather than silently dropping non-roster tickets.
 
 ## Roster
@@ -51,9 +56,9 @@ or to nobody.
 
 ## Architecture
 
-Single-file Magic site, React via `@babel/standalone@7` (pinned — v8 emits `import`
-statements that break `type="text/babel"`). Served with a `.js` extension, since
-`magic_file_edit` returns 400 on `.jsx`.
+Single-file Magic site (`index.html`), React via `@babel/standalone@7` (pinned — v8 emits
+`import` statements that break `type="text/babel"`). Tailwind v4 and the Wealthsimple token
+set are auto-injected by Magic and must not be bundled.
 
 Jira is reached through `MagicTools.call`, not `fetch`, so each viewer queries under their
 own Okta identity. This is what makes team-wide visibility safe: nobody sees a ticket they
@@ -61,21 +66,40 @@ couldn't already open in Jira.
 
 ### Query
 
+One query per calendar day. The date is carried by the query, not read from the ticket —
+see Findings §4, which explains why no per-ticket completion timestamp is available.
+
 ```
 project = WOCOO AND statusCategory = Done
-  AND resolutiondate >= -{N}d
+  AND statusCategoryChangedDate >= "{YYYY-MM-DD}"
+  AND statusCategoryChangedDate <  "{YYYY-MM-DD + 1}"
   AND summary !~ "Eligibility Confirmation Request"
-ORDER BY resolutiondate DESC
 ```
 
-The `summary !~` clause is belt-and-braces, not the mechanism — see Findings. Automation
-tickets already fall out because they carry no `resolutiondate`. The clause exists so that
-if automation ever starts stamping one, roughly five phantom tickets a day don't quietly
-appear on the board.
+The `summary !~` clause is **load-bearing**, not defensive. Automation tickets have no
+`resolutiondate` but they do have a status-category change date, so without this clause
+roughly five phantom tickets a day would land on roster members' counts. Verified: the same
+query with `summary ~` returns WOCOO-26133, 26129 and 26118, assigned to Albert, Esther and
+Ishan.
 
-Fields: `resolutiondate`, `assignee`, `issuetype`, `status`. Paged via
-`POST /rest/api/3/search/jql` with `nextPageToken` — the old `/rest/api/3/search` was
-removed and returns 410.
+Issued through `MagicTools.call('jira_search_tickets', …)` — the MCP tool, not raw REST,
+since a Magic site can only reach Jira via MagicTools:
+
+```js
+await window.MagicTools.call('jira_search_tickets', {
+  jql,
+  fields: 'assignee,status,issuetype',
+  max_results: 100,
+  next_page_token: token,   // omit on the first page
+});
+```
+
+Bare `YYYY-MM-DD` bounds are interpreted in the viewer's own Jira timezone, so Jira does the
+calendar-day bucketing. This removes the DST hazard the earlier draft had to guard against —
+there is no client-side date arithmetic left to get wrong.
+
+A measured day (2026-07-30) returned 47 tickets in a single page, so most days need one
+request; the pagination loop exists for outliers.
 
 ### Done vs Cancelled
 
@@ -86,16 +110,18 @@ covered by a test, so the default is deliberate rather than incidental.
 
 ### Cache
 
-`ticketCache` holds `{ oldestDayFetched, issues[] }`. Before any fetch it compares the
-requested window to `oldestDayFetched` and requests only the uncovered older slice, then
-merges. Tabs and the chart selector both go through it, so each widening pays only its
-increment and narrowing is free.
+`dayCache` is a `Map<'YYYY-MM-DD', Row[]>`. `ensureDays(dates)` fetches only the dates not
+already present, in parallel with a small concurrency limit, and stores each day's rows under
+its date.
 
-**Initial load fetches 90 days.** This is set by the chart's default window, which is the
-widest thing rendered on first paint — fetching only 24 hours would leave the chart empty
-until the user touched it. 90 days also makes the Day, 7-day and 30-day tabs instant, so
-Year is the only window that ever triggers an on-demand fetch. The trade is a slower first
-paint than a 24-hour load would give; it buys three instant tabs and a populated chart.
+Every window is the union of its days, so the cumulative behaviour the design wanted survives
+the loss of per-ticket dates — just keyed by day instead. Loading 30 days makes the Day and
+7-day tabs free; the chart at 30 days is already paid for. Only widening costs anything, and
+only for the days not yet held.
+
+**Initial load fetches 30 days** — the chart's default window and the widest thing on first
+paint, at ~30 requests. 90 and 365 are explicit on-demand choices. The Year tab is ~365
+requests and is expected to take on the order of a minute; that was raised and accepted.
 
 Mirrored to `sessionStorage` in compact form so a reload within a session is instant.
 Deliberately not `localStorage` — numbers shouldn't survive across days and look current.
@@ -103,25 +129,27 @@ On a quota error the mirror is skipped and the cache stays in memory only.
 
 ### Derivation
 
-Everything downstream is pure functions over the cached array; no further queries. Day
-bucketing uses `America/Toronto` via `Intl`, never by adding 86400000ms — otherwise two
-days a year mis-bucket tickets resolved near midnight.
+Everything downstream is pure functions over the cached day-map; no further queries. There is
+no client-side date arithmetic at all — Jira buckets by calendar day via the query bounds, so
+the earlier DST hazard is designed out rather than guarded against.
 
 ## Modules
 
 | Module | Responsibility | Depends on |
 |---|---|---|
-| `jiraClient` | `fetchResolved(fromDays, toDays)`. Owns pagination, JQL, field selection. Returns `{ resolvedAt, assignee, workType, outcome }[]`. | `MagicTools` |
-| `ticketCache` | `ensureRange(days)`. Sole decider of what still needs fetching; merges, mirrors to `sessionStorage`. | `jiraClient` |
-| `aggregate` | Pure: `totalsFor`, `byAssignee`, `byWorkType`, `dailySeries`. | nothing |
+| `jiraClient` | `fetchDay(date)`. Owns the JQL, `MagicTools.call`, pagination and field selection for one calendar day. Returns `{ assignee, workType, outcome }[]`. | `MagicTools` |
+| `dayCache` | `ensureDays(dates, onProgress)`. Sole decider of what still needs fetching; holds `Map<date, Row[]>`, mirrors to `sessionStorage`. | `jiraClient` |
+| `aggregate` | Pure: `totalsFor`, `byAssignee`, `byWorkType`, `dailySeries`. Operates on a day-map. | nothing |
+| `dates` | Pure: `lastNDates(n, today)` → `['YYYY-MM-DD', …]`, and `nextDate(d)`. | nothing |
 
-Nothing above `jiraClient` knows Jira's response shape.
+Nothing above `jiraClient` knows Jira's response shape. Rows carry no timestamp — the day is
+the map key.
 
 ## Components
 
 | Component | Responsibility |
 |---|---|
-| `App` | Holds selected period, chart window, and expanded row keys (a `Set` — the accordion allows several open). Orchestrates `ticketCache`. |
+| `App` | Holds selected period, chart window, and expanded row keys (a `Set` — the accordion allows several open). Orchestrates `dayCache`. |
 | `PeriodTabs` | Day / 7 days / 30 days / Year. |
 | `SummaryTiles` | Done and cancelled totals for the selected period. |
 | `Leaderboard` | Ranked rows plus a Total row, each expandable. No data logic. Ranking covers roster members, `Other` and `Unassigned` alike — they are ordinary rows. The Total row is pinned last and never participates in ranking; it sums every row above it, so the two always reconcile. |
@@ -142,50 +170,48 @@ validated scale.
 
 ### Loading
 
-The year fetch is the slow path. `ticketCache` reports progress as pages arrive and the
-board renders partial results with "showing N of ~M pages" rather than a blank spinner.
+The year fetch is the slow path — ~365 day-queries. `dayCache` reports progress as days
+resolve and the board renders partial results with "loaded N of M days" rather than a blank
+spinner. Days are fetched newest-first so the chart fills from the right and the most
+relevant numbers appear soonest.
 
 ## Failure modes
 
-- **Partial fetch.** On mid-pagination failure the cache keeps what it has, flags the range
-  incomplete, and the UI shows a retry with rank suppressed. A silently under-counting
-  leaderboard is worse than an error.
-- **Automation tickets reappearing.** Exclusion rests on these tickets having no
-  `resolutiondate` (Findings §1), which is a property of how Workato closes them, not a
-  guarantee. If that changes, ~5 phantom tickets a day would land on roster members' counts.
-  The `summary !~` clause is the guard; if the automation's summary text ever changes too,
-  both defences fail silently. Worth re-checking whenever counts look inflated.
-- **Missing `resolutiondate`.** A Done ticket without one is invisible to the filter. The
-  footnote query is:
-
-  ```
-  project = WOCOO AND statusCategory = Done AND resolutiondate IS EMPTY
-    AND summary !~ "Eligibility Confirmation Request"
-  ```
-
-  The summary exclusion is **load-bearing here**, unlike in the main query. Without it this
-  would count ~1,800 automation tickets a year and report them to the team as a data
-  discrepancy — the footnote would be permanently, loudly wrong. It should surface only
-  genuine human tickets that somehow reached Done without a resolution date. Those are never
-  attributed to an assignee or a day, since there's no date to bucket them into; the footnote
-  is the whole treatment.
+- **Partial fetch.** A day whose fetch fails is marked missing rather than treated as zero.
+  The chart shows a gap at that date, the board shows a retry with rank suppressed, and the
+  other days stay cached. A silently under-counting leaderboard is worse than an error, and a
+  failed day rendering as 0 is exactly that failure.
+- **Automation tickets reappearing.** The `summary !~` clause is the **only** thing excluding
+  them now — verified present under `statusCategoryChangedDate`. If Workato ever changes the
+  summary text, ~5 phantom tickets a day silently join roster members' counts. Re-check
+  whenever a number looks inflated.
+- **Reopened and re-closed tickets.** `statusCategoryChangedDate` reflects the *most recent*
+  category change, so a ticket closed in June, reopened, and closed again in August counts
+  under August and is absent from June. Historical days can therefore change retroactively.
+  This is inherent to the only available field; it is not a bug to fix but a caveat to state
+  on the page.
 - **`sessionStorage` quota.** Compact form; on quota error, in-memory only.
 - **`MagicTools` unavailable.** Explicit "can't reach Jira — check VPN and MCP session"
   state with retry. Never render zeroes on failure; zeroes look like a real answer.
 
 ## Testing
 
-Vitest over `aggregate` and `ticketCache` only. Components stay untested — their bugs are
-visible; these aren't.
+Vitest over `aggregate`, `dayCache` and `dates` only. Components stay untested — their bugs
+are visible; these aren't.
 
 Cases that matter:
 
-- Window boundary: a ticket resolved exactly 7 days ago, `>=` vs `>`.
-- Cache merge: 7d → 30d → 7d → year must not double-count. The most likely bug, and the
-  hardest to see, because the result is wrong but plausible.
-- DST: a ticket resolved near midnight on a transition day.
+- `lastNDates` boundary: 7 days means 7 date strings, and the newest is today.
+- Cache reuse: `ensureDays` for 30 days then 7 days issues **zero** further fetches, and the
+  7-day window returns a strict subset. This replaces the old double-count test — the failure
+  mode is now redundant refetching rather than double-counting, since days are keyed.
+- Partial failure: one day's fetch rejecting leaves the other days cached and marks that date
+  missing, rather than poisoning the whole range.
 - Unrecognised status name falls to done.
 - `Other` and `Unassigned` classification; totals reconcile with the sum of rows.
+
+No DST test — there is no client-side date arithmetic left to get wrong. Jira does the
+bucketing via the query bounds.
 
 Plus one manual check worth more than any of them: for a single window, compare the
 dashboard total against the same JQL run directly in Jira. Disagreement means the exclusion
@@ -195,15 +221,15 @@ or bucketing logic is wrong.
 
 ```
 ~/projects/wocoo-analytics/
-  src/          jiraClient.js · ticketCache.js · aggregate.js · components.js · tokens.css
-  test/         aggregate.test.js · ticketCache.test.js
-  build.js      concatenates src/ into dist/wocoo-analytics.js
+  src/          dates.js · jiraClient.js · dayCache.js · aggregate.js · components.js · tokens.css
+  test/         dates.test.js · aggregate.test.js · dayCache.test.js
+  build.js      assembles src/ into dist/index.html
   dist/
 ```
 
-`npm test` then `npm run build`, then push `dist/wocoo-analytics.js` to Magic. Files over
-50KB are pushed with chunked `magic_file_edit` — single-call `magic_file_write` at that size
-has had subagents paraphrase content.
+`npm test` then `npm run build`, then deploy `dist/index.html` with `magic_site_upload`.
+Tailwind v4 with Wealthsimple tokens is auto-injected by Magic — do **not** bundle it. React
+and `@babel/standalone@7` still come from CDN script tags; they are not injected.
 
 **The deployed file is a build artifact.** Editing it directly on Magic will be overwritten
 by the next build. This is the accepted cost of the tested-build approach.
@@ -227,10 +253,11 @@ is called that. The tickets are:
 So `issuetype != "Eligibility Confirmation"` would have returned a 400, and the obvious
 repair — excluding `Other` — would have silently dropped real work.
 
-No exclusion is required. **These tickets carry no `resolutiondate`.** Evidence:
-`summary ~ "Eligibility Confirmation Request" AND resolutiondate >= -30d` returns nothing,
-while the same query with `resolutiondate IS EMPTY` returns them. The date filter the design
-already needed does the job.
+**These tickets carry no `resolutiondate`** — `summary ~ "Eligibility Confirmation Request"
+AND resolutiondate >= -30d` returns nothing, while `resolutiondate IS EMPTY` returns them.
+That briefly looked like it made exclusion unnecessary. **Finding §4 overturned that**:
+`resolutiondate` is unusable project-wide, and under `statusCategoryChangedDate` these
+tickets are plainly visible. The `summary !~` clause is the exclusion mechanism.
 
 Filtering by reporter was considered and rejected: `reporter = "workato machine account"`
 returns empty in JQL — the display name doesn't resolve to an account.
@@ -296,7 +323,38 @@ Dev Mode — and note that the **variable names** are still unknown, so `tokens.
 to invent them.
 
 Six swatches for exactly six series (five roster plus `Other`) is a lucky fit. If the roster
-grows past five, the palette is exhausted and someone has to decide what gives.
+grows past five, the palette is exhausted and someone has to decide what gives. Note this is
+already tight: `Unassigned` is a seventh row on the board, so it takes a neutral grey rather
+than a categorical colour and is excluded from the chart.
+
+### 4. There is no per-ticket completion timestamp — the architecture changed
+
+Found while writing the implementation plan, before any code was written.
+
+`resolutiondate` is **dead in WOCOO**. `project = WOCOO AND resolutiondate >= -365d` returns
+exactly one ticket in the entire year (WOCOO-18062, December 2025), while five tickets entered
+Done in the last seven days carrying no resolution date at all. The workflow never sets one.
+Every query in the previous draft would have returned nothing, and the dashboard would have
+rendered all zeroes — which the spec itself warns is the dangerous failure, because zeroes
+look like a real answer.
+
+The replacement is `statusCategoryChangedDate`, which filters correctly. But the MCP tool
+`jira_search_tickets` maps a fixed set of output keys and **has no key for it** — requesting
+it in `fields` returns nothing, while `created` and `updated` populate normally. So the field
+is filterable but not readable.
+
+`updated` was rejected as a substitute: WOCOO-26104 was created 1 Aug and updated 3 Aug
+because someone commented after it closed, so day-bucketing on `updated` drifts later with no
+way to detect which tickets are affected.
+
+Hence one query per calendar day, with the day carried by the query. The tiles, leaderboard
+and drill-down never needed a timestamp — their window is the query — and making the chart
+day-keyed lets every board window be the union of its days, which restores the cumulative
+caching the original design wanted.
+
+**Volume revised upward.** A measured day (2026-07-30) held 47 tickets, so ~17,000 category
+changes a year — higher than §2's estimate because a day's query also catches old tickets
+being closed (WOCOO-23338 is months old). The Year tab is ~365 requests.
 
 **Worth reporting upstream:** the detached hex chips are a bug in a shared Wealthsimple
 design file. Anyone reading data-viz values off that page today gets greens.
