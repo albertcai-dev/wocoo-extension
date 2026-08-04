@@ -120,7 +120,11 @@ export function setEdgeLabel(tree, uid, label) {
   return out;
 }
 
-function mkNode(kind, uid) {
+// Named newNode rather than mkNode: parse.mjs declares its own mkNode, and the
+// bundler flattens every module into one scope where a duplicate function
+// declaration would silently shadow the other. bundle.mjs now guards against
+// that, but the distinct name keeps the intent obvious.
+function newNode(kind, uid) {
   return {
     kind,
     title: `New ${kind.replace('_', ' ')}`,
@@ -140,7 +144,7 @@ export function addChild(tree, uid) {
   const kind = defaultChildKind(node);
   if (!kind) throw new EditError(`a ${node.kind} cannot have children`);
 
-  const created = mkNode(kind, maxUid(out) + 1);
+  const created = newNode(kind, maxUid(out) + 1);
   node.children.push(created);
   return { tree: out, uid: created.uid };
 }
@@ -151,7 +155,7 @@ export function addSibling(tree, uid) {
   if (!parent) throw new EditError('the root has no siblings');
   if (LEAF_KINDS.has(parent.kind)) throw new EditError(`a ${parent.kind} cannot have children`);
 
-  const created = mkNode(node.kind, maxUid(out) + 1);
+  const created = newNode(node.kind, maxUid(out) + 1);
   created.conjoined = node.conjoined;
   parent.children.splice(index + 1, 0, created);
   return { tree: out, uid: created.uid };
