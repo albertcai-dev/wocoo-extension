@@ -69,7 +69,7 @@ test('an elbow rail clears every box in its own column that it passes', () => {
     const top = Math.min(a.y, b.y);
     const bottom = Math.max(a.y + a.h, b.y + b.h);
     const widest = diagram.boxes
-      .filter((box) => box.col === a.col && box.y < bottom && box.y + box.h > top)
+      .filter((box) => box.band === a.band && box.y < bottom && box.y + box.h > top)
       .reduce((m, box) => Math.max(m, box.x + box.w), 0);
     assert.ok(
       rails.some((r) => r > widest),
@@ -83,22 +83,22 @@ test('an elbow rail never reaches into the next column', () => {
   const byId = new Map(diagram.boxes.map((b) => [b.id, b]));
 
   // Leftmost box x per column, so we know where each next column begins.
-  const colStart = new Map();
+  const bandStart = new Map();
   for (const box of diagram.boxes) {
-    const cur = colStart.get(box.col);
-    if (cur === undefined || box.x < cur) colStart.set(box.col, box.x);
+    const cur = bandStart.get(box.band);
+    if (cur === undefined || box.x < cur) bandStart.set(box.band, box.x);
   }
 
   for (const edge of diagram.edges.filter((e) => e.kind === 'elbow')) {
     const a = byId.get(edge.from);
-    const nextStart = colStart.get(a.col + 1);
+    const nextStart = bandStart.get(a.band + 1);
     if (nextStart === undefined) continue;
     const widest = diagram.boxes
-      .filter((box) => box.col === a.col)
+      .filter((box) => box.band === a.band)
       .reduce((m, box) => Math.max(m, box.x + box.w), 0);
     assert.ok(
       widest + S.box.elbowClearance < nextStart,
-      `rail for column ${a.col} would cross into column ${a.col + 1}`,
+      `rail for column ${a.band} would cross into column ${a.band + 1}`,
     );
   }
 });

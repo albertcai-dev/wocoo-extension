@@ -102,7 +102,7 @@ function railFor(a, b, boxes) {
   for (const box of boxes) {
     // Only boxes in the same column matter. Scanning the whole diagram would
     // push the rail across into the next column.
-    if (box.col !== a.col) continue;
+    if (box.band !== a.band) continue;
     const intersects = box.y < bottom && box.y + box.h > top;
     if (intersects) rail = Math.max(rail, box.x + box.w);
   }
@@ -121,7 +121,7 @@ function edgeSvg(edge, byId, boxes) {
 
   if (edge.kind === 'straight') {
     const x = a.x + 26;
-    const startY = a.anchorY ?? a.y + a.h;
+    const startY = a.anchor ?? a.y + a.h;
     out.push(`<path d="M ${x} ${startY} L ${x} ${b.y}" ${stroke}/>`);
     labelX = x + 8;
     labelY = (startY + b.y) / 2 + 4;

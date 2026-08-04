@@ -47,15 +47,15 @@ function boxFor(node, stepNumber) {
 function pushBox(node, x, y, ctx, stepNumber) {
   const box = boxFor(node, stepNumber);
   const id = `n${++ctx.uid}`;
-  // anchorY is where outgoing straight edges begin. It defaults to the box's
+  // anchor is where outgoing straight edges begin. It defaults to the box's
   // bottom and is pushed below any annotation stack, so an edge never runs
   // through the annotation that explains its own decision.
   //
-  // col scopes elbow routing: a rail only needs to clear boxes in its own
-  // column, and must not reach across into the next one.
+  // band scopes elbow routing: a rail only needs to clear boxes in its own
+  // band, and must not reach across into the next one.
   // nodeUid is the tree node's identity, distinct from `id` which addresses this
   // box for edge endpoints. Box ids shift when the tree changes; uids do not.
-  const placed = { id, ...box, x, y, anchorY: y + box.h, col: ctx.col, nodeUid: node.uid ?? null };
+  const placed = { id, ...box, x, y, anchor: y + box.h, band: ctx.band, nodeUid: node.uid ?? null };
   ctx.boxes.push(placed);
   ctx.byId.set(id, placed);
   return placed;
@@ -115,7 +115,7 @@ function placeSiblings(nodes, x, y, ctx, { parentId = null, mode = 'branch' } = 
       }
       firstEdge = false;
       if (mode === 'chain') prevId = lastMemberId;
-      cursorY = rowBottom + S.gap.vertical;
+      cursorY = rowBottom + S.gap.main;
       i = j;
       continue;
     }
@@ -132,11 +132,11 @@ function placeSiblings(nodes, x, y, ctx, { parentId = null, mode = 'branch' } = 
     firstEdge = false;
     if (mode === 'chain') prevId = r.id;
     right = Math.max(right, r.right);
-    cursorY = r.bottom + S.gap.vertical;
+    cursorY = r.bottom + S.gap.main;
     i++;
   }
 
-  return { bottom: cursorY - S.gap.vertical, right };
+  return { bottom: cursorY - S.gap.main, right };
 }
 
 // Places `node` and its whole subtree with its top-left at (x, y).
@@ -157,9 +157,9 @@ function placeNode(node, x, y, ctx) {
     bottom += ap.h;
     right = Math.max(right, x + ap.w);
   }
-  placed.anchorY = bottom;
+  placed.anchor = bottom;
 
-  const r = placeSiblings(rest, x, bottom + S.gap.vertical, ctx, {
+  const r = placeSiblings(rest, x, bottom + S.gap.main, ctx, {
     parentId: placed.id,
     mode: 'branch',
   });
@@ -180,7 +180,7 @@ export function layout(root) {
     byId: new Map(),
     uid: 0,
     stepCount: 0,
-    col: 0,
+    band: 0,
   };
   const pad = S.page.padding;
 
@@ -198,7 +198,7 @@ export function layout(root) {
     const headerTextWidth = S.box.maxTextWidth + 60;
 
     headers.forEach((h, colIndex) => {
-      ctx.col = colIndex;
+      ctx.band = colIndex;
       const titleLines = wrap(h.title, S.size.header, headerTextWidth, true);
       const subLines = h.subtitle ? wrap(h.subtitle, S.size.headerSub, headerTextWidth) : [];
       const headerH =
@@ -226,10 +226,10 @@ export function layout(root) {
 
       maxRight = Math.max(maxRight, colRight);
       maxBottom = Math.max(maxBottom, r.bottom, headerY + headerH);
-      colX = colRight + S.gap.column;
+      colX = colRight + S.gap.cross;
     });
   } else {
-    const r = placeSiblings(direct, pad, pad + rootPlaced.h + S.gap.vertical, ctx, {
+    const r = placeSiblings(direct, pad, pad + rootPlaced.h + S.gap.main, ctx, {
       parentId: rootPlaced.id,
       mode: 'chain',
     });
@@ -238,7 +238,7 @@ export function layout(root) {
   }
 
   return {
-    width: Math.ceil(maxRight + pad + S.page.rightAllowance),
+    width: Math.ceil(maxRight + pad + S.page.railAllowance),
     height: Math.ceil(maxBottom + pad),
     boxes: ctx.boxes,
     headers: ctx.headers,

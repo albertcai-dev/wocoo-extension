@@ -50,19 +50,22 @@ export const S = {
     elbowClearance: 20,
   },
   gap: {
-    vertical: 34,
+    // main = the direction children flow. cross = the direction siblings and
+    // bands separate. Which physical axis each maps to depends on orientation.
+    main: 34,
     // Wide enough that an elbow rail and its edge label sit clear of the next
-    // column: rail lands at colRight + elbowClearance, label ends ~30px later.
-    column: 76,
+    // band: the rail lands at bandEnd + elbowClearance, label ends ~30px later.
+    cross: 76,
     annotation: 8,
     conjoined: 30,
     headerToFirst: 16,
     rootToHeaders: 52,
   },
-  // rightAllowance leaves room for an elbow rail and its label hanging off the
-  // rightmost column, which layout cannot know about (rails are computed at
-  // render time from the boxes an edge passes).
-  page: { padding: 48, rightAllowance: 60, background: '#FFFFFF' },
+  // railAllowance leaves room for an elbow rail and its label hanging off the
+  // last band, which layout cannot know about — rails are computed at render
+  // time from the boxes an edge passes. Applies to the cross axis: the right
+  // edge when vertical, the bottom edge when horizontal.
+  page: { padding: 48, railAllowance: 60, background: '#FFFFFF' },
 };
 
 // Yes/No edge labels are colour-coded; anything else is neutral grey.
