@@ -12,7 +12,26 @@ node docs/triage-map/render.mjs
 open docs/triage-map/out/index.html
 ```
 
-`out/` is build output and is gitignored. Never edit the SVGs by hand.
+`out/` is build output and is gitignored. Never edit the SVGs by hand. The
+generated `out/index.html` is self-contained (SVGs inlined), so it works opened
+straight from disk with no server.
+
+## Hosted viewer
+
+<https://magic.w10e.com/albert.cai/wocoo-triage-map> — Okta-gated, so it is
+shareable with WS colleagues and readable on a phone.
+
+The hosted copy is **three separate files** (`index.html` plus one `.svg` per
+procedure), not the inlined single file, so re-publishing after adding a tree
+only needs the changed diagram pushed. Republish is a Claude runbook:
+
+> Re-render, then `magic_file_write` the changed `out/<slug>.svg` to site
+> `wocoo-triage-map`. If the procedure list changed, also update the nav buttons
+> and panels in the site's `index.html`.
+
+Verify a push with `magic_file_list` and compare byte sizes against `out/`.
+Do **not** verify with `curl` — unauthenticated requests get a `307` to Okta
+sign-in, so you end up hashing the login page.
 
 ## Sync from the sheet
 
