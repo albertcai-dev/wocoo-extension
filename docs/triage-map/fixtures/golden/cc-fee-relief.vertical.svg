@@ -1,0 +1,113 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1706" height="567" viewBox="0 0 1706 567">
+<title>cc-fee-relief</title>
+<rect width="100%" height="100%" fill="#FFFFFF"/>
+<path d="M 74 294.4 L 74 328.4" stroke="#B5B1A8" stroke-width="1" fill="none"/>
+<text x="82" y="315.4" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="11.5" font-weight="700" fill="#1B7F4B">Yes</text>
+<path d="M 273 208.9 L 325 208.9 L 325 469.9 L 305 469.9" stroke="#B5B1A8" stroke-width="1" fill="none"/>
+<text x="331" y="343.4" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="11.5" font-weight="700" fill="#C0392B">No</text>
+<path d="M 407 313.4 L 407 347.4" stroke="#B5B1A8" stroke-width="1" fill="none"/>
+<text x="415" y="334.4" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="11.5" font-weight="700" fill="#1B7F4B">Yes</text>
+<path d="M 650 218.4 L 670 218.4 L 670 488.9 L 638 488.9" stroke="#B5B1A8" stroke-width="1" fill="none"/>
+<text x="676" y="357.65" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="11.5" font-weight="700" fill="#C0392B">No</text>
+<path d="M 1028 247.4 L 1028 281.4" stroke="#B5B1A8" stroke-width="1" fill="none"/>
+<text x="1036" y="268.4" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="11.5" font-weight="700" fill="#1B7F4B">Yes</text>
+<path d="M 1183 218.4 L 1279 218.4 L 1279 403.9 L 1259 403.9" stroke="#B5B1A8" stroke-width="1" fill="none"/>
+<text x="1285" y="315.15" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="11.5" font-weight="700" fill="#C0392B">No</text>
+<path d="M 1361 313.4 L 1361 347.4" stroke="#B5B1A8" stroke-width="1" fill="none"/>
+<text x="1369" y="334.4" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="11.5" font-weight="700" fill="#1B7F4B">Yes</text>
+<path d="M 1572 218.4 L 1618 218.4 L 1618 469.9 L 1592 469.9" stroke="#B5B1A8" stroke-width="1" fill="none"/>
+<text x="1624" y="348.15" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="11.5" font-weight="700" fill="#C0392B">No</text>
+<text x="48" y="152" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="13" font-weight="700" fill="#1F2421">Annual fee</text>
+<text x="48" y="169.55" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="11" font-weight="600" fill="#7A756C">i2c → Current Statement</text>
+<text x="381" y="152" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="13" font-weight="700" fill="#1F2421">Interest fee</text>
+<text x="381" y="169.55" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="11" font-weight="600" fill="#7A756C">i2c → Recent Activity, paginate Next</text>
+<text x="726" y="152" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="13" font-weight="700" fill="#1F2421">Quebec annual fee</text>
+<text x="726" y="169.55" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="11" font-weight="600" fill="#7A756C">Atlas → province</text>
+<text x="1335" y="152" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="13" font-weight="700" fill="#1F2421">Retention credit</text>
+<text x="1335" y="169.55" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="11" font-weight="600" fill="#7A756C">Retention tracker + &quot;Fee Credit Offer&quot; summary</text>
+<g data-node-uid="1">
+<rect x="48" y="48" width="123" height="39" rx="10" fill="#EDE9E0" stroke="#D8D5CE" stroke-width="1"/>
+<text x="62" y="72" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="14" font-weight="600" fill="#1F2421">CC Fee Relief</text>
+</g>
+<g data-node-uid="3">
+<rect x="48" y="189.4" width="225" height="39" rx="10" fill="#EDE9E0" stroke="#D8D5CE" stroke-width="1"/>
+<text x="62" y="213.4" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="14" font-weight="400" fill="#1F2421">Is the posted fee $20 or $220?</text>
+</g>
+<g data-node-uid="4">
+<rect x="48" y="236.4" width="219" height="58" rx="10" fill="none" stroke="#C9C5BC" stroke-width="1" stroke-dasharray="4 3"/>
+<text x="62" y="257.9" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="11.5" font-weight="400" fill="#7A756C">Match the fee amount on the current</text>
+<text x="62" y="273.42499999999995" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="11.5" font-weight="400" fill="#7A756C">statement</text>
+</g>
+<g data-node-uid="5">
+<rect x="48" y="328.4" width="206" height="78" rx="10" fill="#FFFFFF" stroke="#D8D5CE" stroke-width="1"/>
+<text x="62" y="352.4" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="14" font-weight="600" fill="#1F2421">Run ReverseFeeWorkflow</text>
+<text x="62" y="371.29999999999995" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="14" font-weight="600" fill="#1F2421">(reverse_fee)</text>
+<text x="62" y="394.19999999999993" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="11.5" fill="#7A756C">known annual fee amount</text>
+</g>
+<g data-node-uid="6">
+<rect x="48" y="440.4" width="257" height="59" rx="10" fill="#FFFFFF" stroke="#D8D5CE" stroke-width="1"/>
+<text x="62" y="464.4" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="14" font-weight="600" fill="#1F2421">Escalate to team for further triage</text>
+<text x="62" y="487.29999999999995" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="11.5" fill="#7A756C">unrecognised fee amount</text>
+</g>
+<g data-node-uid="8">
+<rect x="381" y="189.4" width="269" height="58" rx="10" fill="#EDE9E0" stroke="#D8D5CE" stroke-width="1"/>
+<text x="395" y="213.4" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="14" font-weight="400" fill="#1F2421">Is the interest charge found in Recent</text>
+<text x="395" y="232.3" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="14" font-weight="400" fill="#1F2421">Activity?</text>
+</g>
+<g data-node-uid="9">
+<rect x="381" y="255.4" width="253" height="58" rx="10" fill="none" stroke="#C9C5BC" stroke-width="1" stroke-dasharray="4 3"/>
+<text x="395" y="276.9" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="11.5" font-weight="400" fill="#7A756C">If not found, fall back to Current Statement</text>
+<text x="395" y="292.42499999999995" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="11.5" font-weight="400" fill="#7A756C">and re-iterate</text>
+</g>
+<g data-node-uid="10">
+<rect x="381" y="347.4" width="206" height="78" rx="10" fill="#FFFFFF" stroke="#D8D5CE" stroke-width="1"/>
+<text x="395" y="371.4" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="14" font-weight="600" fill="#1F2421">Run ReverseFeeWorkflow</text>
+<text x="395" y="390.29999999999995" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="14" font-weight="600" fill="#1F2421">(reverse_interest_fee)</text>
+<text x="395" y="413.19999999999993" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="11.5" fill="#7A756C">charge located</text>
+</g>
+<g data-node-uid="11">
+<rect x="381" y="459.4" width="257" height="59" rx="10" fill="#FFFFFF" stroke="#D8D5CE" stroke-width="1"/>
+<text x="395" y="483.4" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="14" font-weight="600" fill="#1F2421">Escalate to team for further triage</text>
+<text x="395" y="506.29999999999995" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="11.5" fill="#7A756C">charge not located</text>
+</g>
+<g data-node-uid="13">
+<rect x="726" y="189.4" width="246" height="39" rx="10" fill="#EDE9E0" stroke="#D8D5CE" stroke-width="1"/>
+<text x="740" y="213.4" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="14" font-weight="400" fill="#1F2421">Does the client reside in Quebec?</text>
+</g>
+<g data-node-uid="14">
+<rect x="1002" y="189.4" width="181" height="58" rx="10" fill="#EDE9E0" stroke="#D8D5CE" stroke-width="1"/>
+<text x="1016" y="213.4" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="14" font-weight="400" fill="#1F2421">Is this a cancellation or</text>
+<text x="1016" y="232.3" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="14" font-weight="400" fill="#1F2421">newly-eligible case?</text>
+</g>
+<g data-node-uid="15">
+<rect x="1002" y="281.4" width="218" height="59" rx="10" fill="#FFFFFF" stroke="#D8D5CE" stroke-width="1"/>
+<text x="1016" y="305.4" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="14" font-weight="600" fill="#1F2421">Run QCFeeWaiverWorkflow</text>
+<text x="1016" y="328.29999999999995" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="11.5" fill="#7A756C">QC admin credit + REIMB</text>
+</g>
+<g data-node-uid="16">
+<rect x="1002" y="374.4" width="257" height="59" rx="10" fill="#FFFFFF" stroke="#D8D5CE" stroke-width="1"/>
+<text x="1016" y="398.4" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="14" font-weight="600" fill="#1F2421">Escalate to team for further triage</text>
+<text x="1016" y="421.29999999999995" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="11.5" fill="#7A756C">outside QC waiver policy</text>
+</g>
+<g data-node-uid="18">
+<rect x="1335" y="189.4" width="237" height="58" rx="10" fill="#EDE9E0" stroke="#D8D5CE" stroke-width="1"/>
+<text x="1349" y="213.4" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="14" font-weight="400" fill="#1F2421">Is there a Fee Credit Offer on the</text>
+<text x="1349" y="232.3" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="14" font-weight="400" fill="#1F2421">ticket?</text>
+</g>
+<g data-node-uid="19">
+<rect x="1335" y="255.4" width="254" height="58" rx="10" fill="none" stroke="#C9C5BC" stroke-width="1" stroke-dasharray="4 3"/>
+<text x="1349" y="276.9" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="11.5" font-weight="400" fill="#7A756C">Credit is $20 × months; plural &quot;months&quot; or</text>
+<text x="1349" y="292.42499999999995" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="11.5" font-weight="400" fill="#7A756C">&quot;a/per month&quot; only</text>
+</g>
+<g data-node-uid="20">
+<rect x="1335" y="347.4" width="263" height="59" rx="10" fill="#FFFFFF" stroke="#D8D5CE" stroke-width="1"/>
+<text x="1349" y="371.4" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="14" font-weight="600" fill="#1F2421">Run RetentionFeeWaiverWorkflow</text>
+<text x="1349" y="394.29999999999995" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="11.5" fill="#7A756C">offer confirmed</text>
+</g>
+<g data-node-uid="21">
+<rect x="1335" y="440.4" width="257" height="59" rx="10" fill="#FFFFFF" stroke="#D8D5CE" stroke-width="1"/>
+<text x="1349" y="464.4" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="14" font-weight="600" fill="#1F2421">Escalate to team for further triage</text>
+<text x="1349" y="487.29999999999995" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="11.5" fill="#7A756C">no offer on record</text>
+</g>
+<text x="987" y="222.4" text-anchor="middle" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="12" font-weight="700" fill="#1F2421">AND</text>
+</svg>

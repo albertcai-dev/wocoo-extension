@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="427" height="759" viewBox="0 0 427 759">
+<title>declined-transaction</title>
+<rect width="100%" height="100%" fill="#FFFFFF"/>
+<path d="M 74 228.4 L 74 262.4" stroke="#B5B1A8" stroke-width="1" fill="none"/>
+<path d="M 74 320.4 L 74 354.4" stroke="#B5B1A8" stroke-width="1" fill="none"/>
+<path d="M 74 505.4 L 74 539.4" stroke="#B5B1A8" stroke-width="1" fill="none"/>
+<text x="82" y="526.4" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="11.5" font-weight="700" fill="#1B7F4B">Yes</text>
+<path d="M 273 485.9 L 325 485.9 L 325 680.9 L 305 680.9" stroke="#B5B1A8" stroke-width="1" fill="none"/>
+<text x="331" y="587.4" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="11.5" font-weight="700" fill="#C0392B">No</text>
+<path d="M 74 432.4 L 74 466.4" stroke="#B5B1A8" stroke-width="1" fill="none"/>
+<text x="48" y="152" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="13" font-weight="700" fill="#1F2421">Prepaid Mastercard</text>
+<text x="48" y="169.55" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="11" font-weight="600" fill="#7A756C">CXO-KOHO NSF Declines dashboard, Preset 5871</text>
+<g data-node-uid="1">
+<rect x="48" y="48" width="175" height="39" rx="10" fill="#EDE9E0" stroke="#D8D5CE" stroke-width="1"/>
+<text x="62" y="72" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="14" font-weight="600" fill="#1F2421">Declined Transaction</text>
+</g>
+<g data-node-uid="3">
+<rect x="48" y="189.4" width="206" height="39" rx="10" fill="#FFFFFF" stroke="#D8D5CE" stroke-width="1"/>
+<text x="62" y="213.4" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#7A756C">1.</text>
+<text x="84" y="213.4" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="14" font-weight="400" fill="#1F2421">Input client&apos;s identity ID</text>
+</g>
+<g data-node-uid="4">
+<rect x="48" y="262.4" width="271" height="58" rx="10" fill="#FFFFFF" stroke="#D8D5CE" stroke-width="1"/>
+<text x="62" y="286.4" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#7A756C">2.</text>
+<text x="84" y="286.4" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="14" font-weight="400" fill="#1F2421">Review decline transaction date +</text>
+<text x="84" y="305.29999999999995" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="14" font-weight="400" fill="#1F2421">merchant</text>
+</g>
+<g data-node-uid="5">
+<rect x="48" y="354.4" width="204" height="78" rx="10" fill="#FFFFFF" stroke="#D8D5CE" stroke-width="1"/>
+<text x="62" y="378.4" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#7A756C">3.</text>
+<text x="84" y="378.4" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="14" font-weight="400" fill="#1F2421">Read the FIRST code in</text>
+<text x="84" y="397.29999999999995" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="14" font-weight="400" fill="#1F2421">verified_decline_codes</text>
+<text x="84" y="420.19999999999993" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="11.5" fill="#7A756C">later codes mislead</text>
+</g>
+<g data-node-uid="6">
+<rect x="48" y="466.4" width="225" height="39" rx="10" fill="#EDE9E0" stroke="#D8D5CE" stroke-width="1"/>
+<text x="62" y="490.4" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="14" font-weight="400" fill="#1F2421">Verified decline code present?</text>
+</g>
+<g data-node-uid="7">
+<rect x="48" y="539.4" width="243" height="78" rx="10" fill="#FFFFFF" stroke="#D8D5CE" stroke-width="1"/>
+<text x="62" y="563.4" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="14" font-weight="600" fill="#1F2421">Reply with decline reason from</text>
+<text x="62" y="582.3" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="14" font-weight="600" fill="#1F2421">Guru</text>
+<text x="62" y="605.1999999999999" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="11.5" fill="#7A756C">code is the true reason</text>
+</g>
+<g data-node-uid="8">
+<rect x="48" y="651.4" width="257" height="59" rx="10" fill="#FFFFFF" stroke="#D8D5CE" stroke-width="1"/>
+<text x="62" y="675.4" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="14" font-weight="600" fill="#1F2421">Escalate to team for further triage</text>
+<text x="62" y="698.3" font-family="Inter, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="11.5" fill="#7A756C">no verified code on dashboard</text>
+</g>
+</svg>
