@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { stripModuleSyntax, bundlePure, topLevelNames, assertNoCollisions } from './bundle.mjs';
+import {
+  stripModuleSyntax, bundlePure, bundleGlue, topLevelNames, assertNoCollisions,
+} from './bundle.mjs';
 
 test('stripModuleSyntax drops import lines', () => {
   const out = stripModuleSyntax("import { S } from './style.mjs';\nconst a = 1;\n");
@@ -68,4 +70,18 @@ test('the bundled pipeline renders the same way as the modules do', async () => 
   const actual = api.toSvg(api.layout(api.parseTree(src)), 'P');
 
   assert.equal(actual, expected);
+});
+
+test('the glue bundle carries no module syntax and reaches modules only via TriageMap', () => {
+  const glue = bundleGlue();
+  assert.ok(!/^\s*import\s/m.test(glue), 'no import statements');
+  assert.ok(!/^\s*export\s/m.test(glue), 'no export statements');
+  assert.ok(glue.includes('globalThis.TriageMap'), 'glue must read the namespace');
+});
+
+test('the glue bundle does not redeclare anything the vendor bundle declares', () => {
+  const vendorNames = new Set(topLevelNames(bundlePure()));
+  for (const name of topLevelNames(bundleGlue())) {
+    assert.ok(!vendorNames.has(name), `glue redeclares "${name}" from vendor`);
+  }
 });

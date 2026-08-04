@@ -79,30 +79,38 @@ export function assertNoCollisions() {
   }
 }
 
-function assemble(extra) {
+function iife(body) {
+  return `(function () {\n'use strict';\n${body}\n})();\n`;
+}
+
+// Two output files rather than one. The glue reaches the pure modules only
+// through globalThis.TriageMap, never through lexical scope, so they can ship
+// separately — which keeps a UI tweak to a ~14KB push instead of re-uploading
+// every module, and lets each file's upload be byte-verified on its own.
+export function bundlePure() {
   assertNoCollisions();
   const parts = MODULES.map((name) => `// ---- ${name} ----\n${readModule(name)}`);
   parts.push(`globalThis.TriageMap = { ${EXPOSED.join(', ')} };`);
-  if (extra) parts.push(`// ---- glue ----\n${extra}`);
-  return `(function () {\n'use strict';\n${parts.join('\n')}\n})();\n`;
+  return iife(parts.join('\n'));
 }
 
-export function bundlePure() {
-  return assemble(null);
-}
-
-export function bundleAll() {
+export function bundleGlue() {
   const gluePath = join(here, 'web', 'app.js.in');
-  const glue = existsSync(gluePath) ? readFileSync(gluePath, 'utf8') : null;
-  return assemble(glue);
+  if (!existsSync(gluePath)) return iife('// no glue present');
+  return iife(readFileSync(gluePath, 'utf8'));
 }
 
 function main() {
   const outDir = join(here, 'out', 'web');
   mkdirSync(outDir, { recursive: true });
-  const code = bundleAll();
-  writeFileSync(join(outDir, 'app.js'), code, 'utf8');
-  console.log(`Wrote ${join(outDir, 'app.js')} (${code.length} bytes)`);
+
+  const vendor = bundlePure();
+  writeFileSync(join(outDir, 'vendor.js'), vendor, 'utf8');
+  const glue = bundleGlue();
+  writeFileSync(join(outDir, 'app.js'), glue, 'utf8');
+
+  console.log(`Wrote ${join(outDir, 'vendor.js')} (${Buffer.byteLength(vendor)} bytes)`);
+  console.log(`Wrote ${join(outDir, 'app.js')} (${Buffer.byteLength(glue)} bytes)`);
 }
 
 if (process.argv[1] && process.argv[1].endsWith('bundle.mjs')) main();

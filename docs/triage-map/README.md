@@ -16,22 +16,43 @@ open docs/triage-map/out/index.html
 generated `out/index.html` is self-contained (SVGs inlined), so it works opened
 straight from disk with no server.
 
-## Hosted viewer
+## Hosted editor
 
-<https://magic.w10e.com/albert.cai/wocoo-triage-map> — Okta-gated, so it is
-shareable with WS colleagues and readable on a phone.
+<https://magic.w10e.com/albert.cai/wocoo-triage-map> — Okta-gated. Reads the
+`Trees` tab at runtime and writes edits back, so **content changes never require
+a re-push**; only code changes do.
 
-The hosted copy is **three separate files** (`index.html` plus one `.svg` per
-procedure), not the inlined single file, so re-publishing after adding a tree
-only needs the changed diagram pushed. Republish is a Claude runbook:
+Editing is *structural*: dragging reparents or reorders and layout is always
+re-derived. There is no way to nudge a box for aesthetics — that is the trade for
+never maintaining coordinates. Adjust `style.mjs` gaps instead, which affects
+every diagram at once.
 
-> Re-render, then `magic_file_write` the changed `out/<slug>.svg` to site
-> `wocoo-triage-map`. If the procedure list changed, also update the nav buttons
-> and panels in the site's `index.html`.
+Autosave is debounced 800ms with local undo (⌘Z) and clobber detection: if a tree
+changed in the sheet since load, the site refuses to overwrite and asks.
 
-Verify a push with `magic_file_list` and compare byte sizes against `out/`.
-Do **not** verify with `curl` — unauthenticated requests get a `307` to Okta
-sign-in, so you end up hashing the login page.
+Design: `../superpowers/specs/2026-08-03-triage-map-editor-design.md`
+
+### Republish after a code change
+
+```bash
+node docs/triage-map/bundle.mjs
+```
+
+That writes two files. Upload with `magic_file_write` to site `wocoo-triage-map`:
+
+| local | site path | changes when |
+|---|---|---|
+| `out/web/vendor.js` | `vendor.js` | a pure module changes |
+| `out/web/app.js` | `app.js` | `web/app.js.in` changes — most UI tweaks |
+| `web/index.html` | `index.html` | the shell changes |
+
+The split exists so a UI tweak is a ~16KB push rather than re-uploading every
+module. `vendor.js` must load before `app.js`; the glue reaches the modules only
+through `globalThis.TriageMap`, never lexical scope.
+
+Verify with `magic_file_list` and compare byte sizes against local. Do **not**
+verify with `curl` — unauthenticated requests get a `307` to Okta sign-in, so you
+end up hashing the login page.
 
 ## Sync from the sheet
 
