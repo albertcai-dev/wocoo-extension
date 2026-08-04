@@ -30,7 +30,10 @@
   .bar button:hover { background: #F2F0EB; }
   .bar button[disabled], .bar select[disabled] { opacity: .4; cursor: default; }
   .spacer { flex: 1; }
+  .rule { width: 1px; height: 20px; background: #E5E2DC; }
   #status { font-size: 12px; color: #7A756C; }
+  #zoomLabel { font-size: 12px; color: #7A756C; min-width: 46px; text-align: center; }
+  #scaler { transform-origin: top left; }
   #banner { display: none; margin-bottom: 12px; padding: 10px 12px; border-radius: 8px;
             font-size: 13px; border: 1px solid; }
   #banner.warn { display: block; background: #FDF6E3; border-color: #E4D9B0; color: #6B5A16; }
@@ -75,10 +78,21 @@
     <button id="del">Delete</button>
     <button id="undo">Undo</button>
     <button id="redo">Redo</button>
+    <span class="rule"></span>
+    <select id="orient" title="Orientation">
+      <option value="vertical">Vertical</option>
+      <option value="horizontal">Horizontal</option>
+    </select>
+    <span class="rule"></span>
+    <button id="zoomOut">&minus;</button>
+    <span id="zoomLabel">100%</span>
+    <button id="zoomIn">+</button>
+    <button id="zoomFit">Fit</button>
+    <button id="zoomReset">Actual</button>
     <span class="spacer"></span>
     <span id="status"></span>
   </div>
-  <div class="canvas" id="canvas"><div id="editor">
+  <div class="canvas" id="canvas"><div id="scaler"></div><div id="editor">
     <input id="fTitle" placeholder="title">
     <input id="fSub" placeholder="subtitle (optional)">
     <input id="fLabel" placeholder="edge label (outcomes only)">
