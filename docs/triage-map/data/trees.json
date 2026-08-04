@@ -1,10 +1,6 @@
 [
   {
-    "procedure": "CC Fee Relief",
-    "tree_dsl": "CC Fee Relief\n  # Annual fee | i2c → Current Statement\n    ? Is the posted fee $20 or $220?\n      ~ Match the fee amount on the current statement\n      Yes = Run ReverseFeeWorkflow (reverse_fee) | known annual fee amount\n      No  = Escalate to team for further triage | unrecognised fee amount\n  # Interest fee | i2c → Recent Activity, paginate Next\n    ? Is the interest charge found in Recent Activity?\n      ~ If not found, fall back to Current Statement and re-iterate\n      Yes = Run ReverseFeeWorkflow (reverse_interest_fee) | charge located\n      No  = Escalate to team for further triage | charge not located\n  # Quebec annual fee | Atlas → province\n    ?AND Does the client reside in Quebec?\n    ?AND Is this a cancellation or newly-eligible case?\n      Yes = Run QCFeeWaiverWorkflow | QC admin credit + REIMB\n      No  = Escalate to team for further triage | outside QC waiver policy\n  # Retention credit | Retention tracker + \"Fee Credit Offer\" summary\n    ? Is there a Fee Credit Offer on the ticket?\n      ~ Credit is $20 × months; plural \"months\" or \"a/per month\" only\n      Yes = Run RetentionFeeWaiverWorkflow | offer confirmed\n      No  = Escalate to team for further triage | no offer on record"
-  },
-  {
     "procedure": "Declined Transaction",
-    "tree_dsl": "Declined Transaction\n  # Prepaid Mastercard | CXO-KOHO NSF Declines dashboard, Preset 5871\n    - Input client's identity ID\n    - Review decline transaction date + merchant\n    - Read the FIRST code in verified_decline_codes | later codes mislead\n    ? Verified decline code present?\n      Yes = Reply with decline reason from Guru | code is the true reason\n      No  = Escalate to team for further triage | no verified code on dashboard"
+    "tree_dsl": "Declined Transaction\n  # Prepaid Mastercard | CXO-KOHO NSF Declines dashboard, Preset 5871\n    - Input client's identity ID\n    - Review decline transaction date + merchant\n    - Read the FIRST code in verified_decline_codes | later codes mislead\n    ? Verified decline code present?\n      Yes = Reply with decline reason from Guru | code is the true reason\n      No = Escalate to team for further triage | no verified code on dashboard\n"
   }
 ]
