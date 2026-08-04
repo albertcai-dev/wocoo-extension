@@ -18,7 +18,7 @@ alternative was rejected, the rejection is recorded so it isn't silently revisit
 
 | Decision | Choice | Alternatives rejected |
 |---|---|---|
-| Automation exclusion | By issue type only | Changelog actor check (precise but forces pre-aggregation); label/resolution marker; bot-assignee heuristic |
+| Automation exclusion | **None needed** — the `resolutiondate` filter already drops them (see Findings) | By issue type (chosen during brainstorming, then invalidated by data); changelog actor check; label/resolution marker; bot-assignee heuristic |
 | Data source | Live JQL on every page load | Scheduled aggregation into `MagicStorage.public`; hybrid cached-history + live-today |
 | Fetch structure | Lazy per-tab with cumulative cache | Single year-window fetch on load; count-only queries for tiles |
 | Completion definition | Done and Cancelled counted **separately** | Done only; both merged into one number |
@@ -28,7 +28,8 @@ alternative was rejected, the rejection is recorded so it isn't silently revisit
 | Chart window | Own selector: 30 / 90 / 365, default 90 (sets the initial fetch size) | Fixed 90; follows the period tab |
 | Drill-down | Inline accordion, multiple rows open at once | Right-hand drawer; fixed detail pane below |
 | Default sort | Ranked by count, highest first | Alphabetical with sortable header; configurable |
-| Design system | Patchwork tokens extracted from Figma | Reuse extension's `mint-tokens.css`; Figma tokens + hand-rolled components |
+| Design system | Patchwork tokens — greyscale read from Figma, categorical sampled from screenshots (see Findings) | Reuse extension's `mint-tokens.css`; Figma tokens + hand-rolled components |
+| Year tab performance | Stays live, with a progress indicator | Cache the year rollup in `MagicStorage.public`; drop the Year tab |
 | Build | Tested build (modules + Vitest → concatenated single file) | Strictly single-file, hand-verified |
 
 ### Stated as decisions, not asked
@@ -63,9 +64,14 @@ couldn't already open in Jira.
 ```
 project = WOCOO AND statusCategory = Done
   AND resolutiondate >= -{N}d
-  AND issuetype != "Eligibility Confirmation"
+  AND summary !~ "Eligibility Confirmation Request"
 ORDER BY resolutiondate DESC
 ```
+
+The `summary !~` clause is belt-and-braces, not the mechanism — see Findings. Automation
+tickets already fall out because they carry no `resolutiondate`. The clause exists so that
+if automation ever starts stamping one, roughly five phantom tickets a day don't quietly
+appear on the board.
 
 Fields: `resolutiondate`, `assignee`, `issuetype`, `status`. Paged via
 `POST /rest/api/3/search/jql` with `nextPageToken` — the old `/rest/api/3/search` was
@@ -124,12 +130,15 @@ Nothing above `jiraClient` knows Jira's response shape.
 
 ### Colour
 
-Six series (five roster plus `Other`) needs a categorical palette. The extension's
-`mint-tokens.css` has 43 tokens and no categorical scale, so the palette must come from the
-Patchwork extraction — or, failing that, be derived and explicitly flagged as not from
-Figma. Each person keeps one colour across the chart legend and their leaderboard row.
+Patchwork defines a Data Visualization categorical set of exactly six colours, which covers
+the six series (five roster plus `Other`) without deriving anything. Values are in Findings §3
+— greys authoritative, categorical sampled from a screenshot and flagged as approximate. Each
+person keeps one colour across the chart legend and their leaderboard row.
 
-The `dataviz` skill is to be run before writing chart code, for palette and axis treatment.
+The `dataviz` skill is to be run before writing chart code, for axis treatment and to check
+the sampled palette holds up on contrast and colour-blind safety — six hues is where
+categorical palettes usually start failing, and these came off an image rather than a
+validated scale.
 
 ### Loading
 
@@ -143,12 +152,20 @@ board renders partial results with "showing N of ~M pages" rather than a blank s
   leaderboard is worse than an error.
 - **Wrong exclusion string.** `issuetype != "Eligibility Confirmation"` 400s if that isn't
   the exact registered name. Verified as a prerequisite, not at runtime.
-- **Missing `resolutiondate`.** A Done ticket without one is invisible to the filter. A
-  second query — `project = WOCOO AND statusCategory = Done AND resolutiondate IS EMPTY AND
-  issuetype != "Eligibility Confirmation"`, fetching one field — counts them; if non-zero, a
-  footnote reports the count. Otherwise the dashboard quietly disagrees with Jira. These
-  tickets are never attributed to an assignee or a day, since there's no date to bucket them
-  into; the footnote is the whole treatment.
+- **Missing `resolutiondate`.** A Done ticket without one is invisible to the filter. The
+  footnote query is:
+
+  ```
+  project = WOCOO AND statusCategory = Done AND resolutiondate IS EMPTY
+    AND summary !~ "Eligibility Confirmation Request"
+  ```
+
+  The summary exclusion is **load-bearing here**, unlike in the main query. Without it this
+  would count ~1,800 automation tickets a year and report them to the team as a data
+  discrepancy — the footnote would be permanently, loudly wrong. It should surface only
+  genuine human tickets that somehow reached Done without a resolution date. Those are never
+  attributed to an assignee or a day, since there's no date to bucket them into; the footnote
+  is the whole treatment.
 - **`sessionStorage` quota.** Compact form; on quota error, in-memory only.
 - **`MagicTools` unavailable.** Explicit "can't reach Jira — check VPN and MCP session"
   state with retry. Never render zeroes on failure; zeroes look like a real answer.
@@ -188,22 +205,98 @@ has had subagents paraphrase content.
 **The deployed file is a build artifact.** Editing it directly on Magic will be overwritten
 by the next build. This is the accepted cost of the tested-build approach.
 
-## Prerequisites
+## Findings
 
-All three need MCPLocker, which returned `Session not initialized` on every tool for the
-whole design session — VPN was reconnected and it persisted, so the MCP session itself needs
-re-establishing.
+The three prerequisites were investigated on 2026-08-03. Two of them changed the design.
 
-1. **Confirm the exact issue-type name.** Check WOCOO's registry for `Eligibility
-   Confirmation`. A mismatch 400s the query.
-2. **Measure the year's volume.** `project = WOCOO AND statusCategory = Done AND
-   resolutiondate >= -365d`. This was asked during brainstorming and answered "not sure".
-   The decision rule: under ~10,000 the design stands as written; above that, the year tab
-   will be a progress bar for a minute or more on every visit and the honest fix is caching
-   the year's aggregate — which was explicitly rejected in favour of live. **If the number
-   comes back high, raise it rather than quietly building a slow page.**
-3. **Extract Patchwork tokens** from the Figma node below, emit `tokens.css`, and show the
-   extracted values before building on them.
+### 1. The automation exclusion was built on a false premise — and isn't needed
+
+"Eligibility Confirmation" is **not** an issue type. WOCOO's registry has 37 types and none
+is called that. The tickets are:
+
+- `issue_type: "Other"` — a legitimate work type, distinct from `Cash: Other`,
+  `Credit Card: Other` and `Prepaid Card: Other`
+- `summary: "Eligibility Confirmation Request"`
+- `reporter: workato machine account`
+- created and closed roughly three seconds apart
+- **assigned to roster members** (Albert, Esther and Ishan across a single day's four)
+
+So `issuetype != "Eligibility Confirmation"` would have returned a 400, and the obvious
+repair — excluding `Other` — would have silently dropped real work.
+
+No exclusion is required. **These tickets carry no `resolutiondate`.** Evidence:
+`summary ~ "Eligibility Confirmation Request" AND resolutiondate >= -30d` returns nothing,
+while the same query with `resolutiondate IS EMPTY` returns them. The date filter the design
+already needed does the job.
+
+Filtering by reporter was considered and rejected: `reporter = "workato machine account"`
+returns empty in JQL — the display name doesn't resolve to an account.
+
+### 2. Volume sits right on the threshold; Year stays live by decision
+
+Earliest ticket created in the trailing 365 days is WOCOO-14823; the newest is WOCOO-26133 —
+about **11,300 created per year**. Eligibility confirmations run ~4–6/day (4 in a measured
+24-hour window), so roughly 1,500–2,000 drop out, leaving an estimated **9,500–11,000
+resolved-with-a-date per year, or 95–110 paged requests** for the Year tab.
+
+This tripped the decision rule written into the previous draft. It was raised rather than
+designed around, and the explicit choice was to **keep Year live with a progress indicator**.
+The 90-day initial load is ~25 pages and remains comfortable; Day/7d/30d are instant off it.
+Year is expected to take on the order of a minute, every session, with no caching between
+visits. That is understood and accepted.
+
+### 3. Patchwork tokens: greys are authoritative, categorical is sampled
+
+Figma MCP extraction was blocked — not transiently:
+
+> You've reached the Figma MCP tool call limit for your Collab seat on the Enterprise plan.
+
+Values were instead read from screenshots of the Foundation / Colour and Foundation /
+Colour / Data Visualization pages.
+
+**Authoritative** (chip labels match their swatches):
+
+| Token | Light | Dark |
+|---|---|---|
+| `strong-fg` | `#32302F` | `#F1F0F0` |
+| `soft-fg` | `#615E5C` | `#C9C6C4` |
+| `inactive-fg` | `#94908D` | `#7A7674` |
+| `strong-fg-inverted` | `#F1F0F0` | `#32302F` |
+| `outline` | `#000000` @ 8% | `#FFFFFF` @ 12% |
+| `app-bg` | `#FCFCFC` | `#181716` |
+| `default-bg` | `#FFFFFF` | `#1C1B1B` |
+| `soft-bg` | `#F5F4F4` | `#32302F` |
+| `inactive-bg` | `#F8F8F8` | `#1C1B1B` |
+| `strong-bg` | `#32302F` | `#F1F0F0` |
+| `surface/medium-bg` | `#F5F4F4` | `#222120` |
+| `control/soft-bg` | `#000000` @ 6% | `#FFFFFF` @ 12% |
+
+**Approximate — sampled from a screenshot, NOT from the design system.** The categorical
+row's hex chips in Figma are detached from their swatches: six visibly blue/purple/pink/
+yellow/green/orange swatches are labelled `#E7F6D1 · #D5EAB8 · #B3D088 · #99B56E · #7B9B54 ·
+#5C8145`, which is a single green ramp. The identical three values reappear under the
+Performance row's white/green/red swatches, so it's doc rot, not a misreading. Eyedropped
+values, in palette order:
+
+| Series | Sampled |
+|---|---|
+| categorical 01 | `#6E93E0` |
+| categorical 02 | `#B07FE8` |
+| categorical 03 | `#EE86CE` |
+| categorical 04 | `#EBCB2E` |
+| categorical 05 | `#38934F` |
+| categorical 06 | `#F09340` |
+
+These are visually faithful and numerically wrong in a way no one will catch by looking.
+Replace them with real values whenever the Figma limit clears or someone reads them out of
+Dev Mode — and note that the **variable names** are still unknown, so `tokens.css` will have
+to invent them.
+
+Six swatches for exactly six series (five roster plus `Other`) is a lucky fit. If the roster
+grows past five, the palette is exhausted and someone has to decide what gives.
+
+**Worth reporting upstream:** the detached hex chips are a bug in a shared Wealthsimple
+design file. Anyone reading data-viz values off that page today gets greens.
 
 Figma: `https://www.figma.com/design/FDd6CaSdzwPebuzTexclKm/%F0%9F%9F%A0-Mint-DS-Web-1.0--Patchwork-?node-id=4515-3262`
 
