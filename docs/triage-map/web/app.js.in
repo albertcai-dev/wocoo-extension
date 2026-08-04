@@ -69,8 +69,21 @@ function load() {
       status('');
     })
     .catch(function (e) {
-      banner('err', 'Could not read the sheet: ' + e.message);
+      // MagicTools calls run as the VIEWER, with their own Google OAuth — not the
+      // deployer's. So a 403 here means this person has no access to the sheet,
+      // which is the most common failure for anyone opening a shared link.
+      var denied = /403|permission|forbidden/i.test(e.message || '');
+      banner('err', denied
+        ? 'You do not have access to the triage map sheet. This site reads it as ' +
+          '<em>you</em>, not as its author, so ask Albert to share ' +
+          '<a href="https://docs.google.com/spreadsheets/d/' + SHEET + '/edit">the sheet</a> ' +
+          'with your account, then reload.'
+        : 'Could not read the sheet: ' + e.message);
       status('');
+      // Render the shell so the sidebar does not sit on "loading…" and the
+      // toolbar does not look clickable when nothing is loaded.
+      renderNav();
+      renderCanvas();
     });
 }
 
