@@ -150,8 +150,11 @@ board renders partial results with "showing N of ~M pages" rather than a blank s
 - **Partial fetch.** On mid-pagination failure the cache keeps what it has, flags the range
   incomplete, and the UI shows a retry with rank suppressed. A silently under-counting
   leaderboard is worse than an error.
-- **Wrong exclusion string.** `issuetype != "Eligibility Confirmation"` 400s if that isn't
-  the exact registered name. Verified as a prerequisite, not at runtime.
+- **Automation tickets reappearing.** Exclusion rests on these tickets having no
+  `resolutiondate` (Findings §1), which is a property of how Workato closes them, not a
+  guarantee. If that changes, ~5 phantom tickets a day would land on roster members' counts.
+  The `summary !~` clause is the guard; if the automation's summary text ever changes too,
+  both defences fail silently. Worth re-checking whenever counts look inflated.
 - **Missing `resolutiondate`.** A Done ticket without one is invisible to the filter. The
   footnote query is:
 
