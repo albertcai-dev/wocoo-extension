@@ -131,6 +131,25 @@ test('parses the Declined PPMC fixture as four steps plus one decision', () => {
   assert.equal(root.children[4].children.length, 2);
 });
 
+test('assigns depth-first sequential uids starting at 1', () => {
+  const root = parseTree('P\n  # H\n    ? Q?\n      Yes = Done\n');
+  assert.equal(root.uid, 1);
+  assert.equal(root.children[0].uid, 2);
+  assert.equal(root.children[0].children[0].uid, 3);
+  assert.equal(root.children[0].children[0].children[0].uid, 4);
+});
+
+test('uids are unique across a whole fixture', () => {
+  const root = parseTree(fixture('cc-fee-relief'));
+  const seen = new Set();
+  (function walk(n) {
+    assert.ok(!seen.has(n.uid), `duplicate uid ${n.uid}`);
+    seen.add(n.uid);
+    n.children.forEach(walk);
+  })(root);
+  assert.equal(seen.size, 21);
+});
+
 test('parses steps nested under a branch header', () => {
   const root = parseTree(fixture('declined-transaction'));
   assert.equal(root.children.length, 1);

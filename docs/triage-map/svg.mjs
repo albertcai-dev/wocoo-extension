@@ -65,7 +65,11 @@ function boxSvg(b) {
     }
   }
 
-  return out.join('\n');
+  // Grouping by node uid is what lets the browser editor hit-test a box back to
+  // the tree node it came from.
+  const body = out.join('\n');
+  if (b.nodeUid === null || b.nodeUid === undefined) return body;
+  return `<g data-node-uid="${b.nodeUid}">\n${body}\n</g>`;
 }
 
 function headerSvg(h) {

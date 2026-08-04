@@ -118,3 +118,11 @@ test('emits one path per edge', () => {
   const paths = out.match(/<path /g) || [];
   assert.equal(paths.length, diagram.edges.length);
 });
+
+test('every box is wrapped in a g carrying its node uid', () => {
+  const diagram = diagramFor('declined-ppmc');
+  const out = toSvg(diagram, 'ppmc');
+  const uids = [...out.matchAll(/<g data-node-uid="(\d+)">/g)].map((m) => Number(m[1]));
+  assert.equal(uids.length, diagram.boxes.length);
+  assert.equal(new Set(uids).size, uids.length, 'uids must be unique');
+});

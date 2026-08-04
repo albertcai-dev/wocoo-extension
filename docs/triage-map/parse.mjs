@@ -39,12 +39,21 @@ function splitTitle(raw) {
 }
 
 function mkNode(kind, title, subtitle, edgeLabel, conjoined, line, indent) {
-  return { kind, title, subtitle, edgeLabel, conjoined, indent, line, children: [] };
+  return { kind, title, subtitle, edgeLabel, conjoined, indent, line, uid: 0, children: [] };
 }
 
 function walk(node, fn) {
   fn(node);
   for (const c of node.children) walk(c, fn);
+}
+
+// Stable, deterministic node identity. Assigned after validation so callers can
+// address a node across edits; box ids from layout shift when the tree changes.
+function numberNodes(root) {
+  let n = 0;
+  walk(root, (node) => {
+    node.uid = ++n;
+  });
 }
 
 function outgoing(node) {
@@ -148,5 +157,6 @@ export function parseTree(text) {
 
   validate(root, errors);
   if (errors.length > 0) throw new ParseError(errors);
+  numberNodes(root);
   return root;
 }

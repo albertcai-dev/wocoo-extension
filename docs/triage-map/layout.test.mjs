@@ -122,3 +122,17 @@ test('root-level steps are chained to each other, not all to the root', () => {
   const fromRoot = d.edges.filter((e) => e.from === root.id);
   assert.equal(fromRoot.length, 1, 'root should link only to the first step');
 });
+
+test('each box carries the uid of the node it came from', () => {
+  const tree = load('declined-ppmc');
+  const d = layout(tree);
+  const treeUids = [];
+  (function walk(n) { treeUids.push(n.uid); n.children.forEach(walk); })(tree);
+  const boxUids = d.boxes.map((b) => b.nodeUid);
+  assert.equal(boxUids.length, treeUids.length);
+  for (const uid of boxUids) {
+    assert.equal(typeof uid, 'number', 'every box must carry a numeric uid');
+    assert.ok(uid > 0, 'uids are 1-based');
+  }
+  assert.deepEqual([...boxUids].sort((a, b) => a - b), [...treeUids].sort((a, b) => a - b));
+});

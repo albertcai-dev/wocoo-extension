@@ -53,7 +53,9 @@ function pushBox(node, x, y, ctx, stepNumber) {
   //
   // col scopes elbow routing: a rail only needs to clear boxes in its own
   // column, and must not reach across into the next one.
-  const placed = { id, ...box, x, y, anchorY: y + box.h, col: ctx.col };
+  // nodeUid is the tree node's identity, distinct from `id` which addresses this
+  // box for edge endpoints. Box ids shift when the tree changes; uids do not.
+  const placed = { id, ...box, x, y, anchorY: y + box.h, col: ctx.col, nodeUid: node.uid ?? null };
   ctx.boxes.push(placed);
   ctx.byId.set(id, placed);
   return placed;
