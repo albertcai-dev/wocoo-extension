@@ -92,48 +92,78 @@ function headerSvg(h) {
   return out.join('\n');
 }
 
-// A straight edge drops vertically from a fixed inset on the parent's anchor
-// (below any annotation stack). An elbow leaves the parent's right side, runs
-// down a rail clear of every box it passes, and enters the child's right side.
-function railFor(a, b, boxes) {
-  const top = Math.min(a.y, b.y);
-  const bottom = Math.max(a.y + a.h, b.y + b.h);
-  let rail = Math.max(a.x + a.w, b.x + b.w);
+// A straight edge runs along the MAIN axis from the parent's anchor (past any
+// annotation stack) to the child's near edge, held at a fixed inset on the
+// cross axis. An elbow leaves the parent's far CROSS edge, runs out to a rail
+// clear of every box in its band, travels along MAIN, and enters the child's
+// far cross edge.
+function railFor(a, b, boxes, orientation) {
+  const vertical = orientation !== 'horizontal';
+  const mainStart = vertical ? Math.min(a.y, b.y) : Math.min(a.x, b.x);
+  const mainStop = vertical
+    ? Math.max(a.y + a.h, b.y + b.h)
+    : Math.max(a.x + a.w, b.x + b.w);
+  let rail = vertical
+    ? Math.max(a.x + a.w, b.x + b.w)
+    : Math.max(a.y + a.h, b.y + b.h);
+
   for (const box of boxes) {
-    // Only boxes in the same column matter. Scanning the whole diagram would
-    // push the rail across into the next column.
+    // Only boxes in the same band matter. Scanning the whole diagram would push
+    // the rail across into the next band.
     if (box.band !== a.band) continue;
-    const intersects = box.y < bottom && box.y + box.h > top;
-    if (intersects) rail = Math.max(rail, box.x + box.w);
+    const start = vertical ? box.y : box.x;
+    const stop = vertical ? box.y + box.h : box.x + box.w;
+    if (start < mainStop && stop > mainStart) {
+      rail = Math.max(rail, vertical ? box.x + box.w : box.y + box.h);
+    }
   }
   return rail + S.box.elbowClearance;
 }
 
-function edgeSvg(edge, byId, boxes) {
+function edgeSvg(edge, byId, boxes, orientation) {
   const a = byId.get(edge.from);
   const b = byId.get(edge.to);
   if (!a || !b) return '';
 
+  const vertical = orientation !== 'horizontal';
   const stroke = `stroke="${S.stroke.edge}" stroke-width="1" fill="none"`;
   const out = [];
   let labelX;
   let labelY;
 
   if (edge.kind === 'straight') {
-    const x = a.x + 26;
-    const startY = a.anchor ?? a.y + a.h;
-    out.push(`<path d="M ${x} ${startY} L ${x} ${b.y}" ${stroke}/>`);
-    labelX = x + 8;
-    labelY = (startY + b.y) / 2 + 4;
+    if (vertical) {
+      const x = a.x + 26;
+      const startY = a.anchor ?? a.y + a.h;
+      out.push(`<path d="M ${x} ${startY} L ${x} ${b.y}" ${stroke}/>`);
+      labelX = x + 8;
+      labelY = (startY + b.y) / 2 + 4;
+    } else {
+      const y = a.y + 26;
+      const startX = a.anchor ?? a.x + a.w;
+      out.push(`<path d="M ${startX} ${y} L ${b.x} ${y}" ${stroke}/>`);
+      labelX = (startX + b.x) / 2;
+      labelY = y - 8;
+    }
   } else {
-    const rail = railFor(a, b, boxes);
-    const ay = a.y + a.h / 2;
-    const by = b.y + b.h / 2;
-    out.push(
-      `<path d="M ${a.x + a.w} ${ay} L ${rail} ${ay} L ${rail} ${by} L ${b.x + b.w} ${by}" ${stroke}/>`,
-    );
-    labelX = rail + 6;
-    labelY = (ay + by) / 2 + 4;
+    const rail = railFor(a, b, boxes, orientation);
+    if (vertical) {
+      const ay = a.y + a.h / 2;
+      const by = b.y + b.h / 2;
+      out.push(
+        `<path d="M ${a.x + a.w} ${ay} L ${rail} ${ay} L ${rail} ${by} L ${b.x + b.w} ${by}" ${stroke}/>`,
+      );
+      labelX = rail + 6;
+      labelY = (ay + by) / 2 + 4;
+    } else {
+      const ax = a.x + a.w / 2;
+      const bx = b.x + b.w / 2;
+      out.push(
+        `<path d="M ${ax} ${a.y + a.h} L ${ax} ${rail} L ${bx} ${rail} L ${bx} ${b.y + b.h}" ${stroke}/>`,
+      );
+      labelX = (ax + bx) / 2;
+      labelY = rail + 14;
+    }
   }
 
   if (edge.label) {
@@ -157,7 +187,9 @@ export function toSvg(diagram, title) {
   parts.push(`<title>${esc(title)}</title>`);
   parts.push(`<rect width="100%" height="100%" fill="${S.page.background}"/>`);
 
-  for (const edge of diagram.edges) parts.push(edgeSvg(edge, byId, diagram.boxes));
+  for (const edge of diagram.edges) {
+    parts.push(edgeSvg(edge, byId, diagram.boxes, diagram.orientation));
+  }
   for (const h of diagram.headers) parts.push(headerSvg(h));
   for (const b of diagram.boxes) parts.push(boxSvg(b));
 

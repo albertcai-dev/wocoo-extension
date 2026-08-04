@@ -126,3 +126,65 @@ test('every box is wrapped in a g carrying its node uid', () => {
   assert.equal(uids.length, diagram.boxes.length);
   assert.equal(new Set(uids).size, uids.length, 'uids must be unique');
 });
+
+// ---- horizontal edge geometry ---------------------------------------------
+
+const horizFor = (name) =>
+  layout(parseTree(readFileSync(new URL(`./fixtures/${name}.tree`, import.meta.url), 'utf8')), 'horizontal');
+
+test('a horizontal straight edge runs along x at a fixed y', () => {
+  const d = horizFor('declined-transaction');
+  const out = toSvg(d, 'dt');
+  const straight = [...out.matchAll(/<path d="M ([\d.]+) ([\d.]+) L ([\d.]+) ([\d.]+)"/g)];
+  assert.ok(straight.length > 0, 'expected at least one straight edge');
+  for (const m of straight) {
+    const [, x1, y1, x2, y2] = m.map(Number);
+    assert.equal(y1, y2, 'a horizontal straight edge holds y constant');
+    assert.ok(x2 > x1, 'and advances along x');
+  }
+});
+
+test('a horizontal elbow rail runs along y and clears its band', () => {
+  const d = horizFor('cc-fee-relief');
+  const out = toSvg(d, 'fee');
+  const byId = new Map(d.boxes.map((b) => [b.id, b]));
+  const elbows = d.edges.filter((e) => e.kind === 'elbow');
+  assert.ok(elbows.length > 0, 'fixture should exercise elbow routing');
+
+  const paths = [...out.matchAll(
+    /<path d="M ([\d.]+) ([\d.]+) L ([\d.]+) ([\d.]+) L ([\d.]+) ([\d.]+) L ([\d.]+) ([\d.]+)"/g,
+  )];
+  assert.equal(paths.length, elbows.length);
+  for (const m of paths) {
+    const [, x1, y1, x2, y2, x3, y3] = m.map(Number);
+    assert.equal(x1, x2, 'first leg holds x, moving out in y');
+    assert.ok(y2 > y1, 'and moves away from the box');
+    assert.equal(y2, y3, 'second leg travels along x at the rail');
+  }
+
+  for (const edge of elbows) {
+    const a = byId.get(edge.from);
+    const deepest = d.boxes
+      .filter((b) => b.band === a.band)
+      .reduce((m, b) => Math.max(m, b.y + b.h), 0);
+    assert.ok(
+      d.height >= deepest + S.box.elbowClearance,
+      'diagram must leave room for a rail below the last band',
+    );
+  }
+});
+
+test('horizontal still tags every box with its node uid', () => {
+  const d = horizFor('cc-fee-relief');
+  const out = toSvg(d, 'fee');
+  const uids = [...out.matchAll(/<g data-node-uid="(\d+)">/g)].map((m) => Number(m[1]));
+  assert.equal(uids.length, d.boxes.length);
+  assert.equal(new Set(uids).size, uids.length);
+});
+
+test('horizontal renders the AND label and colours Yes/No the same way', () => {
+  const out = toSvg(horizFor('cc-fee-relief'), 'fee');
+  assert.ok(out.includes('>AND<'));
+  assert.ok(out.includes(S.edgeLabel.yes));
+  assert.ok(out.includes(S.edgeLabel.no));
+});

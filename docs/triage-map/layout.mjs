@@ -147,7 +147,7 @@ function placeSiblings(nodes, main, cross, ctx, { parentId = null, mode = 'branc
       }
       firstEdge = false;
       if (mode === 'chain') prevId = lastMemberId;
-      cursorMain = groupMainEnd + S.gap.main;
+      cursorMain = groupMainEnd + ctx.gapMain;
       i = j;
       continue;
     }
@@ -164,11 +164,11 @@ function placeSiblings(nodes, main, cross, ctx, { parentId = null, mode = 'branc
     firstEdge = false;
     if (mode === 'chain') prevId = r.id;
     crossEnd = Math.max(crossEnd, r.crossEnd);
-    cursorMain = r.mainEnd + S.gap.main;
+    cursorMain = r.mainEnd + ctx.gapMain;
     i++;
   }
 
-  return { mainEnd: cursorMain - S.gap.main, crossEnd };
+  return { mainEnd: cursorMain - ctx.gapMain, crossEnd };
 }
 
 // Places `node` and its whole subtree with its near corner at (main, cross).
@@ -192,7 +192,7 @@ function placeNode(node, main, cross, ctx) {
   }
   placed.anchor = mainEnd;
 
-  const r = placeSiblings(rest, mainEnd + S.gap.main, cross, ctx, {
+  const r = placeSiblings(rest, mainEnd + ctx.gapMain, cross, ctx, {
     parentId: placed.id,
     mode: 'branch',
   });
@@ -220,6 +220,10 @@ export function layout(root, orientation = 'vertical') {
     stepCount: 0,
     band: 0,
     axis,
+    // Resolved once: horizontal needs a wider main gap (edge labels sit inside
+    // the gap) and a tighter cross gap (bands are only as tall as one box).
+    gapMain: orientation === 'horizontal' ? S.gap.mainHorizontal : S.gap.main,
+    gapCross: orientation === 'horizontal' ? S.gap.crossHorizontal : S.gap.cross,
   };
   const pad = S.page.padding;
 
@@ -252,7 +256,13 @@ export function layout(root, orientation = 'vertical') {
 
       // A header sits before its band on the main axis in both modes: above its
       // column when vertical, left of its row when horizontal.
-      const headerMainExtent = orientation === 'vertical' ? textHeight : textWidth;
+      // In horizontal the header's main extent is a measured text width, which
+      // carries the same font-fallback risk as a box: the real face is wider
+      // than these metrics assume. Apply the same safety margin, horizontal
+      // only, so vertical output is untouched.
+      const headerMainExtent = orientation === 'vertical'
+        ? textHeight
+        : Math.ceil(textWidth * S.box.widthSafety);
       const headerCrossExtent = orientation === 'vertical' ? textWidth : textHeight;
 
       const at = axis.toXY(headerMain, bandCross);
@@ -270,10 +280,10 @@ export function layout(root, orientation = 'vertical') {
 
       maxMain = Math.max(maxMain, r.mainEnd, headerMain + headerMainExtent);
       maxCross = Math.max(maxCross, bandCrossEnd);
-      bandCross = bandCrossEnd + S.gap.cross;
+      bandCross = bandCrossEnd + ctx.gapCross;
     });
   } else {
-    const r = placeSiblings(direct, pad + rootPlaced[axis.mainSize] + S.gap.main, pad, ctx, {
+    const r = placeSiblings(direct, pad + rootPlaced[axis.mainSize] + ctx.gapMain, pad, ctx, {
       parentId: rootPlaced.id,
       mode: 'chain',
     });

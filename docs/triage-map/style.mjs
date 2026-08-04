@@ -53,9 +53,16 @@ export const S = {
     // main = the direction children flow. cross = the direction siblings and
     // bands separate. Which physical axis each maps to depends on orientation.
     main: 34,
+    // Horizontal needs a wider main gap: an edge label sits *inside* the gap
+    // along the flow axis, whereas vertically it sits beside the line. 34px left
+    // "Yes" overlapping the box it points at.
+    mainHorizontal: 58,
     // Wide enough that an elbow rail and its edge label sit clear of the next
     // band: the rail lands at bandEnd + elbowClearance, label ends ~30px later.
     cross: 76,
+    // Stacked horizontal bands are only as tall as their tallest box, so a 76px
+    // gap between them is nearly as tall as the content. Tighter reads better.
+    crossHorizontal: 44,
     annotation: 8,
     conjoined: 30,
     headerToFirst: 16,
