@@ -32,3 +32,6 @@ npm-debug.log*
 .claude/
 scratchpad/
 .superpowers/
+
+# triage-map generated diagrams
+docs/triage-map/out/
