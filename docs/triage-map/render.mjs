@@ -24,17 +24,21 @@ export function renderAll(trees) {
   const out = [];
   for (const row of trees) {
     if (!row.tree_dsl || row.tree_dsl.trim() === '') continue;
+    const orientation = row.orientation || 'vertical';
     try {
       out.push({
         slug: slugify(row.procedure),
         procedure: row.procedure,
-        svg: toSvg(layout(parseTree(row.tree_dsl)), row.procedure),
+        orientation,
+        svg: toSvg(layout(parseTree(row.tree_dsl), orientation), row.procedure),
       });
     } catch (err) {
       if (err instanceof ParseError) {
         throw new Error(`Tree for "${row.procedure}" failed to parse:\n${err.message}`);
       }
-      throw err;
+      // Wrap non-parse failures too, so e.g. an invalid orientation names the
+      // offending procedure instead of surfacing a bare "unknown orientation".
+      throw new Error(`Tree for "${row.procedure}" failed to render: ${err.message}`);
     }
   }
   return out;

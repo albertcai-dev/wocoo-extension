@@ -70,3 +70,34 @@ test('indexHtml links back to the sheet as the source of truth', () => {
   const html = indexHtml([{ slug: 'a', procedure: 'A', svg: '<svg width="1" height="1"></svg>' }]);
   assert.ok(html.includes('1Uc8QcM0zA9Dvv0vVnZ-oD3ueESg1D7ZNXXpRRxFRGto'));
 });
+
+// Only the RELATIVE change is guaranteed. Transposing two bands stops them
+// sitting side by side and stacks them instead, so width must fall and height
+// must rise -- but the result need not end up taller than it is wide. Asserting
+// `height > width` outright would be wrong.
+test('renderAll honours a row orientation', () => {
+  const dsl = 'P\n  # A\n    - one\n  # B\n    - two\n';
+  const [v] = renderAll([{ procedure: 'V', tree_dsl: dsl, orientation: 'vertical' }]);
+  const [h] = renderAll([{ procedure: 'H', tree_dsl: dsl, orientation: 'horizontal' }]);
+
+  const dims = (svg) => svg.match(/width="(\d+)" height="(\d+)"/).slice(1).map(Number);
+  const [vw, vh] = dims(v.svg);
+  const [hw, hh] = dims(h.svg);
+  assert.ok(hw < vw, 'stacking the bands narrows the diagram');
+  assert.ok(hh > vh, 'and makes it taller');
+  assert.ok(v.orientation === 'vertical' && h.orientation === 'horizontal');
+});
+
+test('renderAll defaults a missing orientation to vertical', () => {
+  const dsl = 'P\n  # A\n    - one\n  # B\n    - two\n';
+  const [none] = renderAll([{ procedure: 'N', tree_dsl: dsl }]);
+  const [explicit] = renderAll([{ procedure: 'N', tree_dsl: dsl, orientation: 'vertical' }]);
+  assert.equal(none.svg, explicit.svg);
+});
+
+test('renderAll reports the procedure when an orientation is invalid', () => {
+  assert.throws(
+    () => renderAll([{ procedure: 'Bad', tree_dsl: 'P\n  - one\n', orientation: 'sideways' }]),
+    /Bad/,
+  );
+});
