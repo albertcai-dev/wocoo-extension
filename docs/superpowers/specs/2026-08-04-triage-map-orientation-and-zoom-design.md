@@ -15,14 +15,19 @@ Two canvas viewing controls the editor lacks:
 
 ### Why orientation is worth the refactor
 
-Diagram proportions are badly lopsided in one direction only, and which direction depends on the tree's shape:
+Diagram proportions are badly lopsided in one direction only, and which direction depends on the tree's shape. Measured vertical dimensions today:
 
-| procedure | shape | vertical | horizontal (est.) |
-|---|---|---|---|
-| CC Fee Relief | 4 branch headers | 1706w × 567h | ~700w × ~1400h |
-| Declined Transaction | linear checklist | 427w × 759h | ~1100w × ~400h |
+| procedure | shape | vertical (measured) |
+|---|---|---|
+| CC Fee Relief | 4 branch headers | 1706w × 567h |
+| Declined Transaction | linear checklist | 427w × 759h |
 
-Wide diagrams force horizontal scrolling, which is worse than vertical scrolling. So a per-map choice genuinely earns its keep in both directions — this is not symmetry for its own sake.
+What the transpose does to each is **structurally** predictable, though the exact numbers are only known once measured:
+
+- **A linear chain** stacks its nodes along the flow axis, so transposing converts a tall narrow strip into a short wide one. Height must fall and width must rise. This is the dramatic case.
+- **A multi-band tree** stops placing bands side by side and stacks them instead. A band's cross extent becomes its tallest single box rather than the sum of its nodes, so the diagram gets somewhat narrower and somewhat taller — a rebalancing, not a flip. CC Fee Relief is expected to stay landscape, just less extremely so.
+
+Wide diagrams force horizontal scrolling, which is worse than vertical scrolling, so reducing width is the win for multi-band trees. A per-map choice earns its keep in both directions — but only the chain case reverses orientation outright, and tests should assert only the structurally certain claims.
 
 ### Out of scope
 
