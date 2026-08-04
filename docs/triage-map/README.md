@@ -30,7 +30,33 @@ every diagram at once.
 Autosave is debounced 800ms with local undo (⌘Z) and clobber detection: if a tree
 changed in the sheet since load, the site refuses to overwrite and asks.
 
-Design: `../superpowers/specs/2026-08-03-triage-map-editor-design.md`
+The canvas has zoom controls (`−` / `+` / `Fit` / `Actual`), refitting on load,
+procedure change and orientation flip.
+
+### Orientation
+
+Each map is `vertical` (branch headers side by side as columns, children flowing
+down) or `horizontal` (headers stacked as rows, children flowing right), stored
+per map in `Trees` column D and shared with everyone. Blank means vertical.
+Flipping it does **not** stamp `last_reviewed` and is exempt from clobber
+detection, because losing a concurrent view-preference flip is harmless.
+
+**Set expectations honestly: this is a preference toggle, not a space win.**
+Measured on the fixtures:
+
+| | vertical | horizontal |
+|---|---|---|
+| CC Fee Relief (4 bands) | 1706×567 | 1664×631 |
+| Declined Transaction (chain) | 427×759 | 2287×234 |
+
+Boxes are far wider than they are tall — text wraps at 230px while boxes are
+39–78px high — so chaining along x always produces a much larger extent than
+chaining along y. A multi-band tree therefore barely narrows, and a chain turns
+into a very wide, short ribbon. Useful if you want a procedure to read as one
+left-to-right flow; not a fix for a diagram being too wide.
+
+Design: `../superpowers/specs/2026-08-03-triage-map-editor-design.md` and
+`../superpowers/specs/2026-08-04-triage-map-orientation-and-zoom-design.md`
 
 ### Republish after a code change
 
@@ -54,14 +80,21 @@ Verify with `magic_file_list` and compare byte sizes against local. Do **not**
 verify with `curl` — unauthenticated requests get a `307` to Okta sign-in, so you
 end up hashing the login page.
 
+**Prefer `magic_file_write` over `magic_file_edit` here.** On 2026-08-04
+`magic_file_edit` failed four times with a bogus `site_not_found` while
+`magic_file_list` kept working and `magic_file_write` succeeded on the same file.
+Small edits sometimes go through and larger ones do not, with no useful signal in
+the error. Treat `file_edit` as unreliable for this site and push whole files.
+
 ## Sync from the sheet
 
 `render.mjs` reads `data/trees.json`, a committed snapshot of the sheet's
 `Trees` tab. MCPLocker has no Node client, so refreshing is a Claude runbook:
 
-> Read `Trees!A2:B100` from sheet `1Uc8QcM0zA9Dvv0vVnZ-oD3ueESg1D7ZNXXpRRxFRGto`
+> Read `Trees!A2:D100` from sheet `1Uc8QcM0zA9Dvv0vVnZ-oD3ueESg1D7ZNXXpRRxFRGto`
 > and rewrite `docs/triage-map/data/trees.json` as an array of
-> `{ procedure, tree_dsl }`, preserving newlines inside `tree_dsl`.
+> `{ procedure, tree_dsl, orientation }`, preserving newlines inside `tree_dsl`
+> and omitting `orientation` when the cell is blank.
 
 Then re-run the renderer and commit both the snapshot and any style changes.
 
