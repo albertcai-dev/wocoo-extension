@@ -99,6 +99,23 @@ test('sibling steps under a branch header are chained by edges', () => {
   assert.ok(d.edges.some((e) => e.to === decision.id), 'decision should be chained to the last step');
 });
 
+test('a node with annotations anchors its outgoing edges below the annotation', () => {
+  const d = layout(load('cc-fee-relief'));
+  const decision = d.boxes.find((b) => b.kind === 'decision');
+  const annotation = d.boxes.find((b) => b.kind === 'annotation');
+  assert.ok(decision.anchorY > decision.y + decision.h, 'anchor should sit below the box');
+  assert.ok(
+    decision.anchorY >= annotation.y + annotation.h,
+    'anchor should clear the annotation so edges do not cross it',
+  );
+});
+
+test('a node without annotations anchors at its own bottom edge', () => {
+  const d = layout(load('declined-ppmc'));
+  const step = d.boxes.find((b) => b.kind === 'step');
+  assert.equal(step.anchorY, step.y + step.h);
+});
+
 test('root-level steps are chained to each other, not all to the root', () => {
   const d = layout(load('declined-ppmc'));
   const root = d.boxes[0];

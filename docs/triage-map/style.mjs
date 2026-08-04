@@ -43,16 +43,26 @@ export const S = {
     lineHeight: 1.35,
     gapTitleSub: 4,
     stepNumberWidth: 22,
+    // Metrics are approximated for Inter. Viewers without it fall back to a
+    // wider face, so boxes carry a margin rather than clipping their text.
+    widthSafety: 1.05,
+    annotationHeadroom: 6,
+    elbowClearance: 20,
   },
   gap: {
     vertical: 34,
-    column: 56,
+    // Wide enough that an elbow rail and its edge label sit clear of the next
+    // column: rail lands at colRight + elbowClearance, label ends ~30px later.
+    column: 76,
     annotation: 8,
     conjoined: 30,
     headerToFirst: 16,
     rootToHeaders: 52,
   },
-  page: { padding: 48, background: '#FFFFFF' },
+  // rightAllowance leaves room for an elbow rail and its label hanging off the
+  // rightmost column, which layout cannot know about (rails are computed at
+  // render time from the boxes an edge passes).
+  page: { padding: 48, rightAllowance: 60, background: '#FFFFFF' },
 };
 
 // Yes/No edge labels are colour-coded; anything else is neutral grey.

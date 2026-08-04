@@ -26,12 +26,13 @@ function boxFor(node, stepNumber) {
     0,
   ];
   const extra = node.kind === 'step' ? S.box.stepNumberWidth : 0;
-  const w = Math.ceil(Math.max(...widths)) + S.box.padX * 2 + extra;
+  const w = Math.ceil(Math.max(...widths) * S.box.widthSafety) + S.box.padX * 2 + extra;
 
   let h = S.box.padY * 2 + titleLines.length * titleFont * S.box.lineHeight;
   if (subLines.length > 0) {
     h += S.box.gapTitleSub + subLines.length * S.size.subtitle * S.box.lineHeight;
   }
+  if (node.kind === 'annotation') h += S.box.annotationHeadroom;
 
   return {
     kind: node.kind,
@@ -46,7 +47,13 @@ function boxFor(node, stepNumber) {
 function pushBox(node, x, y, ctx, stepNumber) {
   const box = boxFor(node, stepNumber);
   const id = `n${++ctx.uid}`;
-  const placed = { id, ...box, x, y };
+  // anchorY is where outgoing straight edges begin. It defaults to the box's
+  // bottom and is pushed below any annotation stack, so an edge never runs
+  // through the annotation that explains its own decision.
+  //
+  // col scopes elbow routing: a rail only needs to clear boxes in its own
+  // column, and must not reach across into the next one.
+  const placed = { id, ...box, x, y, anchorY: y + box.h, col: ctx.col };
   ctx.boxes.push(placed);
   ctx.byId.set(id, placed);
   return placed;
@@ -148,6 +155,7 @@ function placeNode(node, x, y, ctx) {
     bottom += ap.h;
     right = Math.max(right, x + ap.w);
   }
+  placed.anchorY = bottom;
 
   const r = placeSiblings(rest, x, bottom + S.gap.vertical, ctx, {
     parentId: placed.id,
@@ -170,6 +178,7 @@ export function layout(root) {
     byId: new Map(),
     uid: 0,
     stepCount: 0,
+    col: 0,
   };
   const pad = S.page.padding;
 
@@ -186,7 +195,8 @@ export function layout(root) {
     const headerY = pad + rootPlaced.h + S.gap.rootToHeaders;
     const headerTextWidth = S.box.maxTextWidth + 60;
 
-    for (const h of headers) {
+    headers.forEach((h, colIndex) => {
+      ctx.col = colIndex;
       const titleLines = wrap(h.title, S.size.header, headerTextWidth, true);
       const subLines = h.subtitle ? wrap(h.subtitle, S.size.headerSub, headerTextWidth) : [];
       const headerH =
@@ -215,7 +225,7 @@ export function layout(root) {
       maxRight = Math.max(maxRight, colRight);
       maxBottom = Math.max(maxBottom, r.bottom, headerY + headerH);
       colX = colRight + S.gap.column;
-    }
+    });
   } else {
     const r = placeSiblings(direct, pad, pad + rootPlaced.h + S.gap.vertical, ctx, {
       parentId: rootPlaced.id,
@@ -226,7 +236,7 @@ export function layout(root) {
   }
 
   return {
-    width: Math.ceil(maxRight + pad),
+    width: Math.ceil(maxRight + pad + S.page.rightAllowance),
     height: Math.ceil(maxBottom + pad),
     boxes: ctx.boxes,
     headers: ctx.headers,
