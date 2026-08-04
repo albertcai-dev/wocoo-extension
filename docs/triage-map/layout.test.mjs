@@ -136,3 +136,104 @@ test('each box carries the uid of the node it came from', () => {
   }
   assert.deepEqual([...boxUids].sort((a, b) => a - b), [...treeUids].sort((a, b) => a - b));
 });
+
+// ---- horizontal orientation ------------------------------------------------
+
+test('layout rejects an unknown orientation', () => {
+  assert.throws(() => layout(load('declined-ppmc'), 'diagonal'), /orientation/);
+});
+
+test('orientation is reported on the diagram and defaults to vertical', () => {
+  assert.equal(layout(load('declined-ppmc')).orientation, 'vertical');
+  assert.equal(layout(load('declined-ppmc'), 'horizontal').orientation, 'horizontal');
+});
+
+test('horizontal places branch headers as rows, ordered top to bottom', () => {
+  const d = layout(load('cc-fee-relief'), 'horizontal');
+  assert.equal(d.headers.length, 4);
+  const ys = d.headers.map((h) => h.y);
+  for (let i = 1; i < ys.length; i++) {
+    assert.ok(ys[i] > ys[i - 1], `row ${i} should start below row ${i - 1}`);
+  }
+  // All rows start at the same x, unlike vertical where each column shifts right.
+  assert.equal(new Set(d.headers.map((h) => h.x)).size, 1);
+});
+
+test('horizontal advances children along x within a band', () => {
+  const d = layout(load('declined-transaction'), 'horizontal');
+  const steps = d.boxes.filter((b) => b.kind === 'step');
+  assert.equal(steps.length, 3);
+  for (let i = 1; i < steps.length; i++) {
+    assert.ok(steps[i].x > steps[i - 1].x, 'each step should sit right of the previous');
+  }
+  assert.equal(new Set(steps.map((s) => s.y)).size, 1, 'chained steps share a y');
+});
+
+// Only the chain case reverses orientation outright. A chain stacks its nodes
+// along the flow axis, so transposing must trade height for width. A multi-band
+// tree only rebalances -- a band's cross extent becomes its tallest single box
+// rather than the sum of its nodes -- so it can stay landscape. Asserting
+// `height > width` for cc-fee-relief would be wrong.
+test('transposing a chain trades its height for width', () => {
+  const v = layout(load('declined-ppmc'), 'vertical');
+  const h = layout(load('declined-ppmc'), 'horizontal');
+  assert.ok(v.height > v.width, 'a chain is tall when vertical');
+  assert.ok(h.width > v.width, 'horizontal is wider');
+  assert.ok(h.height < v.height, 'and shorter');
+});
+
+test('transposing a multi-band tree narrows it and makes it relatively taller', () => {
+  const v = layout(load('cc-fee-relief'), 'vertical');
+  const h = layout(load('cc-fee-relief'), 'horizontal');
+  assert.ok(h.width < v.width, 'bands no longer sit side by side, so width falls');
+  assert.ok(h.height > v.height, 'and stacking them adds height');
+  assert.ok(h.width / h.height < v.width / v.height, 'aspect ratio moves toward portrait');
+});
+
+test('no two boxes overlap in either orientation', () => {
+  for (const name of ['cc-fee-relief', 'declined-ppmc', 'declined-transaction']) {
+    for (const orientation of ['vertical', 'horizontal']) {
+      const d = layout(load(name), orientation);
+      for (let i = 0; i < d.boxes.length; i++) {
+        for (let j = i + 1; j < d.boxes.length; j++) {
+          const a = d.boxes[i];
+          const b = d.boxes[j];
+          const disjoint =
+            a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y;
+          assert.ok(disjoint, `${name}/${orientation}: ${a.id} and ${b.id} overlap`);
+        }
+      }
+    }
+  }
+});
+
+test('diagram bounds contain every box in either orientation', () => {
+  for (const name of ['cc-fee-relief', 'declined-transaction']) {
+    for (const orientation of ['vertical', 'horizontal']) {
+      const d = layout(load(name), orientation);
+      for (const b of d.boxes) {
+        assert.ok(b.x >= S.page.padding - 1, `${name}/${orientation}: ${b.id} left of bounds`);
+        assert.ok(b.y >= S.page.padding - 1, `${name}/${orientation}: ${b.id} above bounds`);
+        assert.ok(b.x + b.w <= d.width, `${name}/${orientation}: ${b.id} right of bounds`);
+        assert.ok(b.y + b.h <= d.height, `${name}/${orientation}: ${b.id} below bounds`);
+      }
+    }
+  }
+});
+
+test('horizontal anchors outgoing edges past the annotation, on x', () => {
+  const d = layout(load('cc-fee-relief'), 'horizontal');
+  const decision = d.boxes.find((b) => b.kind === 'decision');
+  const annotation = d.boxes.find((b) => b.kind === 'annotation');
+  assert.ok(decision.anchor > decision.x + decision.w, 'anchor is past the box on x');
+  assert.ok(decision.anchor >= annotation.x + annotation.w, 'anchor clears the annotation');
+});
+
+test('horizontal separates ?AND members on y and still emits one AND label', () => {
+  const d = layout(load('cc-fee-relief'), 'horizontal');
+  assert.equal(d.conjunctions.length, 1);
+  const decisions = d.boxes.filter((b) => b.kind === 'decision');
+  const qcFirst = decisions[2];
+  const sameColumn = decisions.filter((b) => Math.abs(b.x - qcFirst.x) < 1);
+  assert.ok(sameColumn.length >= 2, 'conjoined members share an x when horizontal');
+});

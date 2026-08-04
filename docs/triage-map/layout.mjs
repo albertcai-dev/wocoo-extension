@@ -1,18 +1,36 @@
 // Turns a parsed node tree into absolutely-positioned boxes and edges.
 //
-// Layout model, deliberately simple rather than a general graph layout:
-//   * the root sits at the top left of the content area
-//   * each branch_header starts a new column, left to right
-//   * within a column, nodes stack vertically in source order
-//   * annotations sit flush beneath their parent with no connector
-//   * consecutive ?AND siblings sit side by side, sharing one y
+// The algorithm has two axes:
+//   * MAIN  — the direction children flow
+//   * CROSS — the direction siblings and bands separate
 //
-// Siblings are placed in one of two modes. 'chain' is for sequences that flow
-// into one another (steps under a header, or under the root) — each links to the
-// one before it. 'branch' is for alternatives out of a decision — each links
-// back to the same parent, the first straight and the rest via elbows.
+// Vertical puts main on y and cross on x; horizontal swaps them. Everything is
+// computed in (main, cross) and converted to (x, y) once, in pushBox.
+//
+// Boxes never transpose: a box is sized by its wrapped text in both modes. So
+// the MAIN-axis size is the box height when vertical and its width when
+// horizontal. That asymmetry is the whole mechanism.
+//
+// Within a band, siblings are placed in one of two modes. 'chain' is for
+// sequences that flow into one another (steps under a header, or under the
+// root) — each links to the one before it. 'branch' is for alternatives out of
+// a decision — each links back to the same parent, the first with a straight
+// edge and the rest via elbows.
 import { S } from './style.mjs';
 import { measure, wrap } from './text.mjs';
+
+const AXES = {
+  vertical: {
+    mainSize: 'h',
+    crossSize: 'w',
+    toXY: (main, cross) => ({ x: cross, y: main }),
+  },
+  horizontal: {
+    mainSize: 'w',
+    crossSize: 'h',
+    toXY: (main, cross) => ({ x: main, y: cross }),
+  },
+};
 
 function boxFor(node, stepNumber) {
   const bold = node.kind === 'outcome' || node.kind === 'root';
@@ -44,29 +62,41 @@ function boxFor(node, stepNumber) {
   };
 }
 
-function pushBox(node, x, y, ctx, stepNumber) {
+function pushBox(node, main, cross, ctx, stepNumber) {
   const box = boxFor(node, stepNumber);
   const id = `n${++ctx.uid}`;
-  // anchor is where outgoing straight edges begin. It defaults to the box's
-  // bottom and is pushed below any annotation stack, so an edge never runs
-  // through the annotation that explains its own decision.
+  const { x, y } = ctx.axis.toXY(main, cross);
+  // anchor is where outgoing straight edges begin, on the main axis. It starts
+  // at the far edge of the box and is pushed past any annotation stack, so an
+  // edge never runs through the annotation explaining its own decision.
   //
-  // band scopes elbow routing: a rail only needs to clear boxes in its own
-  // band, and must not reach across into the next one.
+  // band scopes elbow routing: a rail clears only boxes in its own band and
+  // must not reach into the next one.
+  //
   // nodeUid is the tree node's identity, distinct from `id` which addresses this
   // box for edge endpoints. Box ids shift when the tree changes; uids do not.
-  const placed = { id, ...box, x, y, anchor: y + box.h, band: ctx.band, nodeUid: node.uid ?? null };
+  const placed = {
+    id,
+    ...box,
+    x,
+    y,
+    anchor: main + box[ctx.axis.mainSize],
+    band: ctx.band,
+    nodeUid: node.uid ?? null,
+  };
   ctx.boxes.push(placed);
   ctx.byId.set(id, placed);
   return placed;
 }
 
-// Places `nodes` as siblings starting at (x, y). Returns { bottom, right }.
-function placeSiblings(nodes, x, y, ctx, { parentId = null, mode = 'branch' } = {}) {
-  if (nodes.length === 0) return { bottom: y, right: x };
+// Places `nodes` as siblings starting at (main, cross).
+// Returns { mainEnd, crossEnd }.
+function placeSiblings(nodes, main, cross, ctx, { parentId = null, mode = 'branch' } = {}) {
+  if (nodes.length === 0) return { mainEnd: main, crossEnd: cross };
 
-  let cursorY = y;
-  let right = x;
+  const A = ctx.axis;
+  let cursorMain = main;
+  let crossEnd = cross;
   let prevId = parentId;
   let firstEdge = true;
   let i = 0;
@@ -75,34 +105,36 @@ function placeSiblings(nodes, x, y, ctx, { parentId = null, mode = 'branch' } = 
     const node = nodes[i];
 
     if (node.conjoined) {
-      // Consecutive ?AND siblings share a row. The group's outcomes hang off its
-      // last member, so a chain continues from that member.
+      // Consecutive ?AND siblings share a main position and separate on cross.
+      // The group's outcomes hang off its last member, so a chain continues
+      // from that member.
       let j = i;
       while (j < nodes.length && nodes[j].conjoined) j++;
       const group = nodes.slice(i, j);
 
-      const rowY = cursorY;
-      let cursorX = x;
-      let rowBottom = rowY;
+      const groupMain = cursorMain;
+      let cursorCross = cross;
+      let groupMainEnd = groupMain;
       let firstMemberId = null;
       let lastMemberId = null;
 
       group.forEach((member, gi) => {
-        const r = placeNode(member, cursorX, rowY, ctx);
+        const r = placeNode(member, groupMain, cursorCross, ctx);
         const placed = ctx.byId.get(r.id);
         if (gi === 0) {
           firstMemberId = r.id;
         } else {
-          ctx.conjunctions.push({
-            x: cursorX - S.gap.conjoined / 2,
-            y: rowY + placed.h / 2 + 4,
-            text: 'AND',
-          });
+          const at = A.toXY(
+            groupMain + placed[A.mainSize] / 2,
+            cursorCross - S.gap.conjoined / 2,
+          );
+          // The +4 is a text-baseline nudge, so it always applies to y.
+          ctx.conjunctions.push({ x: at.x, y: at.y + 4, text: 'AND' });
         }
         lastMemberId = r.id;
-        rowBottom = Math.max(rowBottom, r.bottom);
-        right = Math.max(right, r.right);
-        cursorX = placed.x + placed.w + S.gap.conjoined;
+        groupMainEnd = Math.max(groupMainEnd, r.mainEnd);
+        crossEnd = Math.max(crossEnd, r.crossEnd);
+        cursorCross += placed[A.crossSize] + S.gap.conjoined;
       });
 
       if (prevId) {
@@ -115,12 +147,12 @@ function placeSiblings(nodes, x, y, ctx, { parentId = null, mode = 'branch' } = 
       }
       firstEdge = false;
       if (mode === 'chain') prevId = lastMemberId;
-      cursorY = rowBottom + S.gap.main;
+      cursorMain = groupMainEnd + S.gap.main;
       i = j;
       continue;
     }
 
-    const r = placeNode(node, x, cursorY, ctx);
+    const r = placeNode(node, cursorMain, cross, ctx);
     if (prevId) {
       ctx.edges.push({
         from: prevId,
@@ -131,47 +163,53 @@ function placeSiblings(nodes, x, y, ctx, { parentId = null, mode = 'branch' } = 
     }
     firstEdge = false;
     if (mode === 'chain') prevId = r.id;
-    right = Math.max(right, r.right);
-    cursorY = r.bottom + S.gap.main;
+    crossEnd = Math.max(crossEnd, r.crossEnd);
+    cursorMain = r.mainEnd + S.gap.main;
     i++;
   }
 
-  return { bottom: cursorY - S.gap.main, right };
+  return { mainEnd: cursorMain - S.gap.main, crossEnd };
 }
 
-// Places `node` and its whole subtree with its top-left at (x, y).
-// Returns { id, bottom, right }.
-function placeNode(node, x, y, ctx) {
+// Places `node` and its whole subtree with its near corner at (main, cross).
+// Returns { id, mainEnd, crossEnd }.
+function placeNode(node, main, cross, ctx) {
+  const A = ctx.axis;
   const number = node.kind === 'step' ? ++ctx.stepCount : null;
-  const placed = pushBox(node, x, y, ctx, number);
+  const placed = pushBox(node, main, cross, ctx, number);
 
-  let bottom = y + placed.h;
-  let right = x + placed.w;
+  let mainEnd = main + placed[A.mainSize];
+  let crossEnd = cross + placed[A.crossSize];
 
   const annotations = node.children.filter((c) => c.kind === 'annotation');
   const rest = node.children.filter((c) => c.kind !== 'annotation');
 
   for (const a of annotations) {
-    bottom += S.gap.annotation;
-    const ap = pushBox(a, x, bottom, ctx, null);
-    bottom += ap.h;
-    right = Math.max(right, x + ap.w);
+    mainEnd += S.gap.annotation;
+    const ap = pushBox(a, mainEnd, cross, ctx, null);
+    mainEnd += ap[A.mainSize];
+    crossEnd = Math.max(crossEnd, cross + ap[A.crossSize]);
   }
-  placed.anchor = bottom;
+  placed.anchor = mainEnd;
 
-  const r = placeSiblings(rest, x, bottom + S.gap.main, ctx, {
+  const r = placeSiblings(rest, mainEnd + S.gap.main, cross, ctx, {
     parentId: placed.id,
     mode: 'branch',
   });
   if (rest.length > 0) {
-    bottom = r.bottom;
-    right = Math.max(right, r.right);
+    mainEnd = r.mainEnd;
+    crossEnd = Math.max(crossEnd, r.crossEnd);
   }
 
-  return { id: placed.id, bottom, right };
+  return { id: placed.id, mainEnd, crossEnd };
 }
 
-export function layout(root) {
+export function layout(root, orientation = 'vertical') {
+  const axis = AXES[orientation];
+  if (!axis) {
+    throw new Error(`unknown orientation "${orientation}" — expected vertical or horizontal`);
+  }
+
   const ctx = {
     boxes: [],
     headers: [],
@@ -181,6 +219,7 @@ export function layout(root) {
     uid: 0,
     stepCount: 0,
     band: 0,
+    axis,
   };
   const pad = S.page.padding;
 
@@ -189,57 +228,70 @@ export function layout(root) {
   const headers = root.children.filter((c) => c.kind === 'branch_header');
   const direct = root.children.filter((c) => c.kind !== 'branch_header');
 
-  let maxRight = pad + rootPlaced.w;
-  let maxBottom = pad + rootPlaced.h;
+  let maxMain = pad + rootPlaced[axis.mainSize];
+  let maxCross = pad + rootPlaced[axis.crossSize];
 
   if (headers.length > 0) {
-    let colX = pad;
-    const headerY = pad + rootPlaced.h + S.gap.rootToHeaders;
+    let bandCross = pad;
+    const headerMain = pad + rootPlaced[axis.mainSize] + S.gap.rootToHeaders;
     const headerTextWidth = S.box.maxTextWidth + 60;
 
-    headers.forEach((h, colIndex) => {
-      ctx.band = colIndex;
+    headers.forEach((h, bandIndex) => {
+      ctx.band = bandIndex;
       const titleLines = wrap(h.title, S.size.header, headerTextWidth, true);
       const subLines = h.subtitle ? wrap(h.subtitle, S.size.headerSub, headerTextWidth) : [];
-      const headerH =
+
+      const textHeight =
         titleLines.length * S.size.header * S.box.lineHeight +
         (subLines.length > 0 ? 2 + subLines.length * S.size.headerSub * S.box.lineHeight : 0);
+      const textWidth = Math.ceil(Math.max(
+        ...titleLines.map((l) => measure(l, S.size.header, true)),
+        ...subLines.map((l) => measure(l, S.size.headerSub)),
+        0,
+      ));
 
-      ctx.headers.push({ x: colX, y: headerY, titleLines, subLines });
+      // A header sits before its band on the main axis in both modes: above its
+      // column when vertical, left of its row when horizontal.
+      const headerMainExtent = orientation === 'vertical' ? textHeight : textWidth;
+      const headerCrossExtent = orientation === 'vertical' ? textWidth : textHeight;
+
+      const at = axis.toXY(headerMain, bandCross);
+      ctx.headers.push({ x: at.x, y: at.y, titleLines, subLines });
 
       const r = placeSiblings(
         h.children,
-        colX,
-        headerY + headerH + S.gap.headerToFirst,
+        headerMain + headerMainExtent + S.gap.headerToFirst,
+        bandCross,
         ctx,
         { parentId: null, mode: 'chain' },
       );
 
-      const titleRight =
-        colX +
-        Math.ceil(Math.max(
-          ...titleLines.map((l) => measure(l, S.size.header, true)),
-          ...subLines.map((l) => measure(l, S.size.headerSub)),
-          0,
-        ));
-      const colRight = Math.max(r.right, titleRight);
+      const bandCrossEnd = Math.max(r.crossEnd, bandCross + headerCrossExtent);
 
-      maxRight = Math.max(maxRight, colRight);
-      maxBottom = Math.max(maxBottom, r.bottom, headerY + headerH);
-      colX = colRight + S.gap.cross;
+      maxMain = Math.max(maxMain, r.mainEnd, headerMain + headerMainExtent);
+      maxCross = Math.max(maxCross, bandCrossEnd);
+      bandCross = bandCrossEnd + S.gap.cross;
     });
   } else {
-    const r = placeSiblings(direct, pad, pad + rootPlaced.h + S.gap.main, ctx, {
+    const r = placeSiblings(direct, pad + rootPlaced[axis.mainSize] + S.gap.main, pad, ctx, {
       parentId: rootPlaced.id,
       mode: 'chain',
     });
-    maxRight = Math.max(maxRight, r.right);
-    maxBottom = Math.max(maxBottom, r.bottom);
+    maxMain = Math.max(maxMain, r.mainEnd);
+    maxCross = Math.max(maxCross, r.crossEnd);
   }
 
+  // railAllowance goes on the cross axis, where an elbow rail hangs off the
+  // last band: the right edge when vertical, the bottom edge when horizontal.
+  const size = axis.toXY(
+    Math.ceil(maxMain + pad),
+    Math.ceil(maxCross + pad + S.page.railAllowance),
+  );
+
   return {
-    width: Math.ceil(maxRight + pad + S.page.railAllowance),
-    height: Math.ceil(maxBottom + pad),
+    width: size.x,
+    height: size.y,
+    orientation,
     boxes: ctx.boxes,
     headers: ctx.headers,
     edges: ctx.edges,
