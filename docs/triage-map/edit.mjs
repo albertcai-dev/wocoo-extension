@@ -51,6 +51,29 @@ export function defaultChildKind(parent) {
   }
 }
 
+const DIRECTIONS = new Set(['up', 'down', 'left', 'right']);
+
+// A read operation, like locate. Returns null rather than wrapping: wrapping is
+// disorienting when the whole tree is not on screen.
+export function navigate(tree, uid, direction) {
+  if (!DIRECTIONS.has(direction)) {
+    throw new EditError(`unknown direction "${direction}"`);
+  }
+  const found = locate(tree, uid);
+  if (!found) return null;
+
+  if (direction === 'left') return found.parent ? found.parent.uid : null;
+  if (direction === 'right') {
+    return found.node.children.length > 0 ? found.node.children[0].uid : null;
+  }
+  if (!found.parent) return null;
+
+  const siblings = found.parent.children;
+  const at = direction === 'up' ? found.index - 1 : found.index + 1;
+  if (at < 0 || at >= siblings.length) return null;
+  return siblings[at].uid;
+}
+
 function clone(tree) {
   return structuredClone(tree);
 }
@@ -197,4 +220,50 @@ export function reparent(tree, uid, newParentUid) {
 
 export function reorderSibling(tree, uid, newParentUid, index) {
   return moveNode(tree, uid, newParentUid, index);
+}
+
+// Inserts a parsed outline as a subtree under `uid`, in ONE operation, so a
+// pasted twelve-line procedure is a single undo step.
+//
+// A pasted line containing "|" would be re-read as a subtitle and corrupt the
+// tree, so the first pipe splits title from subtitle exactly as the DSL does.
+// Nothing else needs escaping: these are single-line titles on step nodes,
+// whose "-" sigil is consumed first, so even a title beginning "?" round-trips.
+export function insertOutline(tree, uid, items) {
+  const out = clone(tree);
+  const { node } = require_(out, uid);
+  if (LEAF_KINDS.has(node.kind)) {
+    throw new EditError(`a ${node.kind} cannot have children`);
+  }
+  if (!items || items.length === 0) return { tree: out, firstUid: null };
+
+  let nextUid = maxUid(out) + 1;
+  // parents[d] is the node a row at depth d attaches to.
+  const parents = [node];
+  let firstUid = null;
+
+  for (const item of items) {
+    const depth = Math.max(0, Math.min(item.depth, parents.length - 1));
+    const parent = parents[depth];
+
+    const created = newNode('step', nextUid++);
+    const raw = String(item.text);
+    const pipe = raw.indexOf('|');
+    if (pipe === -1) {
+      created.title = raw.trim();
+    } else {
+      created.title = raw.slice(0, pipe).trim();
+      const sub = raw.slice(pipe + 1).trim();
+      created.subtitle = sub === '' ? null : sub;
+    }
+    if (created.title === '') created.title = 'Step';
+
+    parent.children.push(created);
+    if (firstUid === null) firstUid = created.uid;
+
+    parents[depth + 1] = created;
+    parents.length = depth + 2;
+  }
+
+  return { tree: out, firstUid };
 }

@@ -6,6 +6,7 @@ import {
   EditError, locate, maxUid, defaultChildKind,
   setText, setKind, setEdgeLabel,
   addChild, addSibling, deleteNode, reparent, reorderSibling,
+  insertOutline, navigate,
 } from './edit.mjs';
 
 const tree = () => parseTree([
@@ -211,4 +212,108 @@ test('completing a ?AND pair requires moving outcomes onto the last member', () 
   out = reparent(out, 5, added.uid);
   out = reparent(out, 6, added.uid);
   assert.doesNotThrow(() => parseTree(serialize(out)));
+});
+
+// ---- insertOutline ---------------------------------------------------------
+
+test('insertOutline appends a flat list as children', () => {
+  const { tree: out, firstUid } = insertOutline(tree(), 2, [
+    { depth: 0, text: 'One' },
+    { depth: 0, text: 'Two' },
+  ]);
+  const alpha = locate(out, 2).node;
+  assert.deepEqual(alpha.children.slice(-2).map((c) => c.title), ['One', 'Two']);
+  assert.equal(alpha.children[alpha.children.length - 2].uid, firstUid);
+});
+
+test('insertOutline nests by depth', () => {
+  const { tree: out } = insertOutline(tree(), 7, [
+    { depth: 0, text: 'A' },
+    { depth: 1, text: 'B' },
+    { depth: 2, text: 'C' },
+    { depth: 1, text: 'D' },
+    { depth: 0, text: 'E' },
+  ]);
+  const beta = locate(out, 7).node;
+  const a = beta.children.find((c) => c.title === 'A');
+  assert.equal(a.children.map((c) => c.title).join(','), 'B,D');
+  assert.equal(a.children[0].children[0].title, 'C');
+  assert.ok(beta.children.some((c) => c.title === 'E'));
+});
+
+test('insertOutline creates steps and does not mutate its input', () => {
+  const t = tree();
+  const before = serialize(t);
+  const { tree: out } = insertOutline(t, 7, [{ depth: 0, text: 'X' }]);
+  assert.equal(serialize(t), before);
+  assert.equal(locate(out, 7).node.children.find((c) => c.title === 'X').kind, 'step');
+});
+
+test('insertOutline splits a pasted pipe into title and subtitle', () => {
+  const { tree: out } = insertOutline(tree(), 7, [
+    { depth: 0, text: 'Open dashboard | Preset 5871' },
+  ]);
+  const node = locate(out, 7).node.children.find((c) => c.title === 'Open dashboard');
+  assert.equal(node.subtitle, 'Preset 5871');
+});
+
+test('insertOutline output round-trips through the parser', () => {
+  const { tree: out } = insertOutline(tree(), 7, [
+    { depth: 0, text: '? looks like a sigil' },
+    { depth: 0, text: 'has | a pipe' },
+    { depth: 1, text: '= also sigil shaped' },
+  ]);
+  assert.doesNotThrow(() => parseTree(serialize(out)));
+});
+
+test('insertOutline assigns fresh, unique uids', () => {
+  const { tree: out } = insertOutline(tree(), 7, [
+    { depth: 0, text: 'A' },
+    { depth: 1, text: 'B' },
+  ]);
+  const seen = new Set();
+  (function w(n) { assert.ok(!seen.has(n.uid)); seen.add(n.uid); n.children.forEach(w); })(out);
+});
+
+test('insertOutline is refused on a leaf kind', () => {
+  assert.throws(() => insertOutline(tree(), 5, [{ depth: 0, text: 'X' }]), EditError);
+  assert.throws(() => insertOutline(tree(), 4, [{ depth: 0, text: 'X' }]), EditError);
+});
+
+test('insertOutline with no items is a no-op returning a null firstUid', () => {
+  const t = tree();
+  const { tree: out, firstUid } = insertOutline(t, 7, []);
+  assert.equal(firstUid, null);
+  assert.equal(serialize(out), serialize(t));
+});
+
+// ---- navigate --------------------------------------------------------------
+
+test('navigate moves between siblings without wrapping', () => {
+  const t = tree();
+  assert.equal(navigate(t, 5, 'down'), 6);
+  assert.equal(navigate(t, 6, 'up'), 5);
+  // Annotations are ordinary entries in children, so navigation walks through
+  // them: uid 4 is the annotation sitting before the first outcome.
+  assert.equal(navigate(t, 5, 'up'), 4);
+  assert.equal(navigate(t, 4, 'up'), null, 'no wrap at the start');
+  assert.equal(navigate(t, 6, 'down'), null, 'no wrap at the end');
+});
+
+test('navigate left goes to the parent and right to the first child', () => {
+  const t = tree();
+  assert.equal(navigate(t, 3, 'left'), 2);
+  assert.equal(navigate(t, 2, 'right'), 3);
+});
+
+test('navigate returns null at the root and at a leaf', () => {
+  const t = tree();
+  assert.equal(navigate(t, 1, 'left'), null);
+  assert.equal(navigate(t, 1, 'up'), null);
+  assert.equal(navigate(t, 5, 'right'), null);
+});
+
+test('navigate returns null for an unknown uid and throws on a bad direction', () => {
+  assert.equal(navigate(tree(), 999, 'up'), null);
+  assert.throws(() => navigate(tree(), 3, 'sideways'), EditError);
 });
