@@ -30,8 +30,10 @@ every diagram at once.
 Autosave is debounced 800ms with local undo (⌘Z) and clobber detection: if a tree
 changed in the sheet since load, the site refuses to overwrite and asks.
 
-The canvas has zoom controls (`−` / `+` / `Fit` / `Actual`), refitting on load,
-procedure change and orientation flip.
+The canvas has zoom controls (`−` / `+` / `Fit` / `Actual`). **Zoom starts at
+Actual and never changes on its own** — auto-fitting magnified a small map to the
+4× clamp, since a single root box is only ~230px wide against a ~1000px pane.
+`Fit` is still there when a wide map needs it.
 
 ### Authoring by keyboard
 

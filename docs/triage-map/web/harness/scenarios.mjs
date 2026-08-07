@@ -76,6 +76,17 @@ export const SCENARIOS = [
     ],
   },
   {
+    // Regression guard: auto-fitting used to magnify a single-box map to the
+    // 4x clamp on load. Zoom now starts at Actual and never moves by itself.
+    name: 'zoom starts at Actual, not Fit',
+    rows: SHEET_ROWS_ROOT_ONLY,
+    drive: `
+      await ready();
+      probe('zoom ' + document.getElementById('zoomLabel').textContent);
+    `,
+    expect: ['zoom 100%'],
+  },
+  {
     name: 'the fast editor tracks zoom',
     rows: SHEET_ROWS_ROOT_ONLY,
     drive: `

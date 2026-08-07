@@ -13,6 +13,9 @@ var state = {
   undo: {},        // rowNumber -> { stack: [dsl], pos }
   timers: {},      // rowNumber -> timeout id
   readOnly: false,
+  // Zoom starts at Actual and is never changed automatically. Auto-fitting
+  // magnified a small map -- a single root box is ~230px wide -- to the 4x
+  // clamp. Fit stays available as a button.
   zoom: 1,
 };
 
@@ -69,7 +72,6 @@ function load() {
       state.selected = defaultSelection(current());
       renderNav();
       renderCanvas();
-      fitWidth();
       status('');
     })
     .catch(function (e) {
@@ -127,7 +129,6 @@ function renderNav() {
       state.selected = defaultSelection(state.rows[i]);
       renderNav();
       renderCanvas();
-      fitWidth();
     };
     nav.appendChild(b);
   });
@@ -625,7 +626,6 @@ function setOrientation(value) {
   if (row.orientation === value) return;
   row.orientation = value;
   renderCanvas();
-  fitWidth();
   status('saving…');
   mcp('google_sheets_batch_update_values', {
     spreadsheet_id: SHEET,
@@ -673,7 +673,8 @@ el('zoomIn').onclick = function () { setZoom(state.zoom * 1.25); };
 el('zoomOut').onclick = function () { setZoom(state.zoom / 1.25); };
 el('zoomFit').onclick = fitWidth;
 el('zoomReset').onclick = function () { setZoom(1); };
-window.addEventListener('resize', fitWidth);
+// No resize listener: auto-fitting on resize would re-magnify a small map to
+// the 4x clamp. Zoom only ever changes when you ask it to.
 
 // ---- paste an outline ------------------------------------------------------
 document.addEventListener('paste', function (ev) {
