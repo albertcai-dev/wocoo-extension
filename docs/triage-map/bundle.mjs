@@ -14,6 +14,7 @@ const MODULES = [
   'text.mjs',
   'parse.mjs',
   'serialize.mjs',
+  'outline.mjs',
   'layout.mjs',
   'svg.mjs',
   'edit.mjs',
@@ -29,6 +30,7 @@ const EXPOSED = [
   'EditError', 'locate', 'maxUid', 'defaultChildKind',
   'setText', 'setKind', 'setEdgeLabel',
   'addChild', 'addSibling', 'deleteNode', 'moveNode', 'reparent', 'reorderSibling',
+  'parseOutline', 'insertOutline', 'navigate',
 ];
 
 export function stripModuleSyntax(source) {

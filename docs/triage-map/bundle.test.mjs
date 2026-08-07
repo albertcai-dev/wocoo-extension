@@ -85,3 +85,20 @@ test('the glue bundle does not redeclare anything the vendor bundle declares', (
     assert.ok(!vendorNames.has(name), `glue redeclares "${name}" from vendor`);
   }
 });
+
+test('the pure bundle exposes the fast-authoring functions', () => {
+  const globals = {};
+  new Function('globalThis', bundlePure()).call(globals, globals);
+  const api = globals.TriageMap;
+  assert.equal(typeof api.parseOutline, 'function');
+  assert.equal(typeof api.insertOutline, 'function');
+  assert.equal(typeof api.navigate, 'function');
+});
+
+test('the bundled outline pipeline matches the modules', async () => {
+  const [{ parseOutline }] = await Promise.all([import('./outline.mjs')]);
+  const src = '1. One\n   - Sub\n2. Two\n';
+  const globals = {};
+  new Function('globalThis', bundlePure()).call(globals, globals);
+  assert.deepEqual(globals.TriageMap.parseOutline(src), parseOutline(src));
+});
