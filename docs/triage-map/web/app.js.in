@@ -66,6 +66,7 @@ function load() {
         state.rows.push(entry);
       });
       state.active = state.rows.length ? 0 : -1;
+      state.selected = defaultSelection(current());
       renderNav();
       renderCanvas();
       fitWidth();
@@ -88,6 +89,13 @@ function load() {
       renderNav();
       renderCanvas();
     });
+}
+
+// A freshly created procedure is a single root box. With nothing selected every
+// node control is greyed out and nothing hints that clicking that one box
+// unlocks them, so select the root whenever a procedure is opened.
+function defaultSelection(row) {
+  return row && row.tree ? row.tree.uid : null;
 }
 
 // ---- sidebar --------------------------------------------------------------
@@ -116,7 +124,7 @@ function renderNav() {
     }
     b.onclick = function () {
       state.active = i;
-      state.selected = null;
+      state.selected = defaultSelection(state.rows[i]);
       renderNav();
       renderCanvas();
       fitWidth();
@@ -222,8 +230,12 @@ function validateCurrent() {
 function syncToolbar() {
   var row = current();
   var has = !!(row && row.tree && state.selected);
-  ['kind', 'addChild', 'addSib', 'del'].forEach(function (id) {
-    el(id).disabled = state.readOnly || !has;
+  // The root cannot be retyped, has no siblings, and cannot be deleted --
+  // edit.mjs throws for each. Disable them instead of surfacing an error.
+  var isRoot = has && state.selected === row.tree.uid;
+  el('addChild').disabled = state.readOnly || !has;
+  ['kind', 'addSib', 'del'].forEach(function (id) {
+    el(id).disabled = state.readOnly || !has || isRoot;
   });
   // The orientation select and zoom need a loaded tree, not a selected node.
   var loaded = !!(row && row.tree);

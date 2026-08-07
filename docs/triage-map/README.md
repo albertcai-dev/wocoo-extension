@@ -80,11 +80,12 @@ Verify with `magic_file_list` and compare byte sizes against local. Do **not**
 verify with `curl` — unauthenticated requests get a `307` to Okta sign-in, so you
 end up hashing the login page.
 
-**Prefer `magic_file_write` over `magic_file_edit` here.** On 2026-08-04
-`magic_file_edit` failed four times with a bogus `site_not_found` while
-`magic_file_list` kept working and `magic_file_write` succeeded on the same file.
-Small edits sometimes go through and larger ones do not, with no useful signal in
-the error. Treat `file_edit` as unreliable for this site and push whole files.
+**`magic_file_edit` is reliable on `app.js` but not on `vendor.js`.** Roughly a
+dozen edits to `app.js` (20KB) have all succeeded. Four consecutive edits to
+`vendor.js` (35KB) failed with a bogus `site_not_found` while `magic_file_list`
+kept working and `magic_file_write` then succeeded on the same file — so the
+error message is misleading and the trigger correlates with file size, not
+payload content. Use `file_edit` for `app.js`; push `vendor.js` whole.
 
 ## Sync from the sheet
 
