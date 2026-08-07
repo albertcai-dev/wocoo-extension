@@ -33,6 +33,39 @@ changed in the sheet since load, the site refuses to overwrite and asks.
 The canvas has zoom controls (`−` / `+` / `Fit` / `Actual`), refitting on load,
 procedure change and orientation flip.
 
+### Authoring by keyboard
+
+With a node selected: `Tab` adds a child and starts typing, `Enter` adds a
+sibling, `⇧Tab` outdents, arrows move the selection (no wrapping), `⌫` deletes,
+`⌘Enter` opens the full popup for subtitle and edge label. While typing, `Enter`
+commits and chains onward, `Tab` commits and indents, `Esc` commits and stops.
+`Enter` or `Esc` on an empty freshly created node removes it — that is how a
+burst ends.
+
+A keystroke does nothing whenever its toolbar equivalent is disabled, rather
+than raising an error banner mid-burst.
+
+`⌘V` pastes a numbered or bulleted list as a chain of steps under the selection,
+nesting by indentation, as one undo step. Every pasted line becomes a step;
+change kinds afterwards with the picker. A pasted `|` splits title from subtitle,
+as it does in the DSL — otherwise it would be re-read as a subtitle separator and
+corrupt the tree.
+
+### Browser tests
+
+`harness.test.mjs` drives the real built bundle in headless Chrome against a
+stubbed `MagicTools`, asserting DOM state. It skips when Chrome or `out/web/` is
+missing. **Build first**, or the scenarios test a stale bundle:
+
+```bash
+node docs/triage-map/bundle.mjs && node --test docs/triage-map/harness.test.mjs
+```
+
+This is the only coverage `app.js` has, and it earned its place: it diagnosed the
+disabled-toolbar bug in five minutes, and it guards the two traps most likely to
+regress — `Tab` stealing focus to the toolbar, and an inline editor failing to
+track zoom.
+
 ### Orientation
 
 Each map is `vertical` (branch headers side by side as columns, children flowing
@@ -80,12 +113,16 @@ Verify with `magic_file_list` and compare byte sizes against local. Do **not**
 verify with `curl` — unauthenticated requests get a `307` to Okta sign-in, so you
 end up hashing the login page.
 
-**`magic_file_edit` is reliable on `app.js` but not on `vendor.js`.** Roughly a
-dozen edits to `app.js` (20KB) have all succeeded. Four consecutive edits to
-`vendor.js` (35KB) failed with a bogus `site_not_found` while `magic_file_list`
-kept working and `magic_file_write` then succeeded on the same file — so the
-error message is misleading and the trigger correlates with file size, not
-payload content. Use `file_edit` for `app.js`; push `vendor.js` whole.
+**`magic_file_edit` is mostly reliable but occasionally flaky.** On 2026-08-04
+four consecutive edits to `vendor.js` failed with a bogus `site_not_found` while
+`magic_file_list` kept working; a whole-file `magic_file_write` then succeeded.
+On 2026-08-07 three edits to the same file went through without trouble. So the
+failure is transient, not tied to a file, a size, or payload content, and the
+error message is misleading.
+
+Practical rule: use `file_edit`, verify byte sizes with `magic_file_list`
+afterwards, and fall back to `magic_file_write` if an edit fails twice. Never
+verify with `curl` — unauthenticated requests get a `307` to Okta sign-in.
 
 ## Sync from the sheet
 
