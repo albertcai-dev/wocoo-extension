@@ -675,6 +675,27 @@ el('zoomFit').onclick = fitWidth;
 el('zoomReset').onclick = function () { setZoom(1); };
 window.addEventListener('resize', fitWidth);
 
+// ---- paste an outline ------------------------------------------------------
+document.addEventListener('paste', function (ev) {
+  var t = ev.target;
+  // Pasting into a text field must behave normally.
+  if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
+  if (state.readOnly || !state.selected) return;
+
+  var row = current();
+  if (!row || !row.tree) return;
+
+  var clip = ev.clipboardData || window.clipboardData;
+  if (!clip) return;
+  var items = T.parseOutline(clip.getData('text/plain'));
+  if (!items.length) return;
+
+  ev.preventDefault();
+  var uid = state.selected;
+  // One applyEdit, so a pasted twelve-line procedure is a single undo step.
+  applyEdit(function (tree) { return T.insertOutline(tree, uid, items).tree; });
+});
+
 el('editor').addEventListener('keydown', function (ev) {
   if (ev.key === 'Enter') { ev.preventDefault(); commitEditor(); }
   if (ev.key === 'Escape') { ev.preventDefault(); hideEditor(); }
