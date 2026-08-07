@@ -34,6 +34,9 @@
   #status { font-size: 12px; color: #7A756C; }
   #zoomLabel { font-size: 12px; color: #7A756C; min-width: 46px; text-align: center; }
   #scaler { transform-origin: top left; }
+  #fastEdit { position: absolute; display: none; font: inherit; font-size: 13px;
+              border: 1px solid #1B7F4B; border-radius: 6px; padding: 4px 7px;
+              width: 240px; z-index: 6; background: #fff; }
   #banner { display: none; margin-bottom: 12px; padding: 10px 12px; border-radius: 8px;
             font-size: 13px; border: 1px solid; }
   #banner.warn { display: block; background: #FDF6E3; border-color: #E4D9B0; color: #6B5A16; }
@@ -92,7 +95,7 @@
     <span class="spacer"></span>
     <span id="status"></span>
   </div>
-  <div class="canvas" id="canvas"><div id="scaler"></div><div id="editor">
+  <div class="canvas" id="canvas"><div id="scaler"></div><input id="fastEdit"><div id="editor">
     <input id="fTitle" placeholder="title">
     <input id="fSub" placeholder="subtitle (optional)">
     <input id="fLabel" placeholder="edge label (outcomes only)">

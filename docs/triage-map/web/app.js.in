@@ -141,6 +141,9 @@ function renderCanvas() {
   var scaler = el('scaler');
   scaler.innerHTML = '';
   hideEditor();
+  // openFast runs AFTER renderCanvas during a chain, so closing unconditionally
+  // would hide the editor it is about to open.
+  if (!fast) closeFast();
   if (!row) { syncToolbar(); return; }
 
   if (row.error) {
@@ -347,6 +350,127 @@ function saveNow(row) {
       status('');
       banner('err', 'Save failed: ' + e.message);
     });
+}
+
+// ---- fast inline editor ----------------------------------------------------
+// A one-line editor for the common case: type a title and chain onward. The
+// three-field popup stays for subtitle and edge label, on Cmd+Enter.
+var fast = null;   // { uid, fresh }
+
+function openFast(uid, fresh) {
+  var row = current();
+  if (!row || !row.tree || state.readOnly) return;
+  var found = T.locate(row.tree, uid);
+  if (!found) return;
+
+  var g = document.querySelector('#scaler g[data-node-uid="' + uid + '"]');
+  if (!g) return;
+  var box = g.querySelector('rect');
+
+  fast = { uid: uid, fresh: !!fresh };
+  var input = el('fastEdit');
+  input.style.display = 'block';
+  // Positioned in CSS pixels from SVG user units, so it must track the zoom --
+  // the same trap the popup hit.
+  input.style.left = ((Number(box.getAttribute('x')) + 6) * state.zoom) + 'px';
+  input.style.top = ((Number(box.getAttribute('y')) + 6) * state.zoom) + 'px';
+  input.value = fresh ? '' : found.node.title;
+  input.focus();
+  input.select();
+
+  // A long chain walks off the bottom; without this you type blind.
+  if (g.scrollIntoView) g.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+}
+
+function closeFast() {
+  fast = null;
+  el('fastEdit').style.display = 'none';
+}
+
+// Commits the current value. Returns true if the node survived, false if it was
+// removed for being an empty fresh node.
+function commitFast() {
+  if (!fast) return false;
+  var uid = fast.uid;
+  var fresh = fast.fresh;
+  var value = el('fastEdit').value.trim();
+  closeFast();
+
+  if (value === '') {
+    // An empty fresh node is how a burst ends -- titleProblem rejects an empty
+    // title, so leaving it would strand a "New step". An existing node is left
+    // untouched instead, since blanking it should not delete your work.
+    if (fresh) {
+      state.selected = null;
+      applyEdit(function (tree) { return T.deleteNode(tree, uid); });
+      return false;
+    }
+    return true;
+  }
+
+  applyEdit(function (tree) { return T.setText(tree, uid, { title: value }); });
+  return true;
+}
+
+// Every one of these mirrors a toolbar button. The governing rule is that a
+// keystroke does nothing whenever its toolbar equivalent is disabled, so these
+// return false rather than surfacing an error banner mid-burst.
+function canEditNode(uid) {
+  var row = current();
+  if (!row || !row.tree || state.readOnly || !uid) return false;
+  return !!T.locate(row.tree, uid);
+}
+
+function keyAddChild(uid) {
+  if (!canEditNode(uid)) return false;
+  var found = T.locate(current().tree, uid);
+  if (!T.defaultChildKind(found.node)) return false;   // leaf kinds refuse children
+  var created = null;
+  applyEdit(function (tree) {
+    var r = T.addChild(tree, uid);
+    created = r.uid;
+    return r.tree;
+  });
+  if (created === null) return false;
+  state.selected = created;
+  renderCanvas();
+  openFast(created, true);
+  return true;
+}
+
+function keyAddSibling(uid) {
+  if (!canEditNode(uid)) return false;
+  var found = T.locate(current().tree, uid);
+  if (!found.parent) return false;                     // the root has no siblings
+  var created = null;
+  applyEdit(function (tree) {
+    var r = T.addSibling(tree, uid);
+    created = r.uid;
+    return r.tree;
+  });
+  if (created === null) return false;
+  state.selected = created;
+  renderCanvas();
+  openFast(created, true);
+  return true;
+}
+
+function keyOutdent(uid) {
+  if (!canEditNode(uid)) return false;
+  var found = T.locate(current().tree, uid);
+  // Nowhere to outdent to when the parent is already the root.
+  if (!found.parent) return false;
+  var above = T.locate(current().tree, found.parent.uid);
+  if (!above.parent) return false;
+  var grandparent = above.parent.uid;
+  applyEdit(function (tree) { return T.reparent(tree, uid, grandparent); });
+  renderCanvas();
+  return true;
+}
+
+function showEditorFor(uid) {
+  var g = document.querySelector('#scaler g[data-node-uid="' + uid + '"]');
+  if (g) showEditor(uid, g);
 }
 
 // ---- inline text editor ---------------------------------------------------
@@ -557,18 +681,80 @@ el('editor').addEventListener('keydown', function (ev) {
 });
 
 document.addEventListener('keydown', function (ev) {
-  if (editingUid !== null) return;
   var meta = ev.metaKey || ev.ctrlKey;
+
+  // Undo/redo work in both modes.
   if (meta && ev.key.toLowerCase() === 'z') {
     ev.preventDefault();
+    if (fast) closeFast();
     timeTravel(ev.shiftKey ? 1 : -1);
     return;
   }
+
+  if (fast) return;                 // the fastEdit handler owns keys while typing
+  if (editingUid !== null) return;  // so does the popup
   if (!state.selected) return;
-  if (ev.key === 'Enter') { ev.preventDefault(); el(ev.shiftKey ? 'addSib' : 'addChild').click(); }
-  if (ev.key === 'Delete' || ev.key === 'Backspace') { ev.preventDefault(); el('del').click(); }
+  var uid = state.selected;
+
+  if (ev.key === 'Tab') {
+    // Tab is a browser focus key; every handled path must preventDefault or
+    // focus escapes to the toolbar mid-burst.
+    ev.preventDefault();
+    if (ev.shiftKey) keyOutdent(uid); else keyAddChild(uid);
+    return;
+  }
+
+  if (ev.key === 'Enter') {
+    ev.preventDefault();
+    if (meta) { showEditorFor(uid); return; }
+    keyAddSibling(uid);
+    return;
+  }
+
+  if (ev.key === 'ArrowUp' || ev.key === 'ArrowDown'
+      || ev.key === 'ArrowLeft' || ev.key === 'ArrowRight') {
+    var dir = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right' }[ev.key];
+    var row = current();
+    if (!row || !row.tree) return;
+    var next = T.navigate(row.tree, uid, dir);
+    if (next === null) return;
+    ev.preventDefault();
+    state.selected = next;
+    renderCanvas();
+    var g = document.querySelector('#scaler g[data-node-uid="' + next + '"]');
+    if (g && g.scrollIntoView) g.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    return;
+  }
+
+  if (ev.key === 'Delete' || ev.key === 'Backspace') {
+    ev.preventDefault();
+    el('del').click();
+  }
 });
 
-el('canvas').addEventListener('click', function () { state.selected = null; renderCanvas(); });
+el('fastEdit').addEventListener('keydown', function (ev) {
+  if (ev.key === 'Enter') {
+    ev.preventDefault();
+    var uid = fast && fast.uid;
+    if (commitFast() && uid) keyAddSibling(uid);
+    return;
+  }
+  if (ev.key === 'Tab') {
+    ev.preventDefault();
+    var t = fast && fast.uid;
+    if (commitFast() && t) { if (ev.shiftKey) keyOutdent(t); else keyAddChild(t); }
+    return;
+  }
+  if (ev.key === 'Escape') {
+    ev.preventDefault();
+    commitFast();
+  }
+});
+
+el('canvas').addEventListener('click', function () {
+  if (fast) commitFast();
+  state.selected = null;
+  renderCanvas();
+});
 
 load();
