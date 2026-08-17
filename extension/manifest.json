@@ -75,6 +75,7 @@
     "http://localhost:8501/*",
     "https://wealthsimple.atlassian.net/*",
     "https://atlas.wealthsimple.com/*",
+    "https://cs-tools-satori.wealthsimple.com/*",
     "https://auth.atlassian.com/*",
     "https://api.atlassian.com/*",
     "https://wealthsimplecs.mycardplace.com/*",

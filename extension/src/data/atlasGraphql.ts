@@ -23,6 +23,75 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>;
 }
 
+const ATLAS_GRAPHQL_BASE = 'https://cs-tools-satori.wealthsimple.com/api/atlas/graphql';
+
+export type AtlasGraphqlService = 'fort_knox' | 'wealthsimple' | 'invest_graphql_api';
+
+// Atlas's own document, verbatim — the only operation of the three where we need a
+// field (`account_canonical_id`) that sits behind an inline fragment.
+export const WS_BANK_ACCOUNT_QUERY = `query WsBankAccount($identityId: ID!) {
+  funding_methods(fundable_type: WsBankAccount, identity_id: $identityId) {
+    ... on WsBankAccount {
+      account_canonical_id
+      __typename
+    }
+    __typename
+  }
+}`;
+
+// Trimmed from Atlas's document, which requests ~60 fields. We use one.
+export const GET_ACCOUNT_DETAILS_QUERY = `query getAccountDetails($id: ID!) {
+  account(id: $id) {
+    id
+    custodianAccounts {
+      custodianAccountId
+      __typename
+    }
+    __typename
+  }
+}`;
+
+// Trimmed: Atlas also pulls every entitlement, which we deliberately ignore.
+export const FETCH_IDENTITY_PACKAGES_QUERY = `query FetchIdentityPackages($id: ID!) {
+  identity(id: $id) {
+    id
+    packages {
+      id
+      __typename
+    }
+    __typename
+  }
+}`;
+
+export async function atlasGraphql(
+  service: AtlasGraphqlService,
+  operationName: string,
+  query: string,
+  variables: Record<string, unknown>,
+): Promise<unknown> {
+  const res = await fetch(`${ATLAS_GRAPHQL_BASE}/${service}`, {
+    method: 'POST',
+    // Atlas authenticates by cookie only — no Authorization header, no CSRF token.
+    credentials: 'include',
+    headers: { accept: '*/*', 'content-type': 'application/json' },
+    body: JSON.stringify({ operationName, query, variables }),
+  });
+  if (!res.ok) {
+    // A 401/403 here is the expected outcome if extension-origin requests do not
+    // carry Atlas's cookies. The caller falls back to the background tab.
+    throw new Error(`Atlas ${operationName} failed: HTTP ${res.status}`);
+  }
+  const body = (await res.json()) as unknown;
+  const errors = asRecord(body)?.errors;
+  if (Array.isArray(errors) && errors.length > 0) {
+    const message = asRecord(errors[0])?.message;
+    throw new Error(
+      `Atlas ${operationName} failed: ${typeof message === 'string' ? message : 'GraphQL error'}`,
+    );
+  }
+  return body;
+}
+
 /** `WsBankAccount` → the spend account's canonical id, e.g. `ca-cash-msb-i_ma5GMI2g`. */
 export function readSpendAccountCanonicalId(res: unknown): string | null {
   const methods = asRecord(asRecord(res)?.data)?.funding_methods;

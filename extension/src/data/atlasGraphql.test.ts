@@ -1,9 +1,24 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  atlasGraphql,
   readIndividualTier,
   readSpendAccountCanonicalId,
   readSpendCustodianAccountNumber,
 } from './atlasGraphql';
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+function stubFetch(impl: (url: string, init: RequestInit) => Response) {
+  const spy = vi.fn((url: unknown, init: unknown) =>
+    Promise.resolve(impl(String(url), (init ?? {}) as RequestInit)));
+  vi.stubGlobal('fetch', spy);
+  return spy;
+}
+
+const ok = (body: unknown) =>
+  new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
 
 // Recorded from graphql/fort_knox, operation WsBankAccount.
 const WS_BANK_ACCOUNT_RES = {
@@ -145,5 +160,56 @@ describe('readIndividualTier', () => {
 
   it('returns null on a shape it does not recognise', () => {
     expect(readIndividualTier(undefined)).toBeNull();
+  });
+});
+
+describe('atlasGraphql', () => {
+  it('posts to the service path with cookies and the recorded headers', async () => {
+    const spy = stubFetch(() => ok({ data: { ping: true } }));
+
+    await atlasGraphql('fort_knox', 'WsBankAccount', 'query WsBankAccount { x }', { identityId: 'identity-1' });
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    const [url, init] = spy.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe('https://cs-tools-satori.wealthsimple.com/api/atlas/graphql/fort_knox');
+    expect(init.method).toBe('POST');
+    expect(init.credentials).toBe('include');
+    expect(init.headers).toEqual({ accept: '*/*', 'content-type': 'application/json' });
+    expect(JSON.parse(String(init.body))).toEqual({
+      operationName: 'WsBankAccount',
+      query: 'query WsBankAccount { x }',
+      variables: { identityId: 'identity-1' },
+    });
+  });
+
+  it('sends no Authorization header — Atlas authenticates by cookie alone', async () => {
+    const spy = stubFetch(() => ok({ data: {} }));
+    await atlasGraphql('wealthsimple', 'getAccountDetails', 'q', { id: 'ca-1' });
+    const [, init] = spy.mock.calls[0] as unknown as [string, RequestInit];
+    expect(Object.keys(init.headers as Record<string, string>).map((k) => k.toLowerCase()))
+      .not.toContain('authorization');
+  });
+
+  it('returns the parsed body on success', async () => {
+    stubFetch(() => ok({ data: { identity: { id: 'identity-1' } } }));
+    const res = await atlasGraphql('invest_graphql_api', 'FetchIdentityPackages', 'q', { id: 'identity-1' });
+    expect(res).toEqual({ data: { identity: { id: 'identity-1' } } });
+  });
+
+  it('throws with the status on a non-2xx response', async () => {
+    stubFetch(() => new Response('nope', { status: 403 }));
+    await expect(atlasGraphql('fort_knox', 'WsBankAccount', 'q', {}))
+      .rejects.toThrow(/WsBankAccount.*403/);
+  });
+
+  it('throws with the first GraphQL error message', async () => {
+    stubFetch(() => ok({ errors: [{ message: 'Field x does not exist' }] }));
+    await expect(atlasGraphql('wealthsimple', 'getAccountDetails', 'q', {}))
+      .rejects.toThrow(/Field x does not exist/);
+  });
+
+  it('does not treat an empty errors array as a failure', async () => {
+    stubFetch(() => ok({ data: { account: null }, errors: [] }));
+    await expect(atlasGraphql('wealthsimple', 'getAccountDetails', 'q', {})).resolves.toBeTruthy();
   });
 });
