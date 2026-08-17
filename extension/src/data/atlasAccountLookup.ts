@@ -9,6 +9,13 @@
 // The atlas content script's polling deadline is 30s; we wait 35s before giving up and
 // closing the tab.
 
+import { fetchAtlasAccountIdViaGraphql } from './atlasGraphql';
+import type { AtlasLookupResult } from './atlasGraphql';
+
+// Re-exported so importers of this module keep working after the type moved to
+// atlasGraphql.ts (moved to avoid an import cycle between the two).
+export type { AtlasLookupResult } from './atlasGraphql';
+
 export interface FetchAtlasAccountIdArgs {
   identityId: string;
   sourceTicketId: string;
@@ -16,14 +23,32 @@ export interface FetchAtlasAccountIdArgs {
   timeoutMs?: number;
 }
 
-export interface AtlasLookupResult {
-  accountNumber: string;
-  /** Captured from Atlas's "INDIVIDUAL TIERS > Status" field. Null if not present on the
-   *  page (some client profiles don't have an Individual Tiers row). */
-  individualTierStatus: string | null;
+/**
+ * Tries Atlas's GraphQL API first and falls back to the background-tab scrape.
+ *
+ * The one thing that cannot be verified outside a loaded extension is whether Atlas's
+ * cookies ride a fetch initiated from a chrome-extension:// origin — SameSite=Lax
+ * cookies are not sent cross-site. If they do not, GraphQL returns 401/403 and this
+ * silently uses the old path, so the button behaves exactly as it did before.
+ *
+ * The fallback also covers an operation being renamed or a service moving.
+ */
+export async function fetchAtlasAccountIdHeadless(
+  args: FetchAtlasAccountIdArgs,
+): Promise<AtlasLookupResult> {
+  try {
+    const result = await fetchAtlasAccountIdViaGraphql({ identityId: args.identityId });
+    console.info('[atlas] account lookup via GraphQL:', result.accountNumber);
+    return result;
+  } catch (err) {
+    console.warn('[atlas] GraphQL lookup failed, falling back to a background tab:', err);
+    const result = await fetchAtlasAccountIdViaTab(args);
+    console.info('[atlas] account lookup via background tab:', result.accountNumber);
+    return result;
+  }
 }
 
-export async function fetchAtlasAccountIdHeadless(args: FetchAtlasAccountIdArgs): Promise<AtlasLookupResult> {
+export async function fetchAtlasAccountIdViaTab(args: FetchAtlasAccountIdArgs): Promise<AtlasLookupResult> {
   const { identityId, sourceTicketId, timeoutMs = 35_000 } = args;
   if (!identityId) throw new Error('identityId is required');
   if (!sourceTicketId) throw new Error('sourceTicketId is required');
@@ -38,7 +63,7 @@ export async function fetchAtlasAccountIdHeadless(args: FetchAtlasAccountIdArgs)
     const cleanup = () => {
       settled = true;
       chrome.storage.onChanged.removeListener(onChange);
-      window.clearTimeout(timer);
+      clearTimeout(timer);
       if (tabId != null) {
         void chrome.tabs.remove(tabId).catch(() => { /* tab may already be closed */ });
       }
@@ -59,7 +84,9 @@ export async function fetchAtlasAccountIdHeadless(args: FetchAtlasAccountIdArgs)
       }
     };
     chrome.storage.onChanged.addListener(onChange);
-    const timer = window.setTimeout(() => {
+    // Bare setTimeout, not window.setTimeout: `window` does not exist in an MV3
+    // service worker, and the bare global is what makes this testable under Node.
+    const timer: ReturnType<typeof setTimeout> = setTimeout(() => {
       if (settled) return;
       cleanup();
       reject(new Error('Atlas account lookup timed out'));
