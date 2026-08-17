@@ -139,6 +139,8 @@ describe('readIndividualTier', () => {
   });
 
   it('ignores entitlement categories that merely say premium', () => {
+    // The `silver` package alone carries category: "premium" entitlements. Reading the
+    // tier from those would wrongly report Premium for a Core client.
     const noTierPackage = {
       data: {
         identity: {
@@ -146,7 +148,7 @@ describe('readIndividualTier', () => {
         },
       },
     };
-    expect(readIndividualTier(noTierPackage)).toBeNull();
+    expect(readIndividualTier(noTierPackage)).not.toBe('Premium');
   });
 
   it('handles core and generation', () => {
@@ -155,12 +157,21 @@ describe('readIndividualTier', () => {
     expect(readIndividualTier(mk('individual-tier-generation'))).toBe('Generation');
   });
 
-  it('returns null when there is no individual-tier package', () => {
-    expect(readIndividualTier({ data: { identity: { packages: [{ id: 'silver' }] } } })).toBeNull();
+  // Recorded: identity-v6Qd0IOcskEZanejmCah0X4tIqX has exactly these packages and
+  // Atlas's own page shows "INDIVIDUAL TIERS > Status: Core".
+  it('defaults to Core when no individual-tier package is present', () => {
+    const coreClient = { data: { identity: { packages: [{ id: 'default' }, { id: 'direct-deposit-tier-4k' }] } } };
+    expect(readIndividualTier(coreClient)).toBe('Core');
   });
 
+  it('treats an empty packages array as Core, not unknown', () => {
+    expect(readIndividualTier({ data: { identity: { packages: [] } } })).toBe('Core');
+  });
+
+  // Null means "could not read", which is a different claim from "Core".
   it('returns null on a shape it does not recognise', () => {
     expect(readIndividualTier(undefined)).toBeNull();
+    expect(readIndividualTier({ data: { identity: {} } })).toBeNull();
   });
 });
 

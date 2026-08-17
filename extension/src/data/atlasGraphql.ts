@@ -116,7 +116,17 @@ export function readSpendCustodianAccountNumber(res: unknown): string | null {
   return null;
 }
 
-/** `FetchIdentityPackages` → `Core` | `Premium` | `Generation`, or null. */
+/**
+ * `FetchIdentityPackages` → `Core` | `Premium` | `Generation`, or null.
+ *
+ * An `individual-tier-<tier>` package names an upgraded tier. Core carries no such
+ * package, so a readable packages list with none of them means Core — measured against
+ * Atlas itself: a client whose packages are `['default', 'direct-deposit-tier-4k']`
+ * renders "INDIVIDUAL TIERS > Status: Core" on Atlas's own page.
+ *
+ * Null is reserved for "could not read", i.e. the response had no packages array. That
+ * distinction matters: the UI can honestly say Core without claiming a failed fetch.
+ */
 export function readIndividualTier(res: unknown): string | null {
   const packages = asRecord(asRecord(asRecord(res)?.data)?.identity)?.packages;
   if (!Array.isArray(packages)) return null;
@@ -129,7 +139,7 @@ export function readIndividualTier(res: unknown): string | null {
       return tier.charAt(0).toUpperCase() + tier.slice(1);
     }
   }
-  return null;
+  return 'Core';
 }
 
 /**
