@@ -77,3 +77,28 @@ extension/
 - Move workflow modal
 - Overpayment Triage in-panel workflow
 - Responsive 280–520px layouts (currently fixed to default ~360px)
+
+## Atlas account-number lookup
+
+`fetchAtlasAccountIdHeadless` calls Atlas's GraphQL API directly
+(`cs-tools-satori.wealthsimple.com/api/atlas/graphql/*`, cookie auth, no tab) and falls
+back to the old background-tab DOM scrape (`fetchAtlasAccountIdViaTab`) if that fails.
+Which path ran is logged as `[atlas] account lookup via …`.
+
+Three operations, two round trips — hops 1 and 3 run concurrently:
+
+| hop | service | operation | in → out |
+|---|---|---|---|
+| 1 | `fort_knox` | `WsBankAccount` | `identityId` → `account_canonical_id` |
+| 2 | `wealthsimple` | `getAccountDetails` | canonical id → `custodianAccountId` matching `/^W[A-Z0-9]+CAD$/i` |
+| 3 | `invest_graphql_api` | `FetchIdentityPackages` | `identityId` → individual tier |
+
+The tier comes from `packages[].id` matching `individual-tier-<tier>`; an identity with no
+such package is Core. **Do not read it from `entitlements[].category`** — unrelated
+features carry `category: "premium"`.
+
+Either path writes `chrome.storage.local.atlas_account_number`, which is what SidePanel's
+W# chip renders from. Skipping that write makes the lookup succeed invisibly.
+
+Verified 2026-08-17: the GraphQL path runs — extension-origin fetches do carry Atlas's
+cookies. Confirmed against a Premium client and a Core client.

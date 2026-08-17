@@ -1,7 +1,19 @@
 # Atlas Account Lookup Without a Tab — Design
 
 **Date:** 2026-08-17
-**Status:** Approved, not yet implemented
+**Status:** Implemented and verified 2026-08-17 — the GraphQL path runs in Chrome, so
+extension-origin fetches do carry Atlas's cookies and the tab fallback stays dormant.
+
+Two things the design got wrong, both fixed during implementation:
+
+1. **"Zero diff at the call sites" was true but insufficient.** `SidePanel.tsx` renders the
+   W# chip from a `chrome.storage.local.atlas_account_number` storage listener, not from the
+   return value — a side effect only the content script used to produce. The GraphQL path
+   now writes the same key, or the lookup succeeds invisibly.
+2. **Core has no `individual-tier-*` package.** The design treated a missing package as
+   "no individual tier → null", which showed "not detected" for every base-tier client while
+   Atlas's own page said Core. A readable packages list with no `individual-tier-*` now
+   reads as Core; null is reserved for an unreadable response.
 **Replaces the fast path of:** `extension/src/data/atlasAccountLookup.ts`
 **Touches:** `extension/manifest.json`, `extension/src/data/atlasAccountLookup.ts`, `extension/src/data/atlasGraphql.ts` *(new)*
 
