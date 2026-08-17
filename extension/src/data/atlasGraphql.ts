@@ -131,3 +131,41 @@ export function readIndividualTier(res: unknown): string | null {
   }
   return null;
 }
+
+/**
+ * The full lookup: identity → spend account → W#, with the tier fetched alongside.
+ *
+ * Hops 1 and 3 both key off identityId so they run concurrently; hop 2 needs hop 1's
+ * canonical id, so the total latency is two round trips, not three.
+ */
+export async function fetchAtlasAccountIdViaGraphql(
+  args: { identityId: string },
+): Promise<AtlasLookupResult> {
+  const { identityId } = args;
+  if (!identityId) throw new Error('identityId is required');
+
+  // Attached immediately so a tier failure can never surface as an unhandled
+  // rejection while we are awaiting the account hops. The tier is display-only
+  // (SidePanel.tsx), so losing it must not lose the account number.
+  const tier = atlasGraphql('invest_graphql_api', 'FetchIdentityPackages', FETCH_IDENTITY_PACKAGES_QUERY, {
+    id: identityId,
+  })
+    .then(readIndividualTier)
+    .catch(() => null);
+
+  const bank = await atlasGraphql('fort_knox', 'WsBankAccount', WS_BANK_ACCOUNT_QUERY, { identityId });
+  const canonicalId = readSpendAccountCanonicalId(bank);
+  if (!canonicalId) {
+    throw new Error('Atlas returned no Wealthsimple bank account for this identity');
+  }
+
+  const details = await atlasGraphql('wealthsimple', 'getAccountDetails', GET_ACCOUNT_DETAILS_QUERY, {
+    id: canonicalId,
+  });
+  const accountNumber = readSpendCustodianAccountNumber(details);
+  if (!accountNumber) {
+    throw new Error(`No spend account number (W…CAD) on ${canonicalId}`);
+  }
+
+  return { accountNumber, individualTierStatus: await tier };
+}

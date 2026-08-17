@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   atlasGraphql,
+  fetchAtlasAccountIdViaGraphql,
   readIndividualTier,
   readSpendAccountCanonicalId,
   readSpendCustodianAccountNumber,
@@ -211,5 +212,93 @@ describe('atlasGraphql', () => {
   it('does not treat an empty errors array as a failure', async () => {
     stubFetch(() => ok({ data: { account: null }, errors: [] }));
     await expect(atlasGraphql('wealthsimple', 'getAccountDetails', 'q', {})).resolves.toBeTruthy();
+  });
+});
+
+/** Routes a stubbed fetch by the operationName in the request body. */
+function stubByOperation(handlers: Record<string, () => Response>) {
+  const seen: string[] = [];
+  const spy = vi.fn((_url: unknown, init: unknown) => {
+    const body = JSON.parse(String((init as RequestInit).body));
+    seen.push(body.operationName);
+    const handler = handlers[body.operationName];
+    if (!handler) throw new Error(`unexpected operation ${body.operationName}`);
+    return Promise.resolve(handler());
+  });
+  vi.stubGlobal('fetch', spy);
+  return { spy, seen };
+}
+
+const BANK_OK = () => ok({ data: { funding_methods: [{ account_canonical_id: 'ca-cash-msb-i_ma5GMI2g' }] } });
+const DETAILS_OK = () => ok({
+  data: { account: { custodianAccounts: [{ custodianAccountId: 'C14792J29CAD' }, { custodianAccountId: 'WK6RQDY37CAD' }] } },
+});
+const PACKAGES_OK = () => ok({ data: { identity: { packages: [{ id: 'silver' }, { id: 'individual-tier-premium' }] } } });
+
+describe('fetchAtlasAccountIdViaGraphql', () => {
+  it('returns the W# and the tier', async () => {
+    stubByOperation({
+      WsBankAccount: BANK_OK,
+      getAccountDetails: DETAILS_OK,
+      FetchIdentityPackages: PACKAGES_OK,
+    });
+
+    const result = await fetchAtlasAccountIdViaGraphql({ identityId: 'identity-1' });
+
+    expect(result).toEqual({ accountNumber: 'WK6RQDY37CAD', individualTierStatus: 'Premium' });
+  });
+
+  it('passes the canonical id from hop 1 into hop 2', async () => {
+    const calls: unknown[] = [];
+    vi.stubGlobal('fetch', vi.fn((_url: unknown, init: unknown) => {
+      const body = JSON.parse(String((init as RequestInit).body));
+      calls.push(body.variables);
+      if (body.operationName === 'WsBankAccount') return Promise.resolve(BANK_OK());
+      if (body.operationName === 'getAccountDetails') return Promise.resolve(DETAILS_OK());
+      return Promise.resolve(PACKAGES_OK());
+    }));
+
+    await fetchAtlasAccountIdViaGraphql({ identityId: 'identity-1' });
+
+    expect(calls).toContainEqual({ id: 'ca-cash-msb-i_ma5GMI2g' });
+  });
+
+  it('still returns the W# when the tier operation fails', async () => {
+    stubByOperation({
+      WsBankAccount: BANK_OK,
+      getAccountDetails: DETAILS_OK,
+      FetchIdentityPackages: () => new Response('boom', { status: 500 }),
+    });
+
+    const result = await fetchAtlasAccountIdViaGraphql({ identityId: 'identity-1' });
+
+    expect(result).toEqual({ accountNumber: 'WK6RQDY37CAD', individualTierStatus: null });
+  });
+
+  it('throws when the identity has no WsBankAccount funding method', async () => {
+    stubByOperation({
+      WsBankAccount: () => ok({ data: { funding_methods: [] } }),
+      FetchIdentityPackages: PACKAGES_OK,
+    });
+
+    await expect(fetchAtlasAccountIdViaGraphql({ identityId: 'identity-1' }))
+      .rejects.toThrow(/no Wealthsimple bank account/i);
+  });
+
+  it('throws when no custodian account is a spend account', async () => {
+    stubByOperation({
+      WsBankAccount: BANK_OK,
+      getAccountDetails: () => ok({ data: { account: { custodianAccounts: [{ custodianAccountId: 'C14792J29CAD' }] } } }),
+      FetchIdentityPackages: PACKAGES_OK,
+    });
+
+    await expect(fetchAtlasAccountIdViaGraphql({ identityId: 'identity-1' }))
+      .rejects.toThrow(/spend account number/i);
+  });
+
+  it('rejects an empty identityId without calling the network', async () => {
+    const { spy } = stubByOperation({});
+    await expect(fetchAtlasAccountIdViaGraphql({ identityId: '' })).rejects.toThrow(/identityId is required/);
+    expect(spy).not.toHaveBeenCalled();
   });
 });
