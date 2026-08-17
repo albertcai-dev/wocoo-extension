@@ -38,6 +38,18 @@ export async function fetchAtlasAccountIdHeadless(
 ): Promise<AtlasLookupResult> {
   try {
     const result = await fetchAtlasAccountIdViaGraphql({ identityId: args.identityId });
+    // The tab path's real output is this storage key, not its return value: SidePanel
+    // renders the W# chip from `atlas_account_number` via a storage listener. Writing it
+    // here is what makes the GraphQL path visible in the UI — without it the lookup
+    // succeeds silently and the card stays empty.
+    await chrome.storage.local.set({
+      atlas_account_number: {
+        sourceTicketId: args.sourceTicketId || '',
+        accountNumber: result.accountNumber,
+        individualTierStatus: result.individualTierStatus,
+        capturedAt: new Date().toISOString(),
+      },
+    });
     console.info('[atlas] account lookup via GraphQL:', result.accountNumber);
     return result;
   } catch (err) {

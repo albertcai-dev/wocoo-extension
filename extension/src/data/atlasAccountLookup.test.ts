@@ -16,7 +16,10 @@ function stubChrome() {
   const listeners: Array<(c: Record<string, { newValue: unknown }>, area: string) => void> = [];
   const chromeStub = {
     storage: {
-      local: { set: vi.fn(() => Promise.resolve()), remove: vi.fn(() => Promise.resolve()) },
+      local: {
+        set: vi.fn((_items: Record<string, unknown>) => Promise.resolve()),
+        remove: vi.fn(() => Promise.resolve()),
+      },
       onChanged: {
         addListener: vi.fn((fn: (typeof listeners)[number]) => { listeners.push(fn); }),
         removeListener: vi.fn(),
@@ -78,6 +81,24 @@ describe('fetchAtlasAccountIdHeadless', () => {
 
     expect(result.accountNumber).toBe('WTABFALLBACKCAD');
     expect(chromeStub.tabs.create).toHaveBeenCalledTimes(1);
+  });
+
+  // SidePanel renders the W# chip from this storage key, not from the return value.
+  // Skipping the write made the GraphQL path succeed with no visible UI change.
+  it('mirrors the GraphQL result into atlas_account_number so the UI updates', async () => {
+    const chromeStub = stubChrome();
+    vi.mocked(fetchAtlasAccountIdViaGraphql).mockResolvedValue(GRAPHQL_RESULT);
+
+    await fetchAtlasAccountIdHeadless({ identityId: 'identity-1', sourceTicketId: 'WOCOO-1' });
+
+    expect(chromeStub.storage.local.set).toHaveBeenCalledTimes(1);
+    const written = chromeStub.storage.local.set.mock.calls[0][0] as unknown as {
+      atlas_account_number: { sourceTicketId: string; accountNumber: string; individualTierStatus: string | null; capturedAt: string };
+    };
+    expect(written.atlas_account_number.sourceTicketId).toBe('WOCOO-1');
+    expect(written.atlas_account_number.accountNumber).toBe('WK6RQDY37CAD');
+    expect(written.atlas_account_number.individualTierStatus).toBe('Premium');
+    expect(written.atlas_account_number.capturedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 
   it('logs which path produced the result', async () => {
