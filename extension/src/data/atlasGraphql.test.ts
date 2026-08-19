@@ -2,6 +2,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   atlasGraphql,
   fetchAtlasAccountIdViaGraphql,
+  fetchAtlasClientDetailsViaGraphql,
+  GET_PROFILE_V2_QUERY,
+  readClientDetails,
   readIndividualTier,
   readSpendAccountCanonicalId,
   readSpendCustodianAccountNumber,
@@ -310,6 +313,144 @@ describe('fetchAtlasAccountIdViaGraphql', () => {
   it('rejects an empty identityId without calling the network', async () => {
     const { spy } = stubByOperation({});
     await expect(fetchAtlasAccountIdViaGraphql({ identityId: '' })).rejects.toThrow(/identityId is required/);
+    expect(spy).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getProfileV2 — client legal name + mailing address for the Refund Auth Letter.
+// ---------------------------------------------------------------------------
+
+// Field names recorded from Atlas's own getProfileV2 document. Values here are
+// invented, not a real client. Note what is deliberately ABSENT: getProfileV2 also
+// returns taxIdentificationNumbers.numberUnobfuscated (a SIN in the clear), DOB,
+// gender and employment. Our query must never ask for those.
+const PROFILE_RES = {
+  data: {
+    profileV2: {
+      identityId: 'identity-1',
+      person: {
+        legalName: { firstName: 'Duncan', middleNames: null, lastName: 'Stevenson', __typename: 'LegalName' },
+        mailingAddress: {
+          streetNumber: '101', streetName: 'Roseview Avenue', unit: 'Unit 2',
+          city: 'Richmond Hill', provinceStateRegion: 'ON', country: 'CA',
+          postalCode: 'L4C1C6', __typename: 'ClientAddressType',
+        },
+        residentialAddress: {
+          streetNumber: '900', streetName: 'Bay Street', unit: null,
+          city: 'Toronto', provinceStateRegion: 'ON', country: 'CA',
+          postalCode: 'M5S1A1', __typename: 'ClientAddressType',
+        },
+        __typename: 'Person',
+      },
+      __typename: 'ProfileV2',
+    },
+  },
+};
+
+// structuredClone infers the fixture's literal types (middleNames: null, unit: string),
+// so mutating a field to exercise a variant needs a loosely-typed clone.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const cloneProfile = (): any => structuredClone(PROFILE_RES);
+
+describe('readClientDetails', () => {
+  it('builds the four letter fields from the mailing address', () => {
+    expect(readClientDetails(PROFILE_RES)).toEqual({
+      name: 'Duncan Stevenson',
+      street: 'Unit 2, 101 Roseview Avenue',
+      cityProvince: 'Richmond Hill, ON',
+      postal: 'L4C 1C6',
+      complete: true,
+    });
+  });
+
+  it('includes middle names in the legal name when present', () => {
+    const withMiddle = cloneProfile();
+    withMiddle.data.profileV2.person.legalName.middleNames = 'James Robert';
+    expect(readClientDetails(withMiddle)?.name).toBe('Duncan James Robert Stevenson');
+  });
+
+  it('omits the unit when there is none', () => {
+    const noUnit = cloneProfile();
+    noUnit.data.profileV2.person.mailingAddress.unit = null;
+    expect(readClientDetails(noUnit)?.street).toBe('101 Roseview Avenue');
+  });
+
+  it('falls back to the residential address when mailing is absent', () => {
+    const noMailing = cloneProfile();
+    noMailing.data.profileV2.person.mailingAddress = null;
+    const out = readClientDetails(noMailing);
+    expect(out?.street).toBe('900 Bay Street');
+    expect(out?.cityProvince).toBe('Toronto, ON');
+    expect(out?.postal).toBe('M5S 1A1');
+  });
+
+  it('spaces a 6-character postal code and leaves other formats alone', () => {
+    const spaced = cloneProfile();
+    spaced.data.profileV2.person.mailingAddress.postalCode = 'l4c 1c6';
+    expect(readClientDetails(spaced)?.postal).toBe('L4C 1C6');
+
+    const zip = cloneProfile();
+    zip.data.profileV2.person.mailingAddress.postalCode = '90210';
+    expect(readClientDetails(zip)?.postal).toBe('90210');
+  });
+
+  it('reports complete: false when a field is missing but still returns the rest', () => {
+    const noPostal = cloneProfile();
+    noPostal.data.profileV2.person.mailingAddress.postalCode = null;
+    const out = readClientDetails(noPostal);
+    expect(out?.complete).toBe(false);
+    expect(out?.street).toBe('Unit 2, 101 Roseview Avenue');
+  });
+
+  it('returns null when there is no person to read', () => {
+    expect(readClientDetails({ data: { profileV2: null } })).toBeNull();
+    expect(readClientDetails(undefined)).toBeNull();
+  });
+});
+
+describe('GET_PROFILE_V2_QUERY', () => {
+  // getProfileV2 can return an unobfuscated SIN. Asking for less is the only
+  // guarantee it never reaches storage, a log, or a screenshot.
+  it('requests no tax, birth, gender or employment fields', () => {
+    for (const forbidden of [
+      'taxIdentificationNumbers', 'numberUnobfuscated', 'numberEncrypted',
+      'dateOfBirth', 'gender', 'employmentV2', 'phoneNumbers',
+    ]) {
+      expect(GET_PROFILE_V2_QUERY).not.toContain(forbidden);
+    }
+  });
+
+  it('requests exactly the name and address fields it needs', () => {
+    for (const needed of ['legalName', 'mailingAddress', 'residentialAddress', 'postalCode', 'provinceStateRegion']) {
+      expect(GET_PROFILE_V2_QUERY).toContain(needed);
+    }
+  });
+});
+
+describe('fetchAtlasClientDetailsViaGraphql', () => {
+  it('reads the profile in one call', async () => {
+    const spy = stubFetch(() => ok(PROFILE_RES));
+
+    const out = await fetchAtlasClientDetailsViaGraphql({ identityId: 'identity-1' });
+
+    expect(out.name).toBe('Duncan Stevenson');
+    expect(spy).toHaveBeenCalledTimes(1);
+    const [url, init] = spy.mock.calls[0] as unknown as [string, RequestInit];
+    // Bare /graphql — getProfileV2 has no service suffix, unlike the account hops.
+    expect(url).toBe('https://cs-tools-satori.wealthsimple.com/api/atlas/graphql');
+    expect(JSON.parse(String(init.body)).variables).toEqual({ identity_id: 'identity-1' });
+  });
+
+  it('throws when the profile has no readable person', async () => {
+    stubFetch(() => ok({ data: { profileV2: null } }));
+    await expect(fetchAtlasClientDetailsViaGraphql({ identityId: 'identity-1' }))
+      .rejects.toThrow(/no client details/i);
+  });
+
+  it('rejects an empty identityId without calling the network', async () => {
+    const spy = stubFetch(() => ok(PROFILE_RES));
+    await expect(fetchAtlasClientDetailsViaGraphql({ identityId: '' })).rejects.toThrow(/identityId is required/);
     expect(spy).not.toHaveBeenCalled();
   });
 });

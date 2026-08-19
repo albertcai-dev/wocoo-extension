@@ -9,7 +9,7 @@
 // The atlas content script's polling deadline is 30s; we wait 35s before giving up and
 // closing the tab.
 
-import { fetchAtlasAccountIdViaGraphql } from './atlasGraphql';
+import { fetchAtlasAccountIdViaGraphql, fetchAtlasClientDetailsViaGraphql } from './atlasGraphql';
 import type { AtlasLookupResult } from './atlasGraphql';
 
 // Re-exported so importers of this module keep working after the type moved to
@@ -136,7 +136,7 @@ export async function fetchAtlasClientEmailHeadless(args: FetchAtlasClientEmailA
     const cleanup = () => {
       settled = true;
       chrome.storage.onChanged.removeListener(onChange);
-      window.clearTimeout(timer);
+      clearTimeout(timer);
       if (tabId != null) {
         void chrome.tabs.remove(tabId).catch(() => { /* tab may already be closed */ });
       }
@@ -153,7 +153,7 @@ export async function fetchAtlasClientEmailHeadless(args: FetchAtlasClientEmailA
       }
     };
     chrome.storage.onChanged.addListener(onChange);
-    const timer = window.setTimeout(() => {
+    const timer: ReturnType<typeof setTimeout> = setTimeout(() => {
       if (settled) return;
       cleanup();
       reject(new Error('Atlas client email lookup timed out'));
@@ -186,7 +186,36 @@ export interface AtlasClientDetails {
   complete: boolean;
 }
 
-export async function fetchAtlasClientDetailsHeadless(args: FetchAtlasClientDetailsArgs): Promise<AtlasClientDetails> {
+/**
+ * Tries getProfileV2 first and falls back to the background-tab scrape.
+ *
+ * Same shape as fetchAtlasAccountIdHeadless: on success it mirrors the result into
+ * `atlas_client_details`, because that storage key — not the return value — is what the
+ * Refund Auth Letter step reads through its storage listener.
+ */
+export async function fetchAtlasClientDetailsHeadless(
+  args: FetchAtlasClientDetailsArgs,
+): Promise<AtlasClientDetails> {
+  try {
+    const details = await fetchAtlasClientDetailsViaGraphql({ identityId: args.identityId });
+    await chrome.storage.local.set({
+      atlas_client_details: {
+        sourceTicketId: args.sourceTicketId || '',
+        ...details,
+        capturedAt: new Date().toISOString(),
+      },
+    });
+    console.info('[atlas] client details via GraphQL; complete:', details.complete);
+    return details;
+  } catch (err) {
+    console.warn('[atlas] GraphQL client details failed, falling back to a background tab:', err);
+    const details = await fetchAtlasClientDetailsViaTab(args);
+    console.info('[atlas] client details via background tab; complete:', details.complete);
+    return details;
+  }
+}
+
+export async function fetchAtlasClientDetailsViaTab(args: FetchAtlasClientDetailsArgs): Promise<AtlasClientDetails> {
   const { identityId, sourceTicketId, timeoutMs = 35_000 } = args;
   if (!identityId) throw new Error('identityId is required');
   if (!sourceTicketId) throw new Error('sourceTicketId is required');
@@ -201,7 +230,7 @@ export async function fetchAtlasClientDetailsHeadless(args: FetchAtlasClientDeta
     const cleanup = () => {
       settled = true;
       chrome.storage.onChanged.removeListener(onChange);
-      window.clearTimeout(timer);
+      clearTimeout(timer);
       if (tabId != null) {
         void chrome.tabs.remove(tabId).catch(() => { /* tab may already be closed */ });
       }
@@ -228,7 +257,7 @@ export async function fetchAtlasClientDetailsHeadless(args: FetchAtlasClientDeta
       }
     };
     chrome.storage.onChanged.addListener(onChange);
-    const timer = window.setTimeout(() => {
+    const timer: ReturnType<typeof setTimeout> = setTimeout(() => {
       if (settled) return;
       cleanup();
       reject(new Error('Atlas client details lookup timed out — check the Full Client Details section rendered'));

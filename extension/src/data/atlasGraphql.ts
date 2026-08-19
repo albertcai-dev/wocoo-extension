@@ -25,7 +25,8 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 const ATLAS_GRAPHQL_BASE = 'https://cs-tools-satori.wealthsimple.com/api/atlas/graphql';
 
-export type AtlasGraphqlService = 'fort_knox' | 'wealthsimple' | 'invest_graphql_api';
+/** `''` targets the bare `/api/atlas/graphql` path, which is where getProfileV2 lives. */
+export type AtlasGraphqlService = '' | 'fort_knox' | 'wealthsimple' | 'invest_graphql_api';
 
 // Atlas's own document, verbatim — the only operation of the three where we need a
 // field (`account_canonical_id`) that sits behind an inline fragment.
@@ -69,7 +70,8 @@ export async function atlasGraphql(
   query: string,
   variables: Record<string, unknown>,
 ): Promise<unknown> {
-  const res = await fetch(`${ATLAS_GRAPHQL_BASE}/${service}`, {
+  const url = service ? `${ATLAS_GRAPHQL_BASE}/${service}` : ATLAS_GRAPHQL_BASE;
+  const res = await fetch(url, {
     method: 'POST',
     // Atlas authenticates by cookie only — no Authorization header, no CSRF token.
     credentials: 'include',
@@ -178,4 +180,110 @@ export async function fetchAtlasAccountIdViaGraphql(
   }
 
   return { accountNumber, individualTierStatus: await tier };
+}
+
+// -----------------------------------------------------------------------------
+// Client legal name + mailing address, for the Refund Auth Letter workflow.
+// -----------------------------------------------------------------------------
+
+export interface AtlasClientDetailsResult {
+  name: string;
+  street: string;
+  cityProvince: string;
+  postal: string;
+  /** False when Atlas is missing one of the four fields; the caller keeps them editable. */
+  complete: boolean;
+}
+
+// Trimmed hard on purpose. Atlas's own getProfileV2 document also selects
+// `taxIdentificationNumbers { numberUnobfuscated }` — a SIN in the clear — plus
+// dateOfBirth, gender, employment and phone numbers. None of that belongs in a
+// letter, so none of it is requested: not asking is the only real guarantee it
+// never lands in chrome.storage, a console log, or a screenshot.
+export const GET_PROFILE_V2_QUERY = `query getProfileV2($identity_id: ID!) {
+  profileV2(identityId: $identity_id) {
+    identityId
+    person {
+      legalName {
+        firstName
+        middleNames
+        lastName
+        __typename
+      }
+      mailingAddress {
+        streetNumber
+        streetName
+        unit
+        city
+        provinceStateRegion
+        postalCode
+        __typename
+      }
+      residentialAddress {
+        streetNumber
+        streetName
+        unit
+        city
+        provinceStateRegion
+        postalCode
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}`;
+
+function str(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+/** Mirrors `formatPostal` in content/atlas.ts: `L4C1C6` → `L4C 1C6`, others untouched. */
+function formatPostal(raw: string): string {
+  const compact = raw.replace(/\s+/g, '').toUpperCase();
+  if (/^[A-Z]\d[A-Z]\d[A-Z]\d$/.test(compact)) return `${compact.slice(0, 3)} ${compact.slice(3)}`;
+  return raw.trim();
+}
+
+/**
+ * `getProfileV2` → the four fields the refund letter needs.
+ *
+ * Mailing address wins over residential, matching what the DOM scraper did — the letter
+ * is physically mailed, so a separate mailing address is the whole point of the field.
+ */
+export function readClientDetails(res: unknown): AtlasClientDetailsResult | null {
+  const person = asRecord(asRecord(asRecord(asRecord(res)?.data)?.profileV2)?.person);
+  if (!person) return null;
+
+  const legal = asRecord(person.legalName);
+  const name = [str(legal?.firstName), str(legal?.middleNames), str(legal?.lastName)]
+    .filter(Boolean)
+    .join(' ');
+
+  const addr = asRecord(person.mailingAddress) ?? asRecord(person.residentialAddress);
+  const streetLine = [str(addr?.streetNumber), str(addr?.streetName)].filter(Boolean).join(' ');
+  const street = [str(addr?.unit), streetLine].filter(Boolean).join(', ');
+  const cityProvince = [str(addr?.city), str(addr?.provinceStateRegion)].filter(Boolean).join(', ');
+  const rawPostal = str(addr?.postalCode);
+  const postal = rawPostal ? formatPostal(rawPostal) : '';
+
+  return {
+    name,
+    street,
+    cityProvince,
+    postal,
+    complete: Boolean(name && street && cityProvince && postal),
+  };
+}
+
+export async function fetchAtlasClientDetailsViaGraphql(
+  args: { identityId: string },
+): Promise<AtlasClientDetailsResult> {
+  const { identityId } = args;
+  if (!identityId) throw new Error('identityId is required');
+
+  const res = await atlasGraphql('', 'getProfileV2', GET_PROFILE_V2_QUERY, { identity_id: identityId });
+  const details = readClientDetails(res);
+  if (!details) throw new Error('Atlas returned no client details for this identity');
+  return details;
 }
