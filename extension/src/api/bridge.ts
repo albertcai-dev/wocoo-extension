@@ -8,6 +8,7 @@
 // names + reply-action strings; this file just adapts to it.
 
 import type { TicketLogPayload, TicketLogUpdatePayload } from '../data/ticketLogTypes';
+import type { RecentLogRow, PlaybookChunk } from '../data/aiTriageTypes';
 import {
   BRIDGE_URL,
   registerBridgeTab,
@@ -637,4 +638,44 @@ export async function createRefundLetterViaBridge(p: RefundLetterParams): Promis
   const result = res.result as RefundLetterResult | undefined;
   if (!result || !result.docUrl) throw new Error('Bridge returned no letter links.');
   return result;
+}
+
+// ============ Ticket Knowledge Loop Phase 2 reads ============
+// Both run headless (background tab, auto-closed) — the verdict card fires on every
+// ticket open, so a visible script.google.com tab flashing each time is unacceptable.
+
+/** Prior resolved tickets matching this work type, best match first. */
+export async function getRecentLogViaBridge(workType: string, limit = 25): Promise<RecentLogRow[]> {
+  const res = await callBridge('getRecentLog', {
+    work_type: workType,
+    limit: String(limit),
+  }, 'recentLog', 30_000, true);
+
+  const rows = Array.isArray((res as any).rows) ? (res as any).rows : [];
+  return rows.map((r: any) => ({
+    loggedAt: String(r.logged_at ?? ''),
+    ticketId: String(r.ticket_id ?? ''),
+    summary: String(r.summary ?? ''),
+    originalWorkType: String(r.original_work_type ?? ''),
+    finalWorkType: String(r.final_work_type ?? ''),
+    transition: String(r.transition ?? ''),
+    movedToBoard: String(r.moved_to_board ?? ''),
+    resolutionNote: String(r.resolution_note ?? ''),
+    toolsUsed: String(r.tools_used ?? ''),
+  }));
+}
+
+/** The whole Playbook tab. Filtering happens in the extension. */
+export async function getPlaybookViaBridge(): Promise<PlaybookChunk[]> {
+  const res = await callBridge('getPlaybook', {}, 'playbook', 30_000, true);
+
+  const chunks = Array.isArray((res as any).chunks) ? (res as any).chunks : [];
+  return chunks.map((c: any) => ({
+    pageId: String(c.page_id ?? ''),
+    pageTitle: String(c.page_title ?? ''),
+    parentPath: String(c.parent_path ?? ''),
+    chunkKey: String(c.chunk_key ?? ''),
+    chunkText: String(c.chunk_text ?? ''),
+    updatedAt: String(c.updated_at ?? ''),
+  }));
 }
