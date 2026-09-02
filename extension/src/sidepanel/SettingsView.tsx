@@ -2,7 +2,9 @@
 // Houses Sign Out, credential storage (i2c today), and a placeholder for more.
 
 import { useEffect, useState } from 'react';
-import { clearI2cCredentials, getI2cCredentials, setI2cCredentials } from '../auth/credentials';
+import { clearI2cCredentials, getI2cCredentials, setI2cCredentials,
+  clearLlmGatewayKey, getLlmGatewayKey, setLlmGatewayKey } from '../auth/credentials';
+import { pingLlmGateway } from '../api/llmGateway';
 
 export function SettingsView({ onBack, onSignOut }: { onBack: () => void; onSignOut: () => void }) {
   return (
@@ -54,6 +56,7 @@ export function SettingsView({ onBack, onSignOut }: { onBack: () => void; onSign
 
       <Section title="Credentials">
         <I2cCredentialsRow />
+        <LlmGatewayRow />
       </Section>
 
       <Section title="Preferences">
@@ -164,6 +167,86 @@ function I2cCredentialsRow() {
 
       <div style={{ marginTop: 'var(--mint-sp-2)', fontSize: 'var(--mint-text-nano)', color: 'var(--mint-fg-soft)', lineHeight: 1.4 }}>
         Stored locally on this device only. When you open the i2c login page, the extension fills these in.
+      </div>
+    </div>
+  );
+}
+
+function LlmGatewayRow() {
+  const [loaded, setLoaded] = useState(false);
+  const [hasSaved, setHasSaved] = useState(false);
+  const [key, setKey] = useState('');
+  const [showKey, setShowKey] = useState(false);
+  const [checking, setChecking] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
+  const [statusOk, setStatusOk] = useState(true);
+
+  useEffect(() => {
+    getLlmGatewayKey().then((k) => {
+      if (k) { setHasSaved(true); setKey(k); }
+      setLoaded(true);
+    });
+  }, []);
+
+  async function save() {
+    if (!key.trim()) { setStatusOk(false); setStatus('A key is required.'); return; }
+    await setLlmGatewayKey(key);
+    setHasSaved(true);
+    setChecking(true);
+    setStatusOk(true);
+    setStatus('Checking\u2026');
+    const res = await pingLlmGateway(key.trim());
+    setChecking(false);
+    setStatusOk(res.ok);
+    setStatus(res.ok ? 'Saved. Key works.' : `Saved, but the check failed. ${res.error}`);
+  }
+
+  async function clear() {
+    await clearLlmGatewayKey();
+    setHasSaved(false);
+    setKey('');
+    setStatusOk(true);
+    setStatus('Cleared.');
+    setTimeout(() => setStatus(null), 2000);
+  }
+
+  if (!loaded) return null;
+
+  return (
+    <div style={cardStyle}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 'var(--mint-sp-2)' }}>
+        <span style={{ fontSize: 'var(--mint-text-meta)', fontWeight: 700, color: 'var(--mint-fg-strong)' }}>LLM Gateway</span>
+        {hasSaved ? (
+          <span style={{ marginLeft: 'auto', fontSize: 'var(--mint-text-nano)', color: 'var(--mint-positive-fg-strong)', fontWeight: 600 }}>✓ Saved</span>
+        ) : (
+          <span style={{ marginLeft: 'auto', fontSize: 'var(--mint-text-nano)', color: 'var(--mint-fg-soft)' }}>Not set</span>
+        )}
+      </div>
+
+      <label style={labelStyle}>Developer key</label>
+      <div style={{ display: 'flex', gap: 6 }}>
+        <input
+          type={showKey ? 'text' : 'password'}
+          value={key}
+          onChange={(e) => setKey(e.target.value)}
+          placeholder="sk-…"
+          style={{ ...inputStyle, flex: 1 }}
+        />
+        <button onClick={() => setShowKey((v) => !v)} style={secondaryBtn}>{showKey ? 'Hide' : 'Show'}</button>
+      </div>
+
+      <div style={{ display: 'flex', gap: 6, marginTop: 'var(--mint-sp-2)' }}>
+        <button onClick={save} disabled={checking} style={primaryBtn}>{hasSaved ? 'Update' : 'Save'}</button>
+        {hasSaved ? <button onClick={clear} style={secondaryBtn}>Clear</button> : null}
+      </div>
+
+      {status ? (
+        <div style={{ marginTop: 6, fontSize: 'var(--mint-text-nano)', lineHeight: 1.4, color: statusOk ? 'var(--mint-positive-fg-strong)' : 'var(--mint-negative-fg-strong)' }}>{status}</div>
+      ) : null}
+
+      <div style={{ marginTop: 'var(--mint-sp-2)', fontSize: 'var(--mint-text-nano)', color: 'var(--mint-fg-soft)', lineHeight: 1.4 }}>
+        Personal LiteLLM developer key, stored locally on this device. The gateway is only
+        reachable on the WS VPN.
       </div>
     </div>
   );
