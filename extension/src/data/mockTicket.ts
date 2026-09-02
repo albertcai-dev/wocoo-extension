@@ -22,6 +22,9 @@ export interface WocooTicket {
   reporterAccountId?: string; // needed for @mention in Overpayment Triage comment step
   assignee: string;
   created: string;
+  /** Jira `fields.updated`. Used as the AI triage cache's versionTag, so editing the
+   *  ticket invalidates its cached verdict for free. */
+  updated: string;
   recentComments: Array<{ author: string; timestamp: string; body: string }>;
   /** i2c service-desk ticket ref (e.g. "PO-420974") found anywhere in the description or
    *  the FULL comment history — not just `recentComments`, which is capped at 3 and so
@@ -57,6 +60,7 @@ export const MOCK_TICKET: WocooTicket = {
   reporter: 'Albert Manantan',
   assignee: 'Albert Cai',
   created: '2026-06-08T11:52:00Z',
+  updated: '2026-06-08T11:52:00Z',
   recentComments: [
     {
       author: 'Automation for Jira',

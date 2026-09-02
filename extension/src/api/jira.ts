@@ -1039,6 +1039,7 @@ export async function getTicket(ticketKey: string): Promise<WocooTicket> {
       'priority',
       'issuetype',
       'created',
+      'updated',
       'reporter',
       'assignee',
       'comment',
@@ -1135,6 +1136,7 @@ function mapJiraIssue(key: string, data: any): WocooTicket {
     reporterAccountId: f.reporter?.accountId,
     assignee: f.assignee?.displayName || 'Unassigned',
     created: f.created || new Date().toISOString(),
+    updated: f.updated || f.created || new Date().toISOString(),
     recentComments,
     i2cTicketRef,
     zendeskTranscript: {
