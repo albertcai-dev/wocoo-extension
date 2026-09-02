@@ -55,10 +55,10 @@ export const DESTINATIONS: DestinationConfig[] = [
   {
     key: 'PFO',
     name: 'PFO',
-    fullName: 'Payment Fulfillment Ops',
+    fullName: 'Physical Fulfillment Operations',
     apiEnabled: true,
-    boardUrl: 'https://wealthsimple.atlassian.net/jira/software/c/projects/PFO',
-    notes: 'Card reissues (Express Shipping) and Cheques delivery. DBO handles other operational asks.',
+    boardUrl: 'https://wealthsimple.atlassian.net/jira/software/c/projects/PFO/boards/12356',
+    notes: 'Card fulfillment only. Cheques moved to DBO (Cheque Delivery / Cheque: Stop Payment / Chequebook: Delivery Issue).',
   },
 ];
 
@@ -78,8 +78,17 @@ export interface PrrRequiredField {
   fieldId: string;
   name: string;
   type: PrrFieldType;
-  /** Optional prefill hint from the source WocooTicket. */
-  prefillFrom?: 'identityId' | 'ticketUrl';
+  /** Optional prefill hint. Most resolve from the source WocooTicket.
+   *  'tier' is option-typed — it resolves to an option ID only after createmeta
+   *  loads, so it's applied in a second pass (see applyOptionPrefills).
+   *  'atlasName' / 'atlasAddress' aren't on the ticket at all — they come from a
+   *  headless Atlas scrape that lands after the form has already rendered, so they
+   *  fill in asynchronously (see atlasPrefills). */
+  prefillFrom?: 'identityId' | 'ticketUrl' | 'atlasUrl' | 'tier' | 'atlasName' | 'atlasAddress';
+  /** Jira does NOT require this field — we list it only because we can prefill it for free.
+   *  Excluded from the "all fields filled" gate and skipped in the move payload when blank,
+   *  so a failed prefill can't block a move Jira would have accepted. */
+  optional?: boolean;
 }
 
 export interface PrrIssueTypeConfig {
@@ -255,70 +264,179 @@ export function tierToUserTierLabel(tier: string | null | undefined): UserTier {
   return 'Core';
 }
 
-// ── PFO (Payment Fulfillment Ops) ─────────────────────────────────────────────
-// DBO covers most operational asks but PFO still owns two flows:
-//   • Cheques: Delivery Issue (14658) — minimal form (Summary + Identity ID)
-//   • Express Shipping Request (14656) — card reissues, 7 required custom fields
-// Project + issue-type IDs are hardcoded (stable, not looked up by name).
+// ── PFO (Physical Fulfillment Operations) ─────────────────────────────────────
+// RETARGETED 2026-08-03. The project this branch used to point at — numeric id
+// 13086 — is now "[DEPRECATED] Physical Fulfillment Ops (Old)" under the key
+// OLDPFO. Fulfillment was rebuilt as a NEW project that kept the PFO key, with a
+// completely fresh issue-type and field scheme; its board is
+// /projects/PFO/boards/12356. Nothing carried over except User Tier
+// (customfield_11416). The old ids, for the record:
+//   issuetype 14656 Express Shipping Request  → now 21504
+//   issuetype 14658 Cheques: Delivery Issue   → gone (DBO owns cheques)
+//   customfield_25816 Card Type               → now 25906 (2 options → 6)
+//   customfield_25797 Reissue Reason          → now 25908 (4 options → 7)
+//   customfield_25817 Date that card is needed → now 22962 Requested Date
+//   customfield_25819/25821/25818/25825       → replaced by 25911 Already Reissued?
+//
+// Two deliberate changes so this can't silently rot the same way again:
+//   1. The project ID is NOT hardcoded. lookupProjectAndIssueType('PFO', name)
+//      resolves it at submit, so a future re-key throws a visible error instead of
+//      filing into whatever project happens to hold the stale numeric id.
+//   2. Option labels are NOT hardcoded. They come from createmeta at runtime via
+//      the same PrrFieldInput renderer FRAUD/DBO/PRR use, so option drift (like
+//      Card Type going from 2 to 6 values) shows up in the picker on its own.
+//
+// All nine of the live project's issue types are exposed, matching what Jira's own
+// "Select destination project and issue type" dropdown offers.
+//
+// Per-type field lists follow one rule, applied against createmeta:
+//   - every field Jira marks required=true, EXCEPT `description` (the move carries the
+//     source ticket's description over, which satisfies it);
+//   - plus any optional field we can prefill for free — marked `optional: true` so a
+//     failed prefill can't block a move Jira would have accepted.
+// Optional fields needing manual entry (Resources Used, Date of Last Card Ordered,
+// International Shipping's Requested Date, attachments) are deliberately left out —
+// they're editable in Jira after the move.
+//
+// The lists are NOT uniform, and the differences are Jira's, not ours:
+//   - Upgrade Card Material: Metal has no Atlas URL / User Tier / Cardholder Name in its
+//     field configuration at all, so sending them would be rejected.
+//   - Card Returned to Office is the one type where Final Comms is optional.
+//   - Delivery Status: Tracking Number has Cardholder Name optional; every other
+//     card type requires it.
+//   - Internal Projects and Bug require nothing — they render an empty form.
 
-export const PFO_PROJECT_ID = '13086';
-export const PFO_EXPRESS_SHIPPING_ISSUETYPE_ID = '14656';
-export const PFO_CHEQUES_DELIVERY_ISSUETYPE_ID = '14658';
+export const PFO_PROJECT_KEY = 'PFO';
 
-// Express Shipping Request (issuetype 14656) required-field IDs. Four fields
-// (DID_REISSUE, CX_KEEPS_OWNERSHIP, UNABLE_REISSUE_REASON, KEEP_OWNERSHIP_REASON)
-// are hidden in the UI and hardcoded on submit — the flow only fires for tickets
-// that aren't already card-reissued and where CX keeps ownership, and the two
-// text follow-ups are conditionally required by Jira whenever those answers are
-// "No" / "Yes".
-export const EXPRESS_SHIPPING_FIELDS = {
-  SUMMARY:               'summary',
-  IDENTITY_ID:           'customfield_11458',
-  CARD_TYPE:             'customfield_25816',
-  USER_TIER:             'customfield_11416',
-  REISSUE_REASON:        'customfield_25797',
-  DATE_NEEDED:           'customfield_25817',
-  DID_REISSUE:           'customfield_25819',
-  CX_KEEPS_OWNERSHIP:    'customfield_25821',
-  UNABLE_REISSUE_REASON: 'customfield_25818',
-  KEEP_OWNERSHIP_REASON: 'customfield_25825',
-} as const;
+const F_PFO_IDENTITY    = { fieldId: 'customfield_11458', name: 'User Identity ID', type: 'string' as const,    prefillFrom: 'identityId' as const };
+const F_PFO_ATLAS_URL   = { fieldId: 'customfield_14546', name: 'Atlas URL Field',  type: 'string' as const,    prefillFrom: 'atlasUrl' as const };
+const F_PFO_TIER        = { fieldId: 'customfield_11416', name: 'User Tier',        type: 'option' as const,    prefillFrom: 'tier' as const };
+const F_PFO_CARDHOLDER  = { fieldId: 'customfield_25907', name: 'Cardholder Name',  type: 'string' as const,    prefillFrom: 'atlasName' as const };
+const F_PFO_SHIPPING    = { fieldId: 'customfield_25865', name: 'Shipping Address', type: 'paragraph' as const, prefillFrom: 'atlasAddress' as const };
+const F_PFO_CARD_TYPE   = { fieldId: 'customfield_25906', name: 'Card Type',        type: 'option' as const };
+const F_PFO_REISSUE     = { fieldId: 'customfield_25908', name: 'Reissue Reason',   type: 'option' as const };
+const F_PFO_FINAL_COMMS = { fieldId: 'customfield_25919', name: 'Does CX Need to Send Final Comms to the Client', type: 'option' as const };
 
-// Card Type options — labels match Jira; resolved to option IDs via resolveOptionId at submit.
-export const CARD_TYPE_LABELS = ['Credit Card', 'Prepaid Mastercard'] as const;
-export type CardType = (typeof CARD_TYPE_LABELS)[number];
+export const PFO_ISSUE_TYPES: PrrIssueTypeConfig[] = [
+  {
+    id: '21504',
+    name: 'Express Shipping Request',
+    description: 'Card reissue that needs expedited delivery. Card Type lists every live card product — pick the client\'s actual card.',
+    requiredFields: [
+      F_PFO_IDENTITY,
+      F_PFO_ATLAS_URL,
+      F_PFO_TIER,
+      F_PFO_CARDHOLDER,
+      F_PFO_CARD_TYPE,
+      { fieldId: 'customfield_25911', name: 'Already Reissued?', type: 'option' },
+      F_PFO_REISSUE,
+      { fieldId: 'customfield_22962', name: 'Requested Date',    type: 'date' },
+      F_PFO_SHIPPING,
+      { fieldId: 'customfield_25910', name: 'Reason for Express Shipping', type: 'paragraph' },
+      F_PFO_FINAL_COMMS,
+    ],
+  },
+  {
+    id: '21505',
+    name: 'Delivery Status: Tracking Number',
+    description: 'Client wants to know where a dispatched card is. Fulfillment looks up the courier tracking number.',
+    requiredFields: [
+      F_PFO_IDENTITY,
+      F_PFO_ATLAS_URL,
+      F_PFO_TIER,
+      { ...F_PFO_CARDHOLDER, optional: true },
+      F_PFO_CARD_TYPE,
+      F_PFO_FINAL_COMMS,
+    ],
+  },
+  {
+    id: '21506',
+    name: 'PO Box Redirect',
+    description: 'Card can\'t be delivered to the address on file because it\'s a PO Box — redirect to a deliverable address.',
+    requiredFields: [
+      F_PFO_IDENTITY,
+      F_PFO_ATLAS_URL,
+      F_PFO_TIER,
+      F_PFO_CARDHOLDER,
+      F_PFO_CARD_TYPE,
+      F_PFO_SHIPPING,
+      F_PFO_FINAL_COMMS,
+    ],
+  },
+  {
+    id: '21507',
+    name: 'International Shipping',
+    description: 'Card needs to go to an address outside Canada. Requires a justification for the exception.',
+    requiredFields: [
+      F_PFO_IDENTITY,
+      F_PFO_ATLAS_URL,
+      F_PFO_TIER,
+      F_PFO_CARDHOLDER,
+      F_PFO_CARD_TYPE,
+      F_PFO_SHIPPING,
+      { fieldId: 'customfield_25914', name: 'Reason for International Shipping', type: 'paragraph' },
+      F_PFO_FINAL_COMMS,
+    ],
+  },
+  {
+    id: '21509',
+    name: 'Card Returned to Office',
+    description: 'A dispatched card came back to the office undelivered. Confirm the shipping address before it\'s re-sent.',
+    requiredFields: [
+      F_PFO_IDENTITY,
+      F_PFO_ATLAS_URL,
+      F_PFO_TIER,
+      F_PFO_CARDHOLDER,
+      F_PFO_CARD_TYPE,
+      F_PFO_SHIPPING,
+    ],
+  },
+  {
+    id: '21510',
+    name: 'Upgrade Card Material: Metal',
+    description: 'Client is eligible for and wants the metal card. Atlas URL, User Tier and Cardholder Name aren\'t on this type\'s Jira screen.',
+    requiredFields: [
+      F_PFO_IDENTITY,
+      F_PFO_CARD_TYPE,
+      F_PFO_REISSUE,
+      F_PFO_SHIPPING,
+      F_PFO_FINAL_COMMS,
+    ],
+  },
+  {
+    id: '10737',
+    name: 'Other',
+    description: 'Fulfillment request that doesn\'t fit the types above. Explain it in the move reason — it carries into the ticket.',
+    requiredFields: [
+      F_PFO_IDENTITY,
+      { ...F_PFO_ATLAS_URL, optional: true },
+      F_PFO_TIER,
+      F_PFO_CARD_TYPE,
+      F_PFO_FINAL_COMMS,
+    ],
+  },
+  {
+    id: '10682',
+    name: 'Internal Projects',
+    description: 'Fulfillment\'s own project work — not a client request. Jira requires no fields on this type.',
+    requiredFields: [],
+  },
+  {
+    id: '10004',
+    name: 'Bug',
+    description: 'A defect in fulfillment tooling, not a client request. Jira requires no fields on this type.',
+    requiredFields: [
+      { ...F_PFO_IDENTITY,   optional: true },
+      { ...F_PFO_ATLAS_URL,  optional: true },
+      { ...F_PFO_TIER,       optional: true },
+      { ...F_PFO_CARDHOLDER, optional: true },
+    ],
+  },
+];
 
-// Reissue Reason — 4 labels observed in real PFO tickets. Others exist in Jira
-// (visible in the createmeta call); add on demand.
-export const REISSUE_REASON_LABELS = [
-  'Failed Delivery (It\'s been > 15 days)',
-  'Upgrade Card Material',
-  'Fraud',
-  'Other',
-] as const;
-
-// PFO work-type picker labels — three-way choice at the top of the PFO branch.
-// Credit Card / Prepaid Card both route to Express Shipping Request (14656);
-// Cheques routes to Cheques: Delivery Issue (14658).
-export const PFO_API_SUPPORTED_WORK_TYPES = [
-  'Credit Card: Delivery Issue',
-  'Prepaid Card: Delivery Issue',
-  'Cheques: Delivery Issue',
-] as const;
-export type PfoWorkType = (typeof PFO_API_SUPPORTED_WORK_TYPES)[number];
-
-export function recommendedCardType(workType: string | null | undefined): CardType {
-  return /prepaid/i.test(workType || '') ? 'Prepaid Mastercard' : 'Credit Card';
-}
-
-export function recommendedPfoWorkType(workType: string | null | undefined): PfoWorkType {
-  const wt = (workType || '').toLowerCase();
-  if (/prepaid/.test(wt)) return 'Prepaid Card: Delivery Issue';
-  if (/cheque/.test(wt)) return 'Cheques: Delivery Issue';
-  return 'Credit Card: Delivery Issue';
-}
-
-// ── DBO (Digital Branch Operations) — replaces PFO as of 2026-07 ──────────────
+// ── DBO (Digital Branch Operations) ───────────────────────────────────────────
+// Took over most of the old PFO's operational scope in 2026-07, including cheques.
+// PFO (above) is still live and owns card fulfillment.
 // DBO has 9 issue types with mixed required-field sets. Structure mirrors PRR: each
 // entry lists the extension-required fields (a mix of Jira-required plus a couple
 // prefillable ones we surface for convenience). Option labels are resolved at runtime

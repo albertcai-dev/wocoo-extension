@@ -16,6 +16,7 @@ import type { WocooTicket } from '../data/mockTicket';
 import { fetchAtlasClientDetailsHeadless } from '../data/atlasAccountLookup';
 import { addAttachment, base64ToBlob, getMyself, postComment } from '../api/jira';
 import { createRefundLetterViaBridge, type RefundLetterResult } from '../api/bridge';
+import { fetchI2cCardDetailsHeadless, I2C_LOGIN_URL, type I2cCard } from '../data/i2cCardLookup';
 
 type StepNum = 1 | 2 | 3 | 4;
 
@@ -60,6 +61,13 @@ export function RefundAuthLetterWorkflow({ ticket, onClose }: { ticket: WocooTic
   const [declineReason, setDeclineReason] = useState(DECLINE_REASONS[0]);
   const [agentFirstName, setAgentFirstName] = useState('');
   const [letterDate, setLetterDate] = useState(formatLetterDate(new Date()));
+  // "The refund … was declined" vs "The refunds … were declined". Auto-follows the dates
+  // field until the agent overrides it (two refunds on one date is a real case).
+  const [multipleRefunds, setMultipleRefunds] = useState<boolean | null>(null);
+  const refundsArePlural = multipleRefunds ?? looksLikeMultipleDates(refundDates);
+  const [i2cState, setI2cState] = useState<'idle' | 'pending' | 'done' | 'error'>('idle');
+  const [i2cError, setI2cError] = useState<string | null>(null);
+  const [i2cCards, setI2cCards] = useState<I2cCard[]>([]);
 
   // Step 3 — generation
   const [busy, setBusy] = useState(false);
@@ -73,6 +81,15 @@ export function RefundAuthLetterWorkflow({ ticket, onClose }: { ticket: WocooTic
     void runAtlasFetch();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ticket.identityId]);
+
+  // Same for i2c the moment step 2 opens. Deferred until then rather than run on mount
+  // so we don't spend the i2c login chain on a workflow the agent backs out of at step 1.
+  // The `idle` check keeps a Back-then-Continue from re-fetching.
+  useEffect(() => {
+    if (step !== 2 || i2cState !== 'idle' || !ticket.clientEmail) return;
+    void runI2cFetch();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, ticket.clientEmail]);
 
   // Default the sign-off to the signed-in agent's first name.
   useEffect(() => {
@@ -92,10 +109,10 @@ export function RefundAuthLetterWorkflow({ ticket, onClose }: { ticket: WocooTic
     setAtlasError(null);
     try {
       const d = await fetchAtlasClientDetailsHeadless({ identityId: ticket.identityId, sourceTicketId: ticket.id });
-      if (d.name) setClientName(d.name);
-      if (d.street) setStreet(d.street);
-      if (d.cityProvince) setCityProvince(d.cityProvince);
-      if (d.postal) setPostal(d.postal);
+      if (d.name) setClientName(titleCaseName(d.name));
+      if (d.street) setStreet(clean(d.street));
+      if (d.cityProvince) setCityProvince(clean(d.cityProvince));
+      if (d.postal) setPostal(clean(d.postal));
       setAtlasPartial(!d.complete);
       setAtlasState('done');
     } catch (e) {
@@ -103,6 +120,63 @@ export function RefundAuthLetterWorkflow({ ticket, onClose }: { ticket: WocooTic
       setAtlasState('error');
     }
   }
+
+  async function runI2cFetch() {
+    if (!ticket.clientEmail) { setI2cError('This ticket has no client email, which i2c needs to find the customer.'); setI2cState('error'); return; }
+    setI2cState('pending');
+    setI2cError(null);
+    try {
+      const cards = await fetchI2cCardDetailsHeadless({ clientEmail: ticket.clientEmail, sourceTicketId: ticket.id });
+      setI2cCards(cards);
+      setI2cState('done');
+      if (cards.length === 0) {
+        setI2cError('No cards found on the i2c customer page.');
+      } else {
+        // i2c labels the reissued card ACTIVE and the declined one CLOSED CARD, so when
+        // there's exactly one of each the assignment is unambiguous. Anything else stays
+        // manual via the chips below.
+        const closed = cards.filter((c) => c.closed);
+        const active = cards.filter((c) => !c.closed);
+        if (closed.length === 1 && !closedCardLast4) setClosedCardLast4(closed[0].last4);
+        if (active.length === 1 && !newCardLast4) setNewCardLast4(active[0].last4);
+        if (closed.length !== 1 || active.length !== 1) {
+          setI2cError(`Found ${cards.length} cards but couldn't tell closed from new automatically — pick below.`);
+        }
+      }
+    } catch (e) {
+      setI2cError(e instanceof Error ? e.message : String(e));
+      setI2cState('error');
+    }
+  }
+
+  /** Clicking a found card fills the closed field first, then the new one. */
+  function assignCard(last4: string) {
+    if (!closedCardLast4) setClosedCardLast4(last4);
+    else if (!newCardLast4) setNewCardLast4(last4);
+    else setNewCardLast4(last4);
+  }
+
+  const openAtlas = () => {
+    if (!ticket.identityId) return;
+    window.open(`https://atlas.wealthsimple.com/identity/${ticket.identityId}/overview/?ticketId=${ticket.id}`, '_blank', 'noopener,noreferrer');
+  };
+
+  const openI2c = () => {
+    if (ticket.clientEmail) {
+      // Same `card_details` flow as the headless fetch: it logs in, searches, and stops
+      // on the results page — which already lists the Accounts and Primary Card(s). The
+      // generic flow would click "Continue with this Customer" and land on Account
+      // Summary, past the cards we opened this to look at.
+      void chrome.storage.local.set({
+        pending_i2c_email: ticket.clientEmail,
+        pending_i2c_flow: 'card_details',
+        pending_i2c_source_ticket_id: ticket.id,
+        pending_i2c_started_at: Date.now(),
+      });
+      void chrome.storage.local.remove(['pending_i2c_ticket_url', 'pending_i2c_admin_debit_amount']);
+    }
+    window.open(I2C_LOGIN_URL, '_blank', 'noopener,noreferrer');
+  };
 
   const step1Ready = Boolean(clientName.trim() && street.trim() && cityProvince.trim() && postal.trim());
   const step2Ready = Boolean(
@@ -119,15 +193,17 @@ export function RefundAuthLetterWorkflow({ ticket, onClose }: { ticket: WocooTic
     setWarning(null);
     try {
       const res = await createRefundLetterViaBridge({
-        clientName: clientName.trim(),
-        addressStreet: street.trim(),
-        addressCityProvince: cityProvince.trim(),
-        addressPostal: postal.trim(),
-        closedCardLast4: closedCardLast4.trim(),
-        newCardLast4: newCardLast4.trim(),
-        refundDates: refundDates.trim(),
-        declineReason: declineReason.trim(),
-        agentFirstName: agentFirstName.trim(),
+        clientName: clean(clientName),
+        addressStreet: clean(street),
+        addressCityProvince: clean(cityProvince),
+        addressPostal: clean(postal),
+        closedCardLast4: clean(closedCardLast4),
+        newCardLast4: clean(newCardLast4),
+        refundDates: clean(refundDates),
+        declineReason: clean(declineReason),
+        agentFirstName: clean(agentFirstName),
+        refundNoun: refundsArePlural ? 'refunds' : 'refund',
+        refundVerb: refundsArePlural ? 'were' : 'was',
         letterDate: letterDate.trim() || undefined,
         wocooTicketId: ticket.id,
         includePdfBase64: true,
@@ -167,6 +243,16 @@ export function RefundAuthLetterWorkflow({ ticket, onClose }: { ticket: WocooTic
   return (
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100%', background: 'var(--mint-bg-page)' }}>
       <Header step={step} ticketId={ticket.id} onClose={onClose} />
+      {/* Reference links — open the source systems to eyeball the address (Atlas) and
+          the cards (i2c) without leaving the workflow. */}
+      <div style={{ display: 'flex', gap: 'var(--mint-sp-2)', padding: 'var(--mint-sp-3) var(--mint-sp-3) 0' }}>
+        <button onClick={openAtlas} disabled={!ticket.identityId} title={ticket.identityId ? "Open this client's Atlas overview" : 'No identity ID on this ticket'} style={{ ...refLinkButton, background: 'var(--mint-positive-fg-graphic)', opacity: ticket.identityId ? 1 : 0.5, cursor: ticket.identityId ? 'pointer' : 'not-allowed' }}>
+          ↗ Atlas
+        </button>
+        <button onClick={openI2c} disabled={!ticket.clientEmail} title={ticket.clientEmail ? 'Open i2c and search this client' : 'No client email on this ticket'} style={{ ...refLinkButton, background: 'var(--mint-warning-fg-graphic)', opacity: ticket.clientEmail ? 1 : 0.5, cursor: ticket.clientEmail ? 'pointer' : 'not-allowed' }}>
+          ↗ i2c
+        </button>
+      </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--mint-sp-2)', padding: 'var(--mint-sp-3)' }}>
         {step === 4 && result ? (
           <SuccessPanel result={result} warning={warning} ticketId={ticket.id} onCloseToTicket={onClose} />
@@ -187,10 +273,10 @@ export function RefundAuthLetterWorkflow({ ticket, onClose }: { ticket: WocooTic
                       ) : null}
                     </div>
                     {atlasError ? <ErrorLine text={atlasError} /> : null}
-                    <Field label="Client full legal name" value={clientName} onChange={setClientName} placeholder="Gregory Moneta" />
-                    <Field label="Street (incl. unit)" value={street} onChange={setStreet} placeholder="52 Johnson Street" />
-                    <Field label="City, Province" value={cityProvince} onChange={setCityProvince} placeholder="Thornhill, ON" />
-                    <Field label="Postal code" value={postal} onChange={setPostal} placeholder="L3T 2N7" />
+                    <Field label="Client full legal name" value={clientName} onChange={setClientName} />
+                    <Field label="Street (incl. unit)" value={street} onChange={setStreet} />
+                    <Field label="City, Province" value={cityProvince} onChange={setCityProvince} />
+                    <Field label="Postal code" value={postal} onChange={setPostal} />
                     <button onClick={() => setStep(2)} disabled={!step1Ready} style={{ ...primaryButton, width: '100%', marginTop: 'var(--mint-sp-2)', opacity: step1Ready ? 1 : 0.5, cursor: step1Ready ? 'pointer' : 'not-allowed' }}>
                       Continue
                     </button>
@@ -205,9 +291,42 @@ export function RefundAuthLetterWorkflow({ ticket, onClose }: { ticket: WocooTic
               <ExpandedCard n={2} completed={step > 2}>
                 {step === 2 ? (
                   <>
-                    <Field label="Closed card — last 4" value={closedCardLast4} onChange={setClosedCardLast4} placeholder="1678" inputMode="numeric" maxLength={4} />
-                    <Field label="New card — last 4" value={newCardLast4} onChange={setNewCardLast4} placeholder="5777" inputMode="numeric" maxLength={4} />
-                    <Field label="Declined refund date(s)" value={refundDates} onChange={setRefundDates} placeholder="June 7 2026 and May 18 2026" />
+                    <div style={{ display: 'flex', gap: 'var(--mint-sp-2)', alignItems: 'center', marginBottom: 'var(--mint-sp-2)' }}>
+                      <button onClick={() => { void runI2cFetch(); }} disabled={i2cState === 'pending' || !ticket.clientEmail} style={{ ...secondaryButton, opacity: i2cState === 'pending' || !ticket.clientEmail ? 0.6 : 1 }}>
+                        {i2cState === 'pending' ? '… Fetching from i2c' : '↗ Fetch from i2c'}
+                      </button>
+                      {i2cState === 'done' && i2cCards.length > 0 ? (
+                        <span style={{ fontSize: 'var(--mint-text-micro)', color: 'var(--mint-positive-fg-strong)' }}>✓ {i2cCards.length} card{i2cCards.length === 1 ? '' : 's'}</span>
+                      ) : null}
+                    </div>
+                    {i2cError ? <ErrorLine text={i2cError} /> : null}
+                    {i2cCards.length > 0 ? (
+                      <div style={{ marginBottom: 'var(--mint-sp-2)' }}>
+                        <div style={{ fontSize: 'var(--mint-text-nano)', color: 'var(--mint-fg-soft)', marginBottom: 4 }}>
+                          Found in i2c — click to re-assign (closed first, then new):
+                        </div>
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                          {i2cCards.map((c) => (
+                            <button key={c.last4} onClick={() => assignCard(c.last4)} style={cardChipStyle}>
+                              ••{c.last4}{c.status ? ` · ${c.status}` : ''}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+                    <Field label="Closed card — last 4" value={closedCardLast4} onChange={setClosedCardLast4} inputMode="numeric" maxLength={4} />
+                    <Field label="New card — last 4" value={newCardLast4} onChange={setNewCardLast4} inputMode="numeric" maxLength={4} />
+                    <Field label="Declined refund date(s)" value={refundDates} onChange={setRefundDates} />
+                    <label style={fieldLabelStyle}>How many refunds were declined?</label>
+                    <select
+                      value={refundsArePlural ? 'many' : 'one'}
+                      onChange={(e) => setMultipleRefunds(e.target.value === 'many')}
+                      style={{ ...inputStyle }}
+                      aria-label="Number of declined refunds"
+                    >
+                      <option value="one">One — “The refund … was declined”</option>
+                      <option value="many">More than one — “The refunds … were declined”</option>
+                    </select>
                     <label style={fieldLabelStyle}>Reason the refund was declined</label>
                     <select value={DECLINE_REASONS.includes(declineReason) ? declineReason : ''} onChange={(e) => { if (e.target.value) setDeclineReason(e.target.value); }} style={{ ...inputStyle, marginBottom: 4 }}>
                       {DECLINE_REASONS.map((r) => <option key={r} value={r}>{r}</option>)}
@@ -217,8 +336,8 @@ export function RefundAuthLetterWorkflow({ ticket, onClose }: { ticket: WocooTic
                     <div style={{ fontSize: 'var(--mint-text-nano)', color: 'var(--mint-fg-soft)', marginBottom: 'var(--mint-sp-2)' }}>
                       Reads: “…were declined because {declineReason || '…'}.”
                     </div>
-                    <Field label="Letter date" value={letterDate} onChange={setLetterDate} placeholder="Mon July 20 2026" />
-                    <Field label="Your first name (sign-off)" value={agentFirstName} onChange={setAgentFirstName} placeholder="Albert" />
+                    <Field label="Letter date" value={letterDate} onChange={setLetterDate} />
+                    <Field label="CXA first name" value={agentFirstName} onChange={setAgentFirstName} />
                     <div style={{ display: 'flex', gap: 'var(--mint-sp-2)', marginTop: 'var(--mint-sp-2)' }}>
                       <button onClick={() => setStep(1)} style={secondaryButton}>← Back</button>
                       <button onClick={() => setStep(3)} disabled={!step2Ready} style={{ ...primaryButton, flex: 1, opacity: step2Ready ? 1 : 0.5, cursor: step2Ready ? 'pointer' : 'not-allowed' }}>
@@ -247,6 +366,8 @@ export function RefundAuthLetterWorkflow({ ticket, onClose }: { ticket: WocooTic
                   refundDates={refundDates}
                   declineReason={declineReason}
                   agentFirstName={agentFirstName}
+                  refundNoun={refundsArePlural ? 'refunds' : 'refund'}
+                  refundVerb={refundsArePlural ? 'were' : 'was'}
                 />
                 {error ? <ErrorLine text={error} /> : null}
                 <div style={{ display: 'flex', gap: 'var(--mint-sp-2)', marginTop: 'var(--mint-sp-3)' }}>
@@ -276,6 +397,7 @@ export function RefundAuthLetterWorkflow({ ticket, onClose }: { ticket: WocooTic
 function LetterPreview(p: {
   letterDate: string; clientName: string; street: string; cityProvince: string; postal: string;
   closedCardLast4: string; newCardLast4: string; refundDates: string; declineReason: string; agentFirstName: string;
+  refundNoun: string; refundVerb: string;
 }) {
   return (
     <div style={{ padding: 'var(--mint-sp-3)', background: 'var(--mint-bg-subtle)', border: 'var(--mint-card-stroke)', borderRadius: 'var(--mint-radius-card)', fontSize: 'var(--mint-text-micro)', lineHeight: 1.7, color: 'var(--mint-fg-strong)', whiteSpace: 'pre-wrap' }}>
@@ -292,7 +414,7 @@ ${p.postal}
 Closed Visa Credit Card Number Last 4 Digits: ${p.closedCardLast4}
 New Visa Credit Card Number Last 4 Digits: ${p.newCardLast4}
 
-The refunds processed on ${p.refundDates} were declined because ${p.declineReason}. The client has an active card account with last four digits ${p.newCardLast4} and is able to receive a refund. Please void the old refund and post to this account.
+The ${p.refundNoun} processed on ${p.refundDates} ${p.refundVerb} declined because ${p.declineReason}. The client has an active card account with last four digits ${p.newCardLast4} and is able to receive a refund. Please void the old refund and post to this account.
 
 Please feel free to contact us at support@wealthsimple.com or at +1 (…) if there is anything else we can further assist you with.
 
@@ -348,7 +470,7 @@ function Header({ step, ticketId, onClose }: { step: StepNum; ticketId: string; 
         <span style={{ marginLeft: 'auto', fontSize: 'var(--mint-text-nano)', color: 'var(--mint-fg-soft)' }}>Step {Math.min(step, 3)} of 3</span>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-        <h2 style={{ margin: 0, fontSize: 'var(--mint-text-h-md)', fontWeight: 700, color: 'var(--mint-fg-strong)' }}>Refund auth letter</h2>
+        <h2 style={{ margin: 0, fontSize: 'var(--mint-text-h-md)', fontWeight: 700, color: 'var(--mint-fg-strong)' }}>Refund Auth Letter</h2>
         <ProgressDots step={step} />
       </div>
     </header>
@@ -414,8 +536,8 @@ function Summary({ lines }: { lines: string[] }) {
   );
 }
 
-function Field({ label, value, onChange, placeholder, inputMode, maxLength }: {
-  label: string; value: string; onChange: (v: string) => void; placeholder?: string;
+function Field({ label, value, onChange, inputMode, maxLength }: {
+  label: string; value: string; onChange: (v: string) => void;
   inputMode?: 'numeric' | 'text'; maxLength?: number;
 }) {
   return (
@@ -424,7 +546,6 @@ function Field({ label, value, onChange, placeholder, inputMode, maxLength }: {
       <input
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
         inputMode={inputMode}
         maxLength={maxLength}
         style={inputStyle}
@@ -456,6 +577,29 @@ function stepNumberCircleStyle(filled: boolean): React.CSSProperties {
 // helpers + styles
 // ============================================================
 
+/** Collapse embedded newlines/tabs — they'd become real line breaks in the Doc. */
+function clean(v: string): string {
+  return (v || '').replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Atlas stores names however the client typed them, so they arrive all-lowercase or
+ * ALL-CAPS. Re-case only those; anything already mixed-case (McDonald, van Dijk) is left
+ * alone, and the field stays editable either way.
+ */
+function titleCaseName(raw: string): string {
+  const name = clean(raw);
+  if (!name) return name;
+  const isUniformCase = name === name.toLowerCase() || name === name.toUpperCase();
+  if (!isUniformCase) return name;
+  return name.toLowerCase().replace(/(^|[\s'\u2019-])([a-z])/g, (_m, sep: string, ch: string) => sep + ch.toUpperCase());
+}
+
+/** Two dates, or a list — "June 7 2026 and May 18 2026", "July 1, July 8". */
+function looksLikeMultipleDates(v: string): boolean {
+  return /\band\b|[,;&]|\+/i.test(v || '');
+}
+
 /** Template format, e.g. "Mon July 20 2026". */
 function formatLetterDate(d: Date): string {
   const weekday = d.toLocaleDateString('en-CA', { weekday: 'short' });
@@ -482,6 +626,28 @@ const inputStyle: React.CSSProperties = {
   background: 'var(--mint-bg-card)',
   color: 'var(--mint-fg-strong)',
   boxSizing: 'border-box',
+};
+
+const refLinkButton: React.CSSProperties = {
+  flex: 1,
+  padding: '8px 14px',
+  borderRadius: 'var(--mint-radius-button)',
+  fontWeight: 600,
+  fontSize: 'var(--mint-text-meta)',
+  border: 'none',
+  color: '#ffffff',
+  minHeight: 36,
+};
+
+const cardChipStyle: React.CSSProperties = {
+  padding: '4px 10px',
+  borderRadius: 9999,
+  border: 'var(--mint-card-stroke)',
+  background: 'var(--mint-bg-card)',
+  color: 'var(--mint-fg-strong)',
+  fontSize: 'var(--mint-text-nano)',
+  fontWeight: 600,
+  cursor: 'pointer',
 };
 
 const primaryButton: React.CSSProperties = {

@@ -205,6 +205,12 @@ function MCVModal({ record, onClose, onSent }: { record: MCVRecord; onClose: () 
           </div>
         ) : null}
 
+        {(record.notes || []).length > 0 ? (
+          <ul style={{ margin: 0, padding: '8px 12px', background: 'var(--mint-bg-subtle)', border: 'var(--mint-card-stroke)', borderRadius: 'var(--mint-radius-button)', listStyle: 'disc', paddingLeft: 24, fontSize: 'var(--mint-text-nano)', color: 'var(--mint-fg-soft)' }}>
+            {(record.notes || []).map((n, i) => <li key={i}>{n}</li>)}
+          </ul>
+        ) : null}
+
         {isAnomaly ? (
           <>
             <ul style={{ margin: 0, padding: '8px 12px', background: 'var(--mint-warning-bg-soft)', border: '1px solid var(--mint-warning-fg-graphic)', borderRadius: 'var(--mint-radius-button)', listStyle: 'disc', paddingLeft: 24, fontSize: 'var(--mint-text-nano)', color: 'var(--mint-warning-fg-strong)' }}>

@@ -366,10 +366,18 @@ export const REIMB_TIER_IDS = {
   Generation: '18270',
 } as const;
 
+// Luke / Amanda drive the amount-based default (see defaultApproverKey); Vivian is a
+// manual-only option — no amount threshold routes to her.
 export const REIMB_APPROVERS = {
   luke:   { name: 'Luke Gazmin',  accountId: '712020:9afdb43a-362c-4a1e-a2bd-99df2619b105' },
   amanda: { name: 'Amanda Burke', accountId: '62006b10ed02400069a11d5a' },
+  vivian: { name: 'Vivian Duong', accountId: '62005ead539d790069dcf6a9' },
 } as const;
+
+export type ReimbApproverKey = keyof typeof REIMB_APPROVERS;
+
+/** Stable order for approver pickers. */
+export const REIMB_APPROVER_KEYS = ['luke', 'amanda', 'vivian'] as const satisfies readonly ReimbApproverKey[];
 
 export interface CreateReimbArgs {
   wocooTicketId: string;
@@ -1084,6 +1092,20 @@ function mapJiraIssue(key: string, data: any): WocooTicket {
     body: extractDescription(c.body) || '',
   }));
 
+  // Scan the WHOLE history, not `recentComments` — the "i2c ticket created" comment is
+  // typically one of the first replies, so on any ticket with more than three comments
+  // the last-3 slice has already dropped it. Chronological order, so the newest ref wins.
+  //
+  // Each source is scanned in both rendered and raw-ADF form: extractDescription emits
+  // text nodes only and drops link hrefs, so a link whose anchor text isn't the URL would
+  // otherwise hide the ref. Reading the raw JSON here keeps that fix local rather than
+  // changing extractDescription, which every detector heuristic also consumes.
+  const i2cScanSources: string[] = [description, rawJson(f.description)];
+  for (const c of (f.comment?.comments ?? [])) {
+    i2cScanSources.push(extractDescription(c.body) || '', rawJson(c.body));
+  }
+  const i2cTicketRef = extractI2cTicketRef(i2cScanSources);
+
   // Total Reimbursement Amount is usually stored as a negative number on overpayment
   // tickets (it mirrors the credit balance on the card), so normalise to a magnitude.
   const rawAmount = f[FIELD_TOTAL_REIMB_AMOUNT];
@@ -1114,12 +1136,45 @@ function mapJiraIssue(key: string, data: any): WocooTicket {
     assignee: f.assignee?.displayName || 'Unassigned',
     created: f.created || new Date().toISOString(),
     recentComments,
+    i2cTicketRef,
     zendeskTranscript: {
       // Phase B-1 doesn't include Zendesk scraping; the panel will fall back to a
       // "couldn't auto-capture" state once the transcript card is wired to live data.
       state: 'partial',
     },
   };
+}
+
+/** ADF (or any value) as a searchable string. Only used for regex scanning, so a
+ *  stringify failure just means "nothing to match here". */
+function rawJson(v: any): string {
+  if (!v || typeof v === 'string') return '';
+  try { return JSON.stringify(v); } catch { return ''; }
+}
+
+/** Pull an i2c service-desk ticket ref out of ticket prose.
+ *
+ *  Two shapes, in priority order:
+ *    1. An i2cinc.com service-desk URL — `…/servicedesk/customer/portal/2/PO-420974`.
+ *       Unambiguous, so any project prefix is accepted (PO, CS, …).
+ *    2. A bare `PO-12345`. Distinctive enough to match on its own; other prefixes are
+ *       NOT matched bare, since a loose `CS-\d+` would collide with ordinary text.
+ *
+ *  `sources` is scanned newest-last, and the last match wins — a ticket re-raised with i2c
+ *  should point at its current ref, not the first one ever mentioned. */
+export function extractI2cTicketRef(sources: string[]): string {
+  const url = /i2cinc\.com\/[^\s)]*?\/portal\/\d+\/([A-Z]{2,6}-\d+)/gi;
+  const bare = /\bPO-\d{4,}\b/gi;
+  let found = '';
+  for (const text of sources) {
+    if (!text) continue;
+    let inThis = '';
+    for (const m of text.matchAll(url)) inThis = m[1].toUpperCase();
+    // Only fall back to a bare ref when this source had no URL form.
+    if (!inThis) for (const m of text.matchAll(bare)) inThis = m[0].toUpperCase();
+    if (inThis) found = inThis;
+  }
+  return found;
 }
 
 /** Convert Atlassian's ADF (Atlassian Document Format) JSON to plain text, best-effort. */

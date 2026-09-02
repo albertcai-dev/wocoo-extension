@@ -22,6 +22,8 @@ import {
 } from '../data/reimbConfig';
 import {
   REIMB_APPROVERS,
+  REIMB_APPROVER_KEYS,
+  type ReimbApproverKey,
   searchJiraUsers,
   type JiraUserSearchResult,
   createReimbTicketFromForm,
@@ -50,7 +52,7 @@ export function CreateReimbModal({ ticket, onClose, onCreated }: {
   const [requestorTeam, setRequestorTeam] = useState<string>(MODAL_DEFAULTS.requestorTeam);
   const [incidentRelated, setIncidentRelated] = useState<IncidentRelated>(MODAL_DEFAULTS.incidentRelated);
 
-  // Approver — Luke / Amanda quick-pick OR free Jira user search
+  // Approver — Luke / Amanda / Vivian quick-pick OR free Jira user search
   type ApproverChoice = { accountId: string; displayName: string };
   const initialAmount = ticket.totalReimbursementAmount ?? null;
   const initialApproverKey = defaultApproverKey(initialAmount);
@@ -457,7 +459,7 @@ function ApproverPicker({ value, onChange, locked }: {
   const debounceRef = useRef<number | null>(null);
 
   // Quick-pick handler
-  function pickQuick(key: 'luke' | 'amanda') {
+  function pickQuick(key: ReimbApproverKey) {
     const info = REIMB_APPROVERS[key];
     onChange({ accountId: info.accountId, displayName: info.name });
     setQuery('');
@@ -488,26 +490,23 @@ function ApproverPicker({ value, onChange, locked }: {
     return () => { if (debounceRef.current) window.clearTimeout(debounceRef.current); };
   }, [query]);
 
-  const isLuke = value.accountId === REIMB_APPROVERS.luke.accountId;
-  const isAmanda = value.accountId === REIMB_APPROVERS.amanda.accountId;
-
   return (
     <>
-      <div style={{ display: 'flex', gap: 'var(--mint-sp-2)', marginBottom: 6 }}>
-        <button
-          disabled={locked}
-          onClick={() => pickQuick('luke')}
-          style={quickPickStyle(isLuke, locked)}
-        >
-          {isLuke ? '✓ ' : ''}{REIMB_APPROVERS.luke.name}
-        </button>
-        <button
-          disabled={locked}
-          onClick={() => pickQuick('amanda')}
-          style={quickPickStyle(isAmanda, locked)}
-        >
-          {isAmanda ? '✓ ' : ''}{REIMB_APPROVERS.amanda.name}
-        </button>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--mint-sp-2)', marginBottom: 6 }}>
+        {REIMB_APPROVER_KEYS.map((k) => {
+          const info = REIMB_APPROVERS[k];
+          const active = value.accountId === info.accountId;
+          return (
+            <button
+              key={k}
+              disabled={locked}
+              onClick={() => pickQuick(k)}
+              style={quickPickStyle(active, locked)}
+            >
+              {active ? '✓ ' : ''}{info.name}
+            </button>
+          );
+        })}
       </div>
       <div style={{ fontSize: 'var(--mint-text-nano)', color: 'var(--mint-fg-soft)', marginBottom: 4 }}>
         Or search for someone else:
@@ -537,7 +536,7 @@ function ApproverPicker({ value, onChange, locked }: {
         </div>
       )}
       {query && !searching && !searchError && results.length === 0 && (
-        <Hint>No users match. Use {REIMB_APPROVERS.luke.name} or {REIMB_APPROVERS.amanda.name} quick-pick.</Hint>
+        <Hint>No users match. Use a quick-pick above ({REIMB_APPROVER_KEYS.map((k) => REIMB_APPROVERS[k].name).join(', ')}).</Hint>
       )}
       <div style={{ marginTop: 6, fontSize: 'var(--mint-text-nano)', color: 'var(--mint-fg-subdued-title)' }}>
         Selected: <strong style={{ color: 'var(--mint-fg-strong)' }}>{value.displayName}</strong>

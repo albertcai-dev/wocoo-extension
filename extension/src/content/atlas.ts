@@ -503,7 +503,10 @@
     const out: Leaf[] = [];
     for (const el of Array.from(document.querySelectorAll<HTMLElement>('*'))) {
       if (el.children.length > 0) continue;
-      const text = (el.textContent || '').trim();
+      // Collapse internal whitespace: Atlas pretty-prints values across lines, and an
+      // embedded newline survives into the generated Doc as a real line break (the
+      // side-panel <input> hides it, so it only shows up in the finished letter).
+      const text = (el.textContent || '').replace(/\s+/g, ' ').trim();
       if (!text) continue;
       out.push({ text });
     }

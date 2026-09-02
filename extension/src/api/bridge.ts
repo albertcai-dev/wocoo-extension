@@ -103,6 +103,10 @@ export interface MCVRecord {
   status: 'ready' | 'anomaly';
   totals: MCVTotalsFromBridge;
   anomalies: MCVAnomaly[];
+  // Non-blocking caveats about the run — e.g. the Day 1 Rejects tab was missing, so
+  // day1Reversed is a skipped 0 rather than a verified 0. Optional: older bridge
+  // deployments don't send it.
+  notes?: string[];
   computedAt: string;
   sentAt: string | null;
 }
@@ -467,6 +471,89 @@ export async function acknowledgeReplyViaBridge(wocooTicketId: string, messageId
   await callBridge('acknowledgeReply', { wocooTicketId, messageId }, 'replyAcknowledged', 30_000, true);
 }
 
+// ============ i2c thread lookup (I2cThreadLookup.gs) ============
+
+export interface I2cThreadLookup {
+  /** Gmail's own thread URL. Empty when nothing matched — that's a normal result, not an
+   *  error, so callers fall back to a Gmail search rather than surfacing a failure. */
+  permalink: string;
+  threadId: string;
+  /** Last message in the thread. Used as the deep-link anchor if `threadId` is ever absent —
+   *  Gmail resolves a message ID to its containing thread. */
+  messageId: string;
+  subject: string;
+  from: string;
+  lastDate: string;
+  /** Threads that mentioned the ref at all. >1 means `permalink` is a best guess, so the
+   *  UI should say "best match" instead of implying certainty. */
+  matchCount: number;
+}
+
+const I2C_THREAD_CACHE_KEY = 'i2c_thread_cache';
+/** Threads don't move once resolved, so cache generously — this exists to keep the second
+ *  click instant, not to guard against staleness. A miss (permalink: '') is cached far more
+ *  briefly, since the i2c notification may simply not have landed yet. */
+const I2C_THREAD_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const I2C_THREAD_MISS_TTL_MS = 10 * 60 * 1000;
+
+type I2cThreadCache = Record<string, { at: number; result: I2cThreadLookup }>;
+
+/** Resolve an i2c ref (e.g. "PO-420974") to its exact Gmail thread, via the GAS bridge.
+ *  Cached in chrome.storage.local so repeat clicks don't spawn another bridge tab.
+ *
+ *  Throws only on a genuine bridge failure (timeout, GAS error, action not deployed).
+ *  "No matching thread" resolves normally with an empty `permalink`. */
+export async function findI2cThreadViaBridge(i2cRef: string, opts?: { force?: boolean }): Promise<I2cThreadLookup> {
+  const ref = i2cRef.trim().toUpperCase();
+  if (!ref) return { permalink: '', threadId: '', messageId: '', subject: '', from: '', lastDate: '', matchCount: 0 };
+
+  if (!opts?.force) {
+    const stored = (await chrome.storage.local.get(I2C_THREAD_CACHE_KEY))[I2C_THREAD_CACHE_KEY] as I2cThreadCache | undefined;
+    const hit = stored?.[ref];
+    if (hit) {
+      const ttl = hit.result.permalink ? I2C_THREAD_TTL_MS : I2C_THREAD_MISS_TTL_MS;
+      if (Date.now() - hit.at < ttl) return hit.result;
+    }
+  }
+
+  const res = await callBridge('findI2cThread', { i2cRef: ref }, 'i2cThreadResolved', 45_000, true);
+  const result: I2cThreadLookup = {
+    permalink: String(res.permalink || ''),
+    threadId: String(res.threadId || ''),
+    messageId: String(res.messageId || ''),
+    subject: String(res.subject || ''),
+    from: String(res.from || ''),
+    lastDate: String(res.lastDate || ''),
+    matchCount: Number(res.matchCount || 0),
+  };
+
+  try {
+    const stored = (await chrome.storage.local.get(I2C_THREAD_CACHE_KEY))[I2C_THREAD_CACHE_KEY] as I2cThreadCache | undefined;
+    await chrome.storage.local.set({ [I2C_THREAD_CACHE_KEY]: { ...(stored || {}), [ref]: { at: Date.now(), result } } });
+  } catch { /* cache is a nicety — a write failure shouldn't fail the lookup */ }
+
+  return result;
+}
+
+/** Gmail URL for a resolved lookup, or '' if it resolved to nothing.
+ *
+ *  Built from the thread ID, NOT from `permalink`. Apps Script's
+ *  `GmailThread.getPermalink()` returns the legacy sync form —
+ *  `https://mail.google.com/mail?extsrc=sync&client=docs&plid=…` — which carries no thread
+ *  fragment, ignores the `u/<n>` account selector, and in practice dumps you on the inbox.
+ *  Verified against PO-420974 on 2026-08-03. The hex thread ID in an `#all/<id>` fragment
+ *  does open the exact thread, so that's the primary. `#all` rather than `#inbox` so an
+ *  archived thread still resolves.
+ *
+ *  `permalink` is kept as a last resort purely in case a future Apps Script version starts
+ *  returning a real deep link — hence the `#` test, which the legacy sync form fails. */
+export function i2cThreadUrl(result: I2cThreadLookup): string {
+  const anchor = result.threadId || result.messageId;
+  if (anchor) return `https://mail.google.com/mail/u/0/#all/${encodeURIComponent(anchor)}`;
+  if (result.permalink.includes('#')) return result.permalink;
+  return '';
+}
+
 /** Batch-backfill i2c tracking rows for previously-emailed clients. The extension
  *  already has Jira access, so it walks the assigned-ticket list and hands GAS a
  *  {wocooTicketId, clientEmail, createdAt} tuple per ticket with a client email.
@@ -506,6 +593,9 @@ export interface RefundLetterParams {
   refundDates: string;
   declineReason: string;
   agentFirstName: string;
+  /** 'refund' / 'refunds' and 'was' / 'were' — the body sentence agrees with the count. */
+  refundNoun: string;
+  refundVerb: string;
   letterDate?: string;
   wocooTicketId?: string;
   /** Ask the bridge for base64 PDF bytes so we can attach it to the Jira ticket. */
@@ -535,6 +625,8 @@ export async function createRefundLetterViaBridge(p: RefundLetterParams): Promis
     refundDates: p.refundDates,
     declineReason: p.declineReason,
     agentFirstName: p.agentFirstName,
+    refundNoun: p.refundNoun,
+    refundVerb: p.refundVerb,
     wocooTicketId: p.wocooTicketId || '',
   };
   if (p.letterDate) params.letterDate = p.letterDate;

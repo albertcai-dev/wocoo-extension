@@ -21,6 +21,52 @@ function log(msg: string, ...args: unknown[]) {
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
+// i2c's customer page renders the Accounts table asynchronously and only ticks the
+// "Select" checkbox for the account once that load settles. Clicking "Continue with this
+// Customer" before then makes i2c alert "Please Select an Account to Continue" and the
+// chain dead-ends, so we wait for a selected row and then pause before clicking.
+const CONTINUE_CLICK_DELAY_MS = 1200;
+const ACCOUNT_SELECT_TIMEOUT_MS = 8000;
+
+// The Accounts table ends in a "Select" column holding one checkbox (or radio) per
+// account row. Match on the header text so we don't pick up the layout wrapper tables
+// or the unrelated "On Customer Request" checkbox further down the page.
+function findAccountSelectInputs(): HTMLInputElement[] {
+  const tables = Array.from(document.querySelectorAll('table'));
+  for (const table of tables) {
+    if (table.querySelector('table')) continue;
+    const headers = Array.from(table.querySelectorAll<HTMLTableCellElement>('th, td'))
+      .map((c) => (c.textContent || '').trim());
+    if (!headers.some((h) => /^Account\s+Number$/i.test(h))) continue;
+    if (!headers.some((h) => /^Select$/i.test(h))) continue;
+    const inputs = Array.from(
+      table.querySelectorAll<HTMLInputElement>('input[type="checkbox"], input[type="radio"]'),
+    ).filter((i) => isVisible(i));
+    if (inputs.length) return inputs;
+  }
+  return [];
+}
+
+// Resolves true once an account row is selected. With exactly one account we tick the
+// box ourselves if i2c hasn't yet; with several we wait for the agent to choose rather
+// than picking one for them.
+async function ensureAccountSelected(): Promise<boolean> {
+  const deadline = Date.now() + ACCOUNT_SELECT_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    const inputs = findAccountSelectInputs();
+    if (inputs.some((i) => i.checked)) return true;
+    if (inputs.length === 1) {
+      log('  \u2192 account Select box still empty, ticking it ourselves');
+      inputs[0].click();
+      await sleep(250);
+      if (inputs[0].checked) return true;
+    }
+    await sleep(250);
+  }
+  log('  \u2192 no account selected yet, not clicking Continue this pass');
+  return false;
+}
+
 async function loadCreds(): Promise<StoredCreds | null> {
   try {
     const res = await chrome.storage.local.get(I2C_KEY);
@@ -175,12 +221,12 @@ async function chainActive(): Promise<boolean> {
 // Anything else (null) is the regular Recent-Activity sign-in.
 // Chain variants. null (generic) stops after "Continue with this Customer" so the
 // agent can navigate i2c's sidebar manually without the script forcing a navigation.
-type Flow = 'reverse_fee' | 'reverse_interest_fee' | 'admin_debit' | 'verify_balance' | 'qc_month_scrape' | 'apply_credit' | null;
+type Flow = 'reverse_fee' | 'reverse_interest_fee' | 'admin_debit' | 'verify_balance' | 'qc_month_scrape' | 'apply_credit' | 'card_details' | null;
 async function getFlow(): Promise<Flow> {
   const res = await chrome.storage.local.get('pending_i2c_flow');
   const v = res.pending_i2c_flow;
   return v === 'reverse_fee' || v === 'reverse_interest_fee' || v === 'admin_debit' || v === 'verify_balance'
-    || v === 'qc_month_scrape' || v === 'apply_credit' ? v : null;
+    || v === 'qc_month_scrape' || v === 'apply_credit' || v === 'card_details' ? v : null;
 }
 
 function setTextareaValue(el: HTMLTextAreaElement, value: string) {
@@ -252,12 +298,23 @@ async function tryContinueWithCustomer(): Promise<boolean> {
   if (continueRan) return true;
   if (!(await chainActive())) return false;
   const buttons = Array.from(document.querySelectorAll<HTMLElement>('input[type="submit"], input[type="button"], button'));
+  // card_details stops at the customer page. Every navigation reloads this content
+  // script, resetting continueRan — so without this guard the chain finds a second
+  // "Continue with this Customer" on search.do and walks on into Account Summary.
+  if ((await getFlow()) === 'card_details' && pageHasMaskedPan()) {
+    log('  → card_details: already on the customer page, not clicking Continue again');
+    return false;
+  }
+
   for (const b of buttons) {
     const v = ((b as HTMLInputElement).value || b.textContent || '').trim();
     if (/^Continue\s+with\s+this\s+Customer$/i.test(v)) {
       if (!isVisible(b)) continue;
+      // Bail (without setting continueRan) if nothing is selected yet — bootstrap's poll
+      // loop retries, so a slow render or a manual multi-account pick still lands.
+      if (!(await ensureAccountSelected())) return false;
       continueRan = true;
-      setTimeout(() => b.click(), 100);
+      setTimeout(() => b.click(), CONTINUE_CLICK_DELAY_MS);
       // For the generic (null) flow, Continue is the terminal step — clear pending keys
       // so the agent can navigate i2c's sidebar manually without the chain barging in.
       const flow = await getFlow();
@@ -1166,6 +1223,84 @@ async function tryDateRangeScrape(): Promise<boolean> {
   return false;
 }
 
+// ----- card_details only: collect the customer's card numbers -----
+//
+// Runs on the customer page (search.do) that the chain lands on after "Continue with
+// this Customer" — both the Accounts table and the Primary Card(s) table live there, so
+// no extra sidebar navigation is needed.
+//
+// Numbers render masked as `412650******0162` (BIN + asterisks + last 4). The reissued
+// card shows Status `ACTIVE` (sometimes with a `(Reissued)` sub-label); the old one shows
+// `CLOSED CARD` in a cell that also contains an expand-hierarchy caret button, so match
+// on row text rather than cell position.
+
+let cardDetailsScrapeRan = false;
+
+interface ScrapedCard { last4: string; status: string; closed: boolean }
+
+// 412650******0162 — at least 3 mask characters between the BIN and the last 4.
+const MASKED_PAN_RE = /\d{4,6}[*x\u2022]{3,}(\d{4})\b/i;
+
+/** True when the page shows at least one masked card/account number — i.e. we've landed
+ *  on the customer page and don't need to click through anything else. */
+function pageHasMaskedPan(): boolean {
+  return MASKED_PAN_RE.test((document.body?.textContent || '').replace(/\s+/g, ' '));
+}
+
+function readCardsFromPage(): ScrapedCard[] {
+  const byLast4 = new Map<string, ScrapedCard>();
+
+  for (const row of Array.from(document.querySelectorAll<HTMLElement>('tr'))) {
+    // i2c expands the Primary Card(s) table *inside* the account row, so an outer row's
+    // text can contain a nested card plus its own status — reading only leaf rows keeps
+    // ACTIVE from being read as CLOSED CARD (or vice versa).
+    if (row.querySelector('tr')) continue;
+    const text = (row.textContent || '').replace(/\s+/g, ' ').trim();
+    const m = text.match(MASKED_PAN_RE);
+    if (!m) continue;
+    const last4 = m[1];
+
+    // "CLOSED CARD" is i2c's wording; check it before the bare words so a row reading
+    // "CLOSED CARD" never gets recorded as merely "CLOSED".
+    let status = '';
+    if (/\bCLOSED\s+CARD\b/i.test(text)) status = 'CLOSED CARD';
+    else if (/\bCLOSED\b/i.test(text)) status = 'CLOSED';
+    else if (/\bACTIVE\b/i.test(text)) status = 'ACTIVE';
+    if (/\(\s*Reissued\s*\)/i.test(text)) status = status ? status + ' (Reissued)' : 'Reissued';
+
+    const card: ScrapedCard = { last4, status, closed: /closed/i.test(status) };
+    // The same number appears in both the Accounts and Primary Card(s) tables — keep
+    // whichever row actually carried a status.
+    const existing = byLast4.get(last4);
+    if (!existing || (!existing.status && card.status)) byLast4.set(last4, card);
+  }
+
+  return Array.from(byLast4.values());
+}
+
+async function tryCardDetailsScrape(): Promise<boolean> {
+  if (cardDetailsScrapeRan) return true;
+  if ((await getFlow()) !== 'card_details') return false;
+
+  const cards = readCardsFromPage();
+  if (cards.length === 0) return false;
+
+  const ctx = await chrome.storage.local.get('pending_i2c_source_ticket_id');
+  const sourceTicketId = typeof ctx.pending_i2c_source_ticket_id === 'string' ? ctx.pending_i2c_source_ticket_id : '';
+
+  log('  \u2192 captured', cards.length, 'card(s):', cards.map((c) => c.last4 + (c.status ? ' ' + c.status : '')).join(', '));
+  await chrome.storage.local.set({
+    i2c_card_details: {
+      sourceTicketId,
+      cards,
+      capturedAt: new Date().toISOString(),
+    },
+  });
+  cardDetailsScrapeRan = true;
+  await clearAllPendingKeys();
+  return true;
+}
+
 function formatMmDdYyyy(d: Date): string {
   const mm = String(d.getMonth() + 1).padStart(2, '0');
   const dd = String(d.getDate()).padStart(2, '0');
@@ -1230,13 +1365,16 @@ async function tryFillApplyCredit(): Promise<boolean> {
 
 async function bootstrap() {
   // Each pass attempts every step. Most return false immediately because the page in
-  // question doesn't have the target element. Keep polling for 30s so slow renders
+  // question doesn't have the target element. Keep polling for 45s so slow renders
   // (Account Transactions in particular can take a few seconds to fully load) don't
   // strand the chain.
   async function pass() {
     await tryAutofill();
     await tryKillSession();
     await tryEmailSearch();
+    // Before tryContinueWithCustomer: on the customer page this captures the cards and
+    // clears the chain keys, so nothing downstream can navigate away.
+    await tryCardDetailsScrape();
     await tryContinueWithCustomer();
     await tryAccountTransactions();
     await tryAdminServices();
@@ -1251,7 +1389,7 @@ async function bootstrap() {
     await tryDateRangeScrape();
     await tryFillApplyCredit();
   }
-  const deadline = Date.now() + 30_000;
+  const deadline = Date.now() + 45_000;
   while (Date.now() < deadline) {
     try { await pass(); } catch (e) { console.error('[wocoo-i2c] tick error', e); }
     // Every terminal step (verify_balance → tryReadRunningBalance, reverse_fee →
@@ -1260,10 +1398,10 @@ async function bootstrap() {
     if (!(await chainActive())) break;
     await sleep(500);
   }
-  // If the 30s budget elapsed without a terminal step clearing the keys, clean them up
+  // If the 45s budget elapsed without a terminal step clearing the keys, clean them up
   // ourselves so they don't ambush the next manual visit to i2c.
   if (await chainActive()) {
-    log('30s deadline reached without completion — clearing leftover pending keys');
+    log('45s deadline reached without completion — clearing leftover pending keys');
     await clearAllPendingKeys();
   }
 }

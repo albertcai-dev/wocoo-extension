@@ -18,7 +18,9 @@ import {
   postComment,
   transitionTicket,
   REIMB_APPROVERS,
+  REIMB_APPROVER_KEYS,
 } from '../api/jira';
+import type { ReimbApproverKey } from '../api/jira';
 import { fetchAtlasAccountIdHeadless } from '../data/atlasAccountLookup';
 
 const TRANSITION_TO_DONE_ID = '251';
@@ -63,7 +65,7 @@ interface WorkflowState {
   // Step 4 overrides
   tierOverride: WocooTicket['tier'] | null;
   tierEditOpen: boolean;
-  approverOverride: 'luke' | 'amanda' | null;
+  approverOverride: ReimbApproverKey | null;
   approverEditOpen: boolean;
   accountIdOverride: string;
   accountIdInput: string; // staged value while user is typing; applied to override on Set
@@ -540,11 +542,11 @@ function Step1Body(props: {
   // Criteria + approver (formerly Step 2)
   meetsMinimum: boolean;
   approverName: string;
-  approverKey: 'luke' | 'amanda';
+  approverKey: ReimbApproverKey;
   isLarge: boolean;
   approverEditOpen: boolean;
   setApproverEditOpen: (v: boolean) => void;
-  setApproverOverride: (v: 'luke' | 'amanda') => void;
+  setApproverOverride: (v: ReimbApproverKey) => void;
   // Decline-path (amount < $1k)
   declineText: string;
   setDeclineText: (v: string) => void;
@@ -649,12 +651,19 @@ function Step1Body(props: {
         <Divider />
         <CheckRow
           ok={true}
-          label={<><span>Approver: <strong>{props.approverName}</strong></span> <span style={{ color: 'var(--mint-fg-soft)', marginLeft: 6 }}>· authority {props.isLarge ? '≥ $5K' : '< $5K'}</span></>}
+          label={<>
+            <span>Approver: <strong>{props.approverName}</strong></span>
+            {/* the $5K authority note only describes the amount-based default —
+                a manually picked approver (e.g. Vivian) has no threshold */}
+            {props.approverKey === 'vivian' ? null : (
+              <span style={{ color: 'var(--mint-fg-soft)', marginLeft: 6 }}>· authority {props.isLarge ? '≥ $5K' : '< $5K'}</span>
+            )}
+          </>}
           right={<EditIcon onClick={() => props.setApproverEditOpen(!props.approverEditOpen)} title="Override approver" />}
         />
         {props.approverEditOpen ? (
           <InlineEditCard label="Pick approver">
-            {(['luke', 'amanda'] as const).map((k) => {
+            {REIMB_APPROVER_KEYS.map((k) => {
               const name = REIMB_APPROVERS[k].name;
               const active = k === props.approverKey;
               return (
@@ -714,11 +723,11 @@ function Step2Body(props: {
   meetsMinimum: boolean;
   tier: WocooTicket['tier'];
   approverName: string;
-  approverKey: 'luke' | 'amanda';
+  approverKey: ReimbApproverKey;
   isLarge: boolean;
   approverEditOpen: boolean;
   setApproverEditOpen: (v: boolean) => void;
-  setApproverOverride: (v: 'luke' | 'amanda') => void;
+  setApproverOverride: (v: ReimbApproverKey) => void;
   declineText: string;
   setDeclineText: (v: string) => void;
   declinePosted: boolean;
@@ -741,7 +750,7 @@ function Step2Body(props: {
       />
       {props.approverEditOpen ? (
         <InlineEditCard label="Pick approver">
-          {(['luke', 'amanda'] as const).map((k) => {
+          {REIMB_APPROVER_KEYS.map((k) => {
             const name = REIMB_APPROVERS[k].name;
             const active = k === props.approverKey;
             return (
@@ -939,7 +948,7 @@ function Step4Body(props: {
   effectiveTier: WocooTicket['tier'];
   effectiveAccountId: string;
   accountIdValid: boolean;
-  approverKey: 'luke' | 'amanda';
+  approverKey: ReimbApproverKey;
   approverName: string;
   amountEditOpen: boolean;
   setAmountEditOpen: (v: boolean) => void;
@@ -951,7 +960,7 @@ function Step4Body(props: {
   setTierOverride: (v: WocooTicket['tier']) => void;
   approverEditOpen: boolean;
   setApproverEditOpen: (v: boolean) => void;
-  setApproverOverride: (v: 'luke' | 'amanda') => void;
+  setApproverOverride: (v: ReimbApproverKey) => void;
   accountIdEditOpen: boolean;
   setAccountIdEditOpen: (v: boolean) => void;
   accountIdInput: string;
@@ -1003,7 +1012,7 @@ function Step4Body(props: {
         </FieldRow>
         {props.approverEditOpen && !props.alreadyCreated ? (
           <InlineEditCard label="Pick approver">
-            {(['luke', 'amanda'] as const).map((k) => {
+            {REIMB_APPROVER_KEYS.map((k) => {
               const name = REIMB_APPROVERS[k].name;
               const active = k === props.approverKey;
               return (
@@ -1349,15 +1358,17 @@ function truncate(s: string | null | undefined, max: number): string {
 // ============================================================
 
 function FieldGrid({ children }: { children: React.ReactNode }) {
-  return <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--mint-sp-3)' }}>{children}</div>;
+  return <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 'var(--mint-sp-3)' }}>{children}</div>;
 }
 
 function FieldCell({ label, mono, action, children }: { label: string; mono?: boolean; action?: React.ReactNode; children: React.ReactNode }) {
   return (
-    <div>
+    <div style={{ minWidth: 0 }}>
       <div style={{ fontSize: 'var(--mint-text-nano)', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--mint-fg-soft)', fontWeight: 700, marginBottom: 4 }}>{label}</div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--mint-text-micro)', color: 'var(--mint-fg-strong)', fontFamily: mono ? 'var(--mint-font-mono)' : 'inherit' }}>
-        <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{children}</span>
+      {/* wrap so an action pill that can't fit beside the value drops onto its own
+          line under the value instead of overflowing the panel */}
+      <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 6, rowGap: 4, fontSize: 'var(--mint-text-micro)', color: 'var(--mint-fg-strong)', fontFamily: mono ? 'var(--mint-font-mono)' : 'inherit' }}>
+        <span style={{ minWidth: 0, maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{children}</span>
         {action}
       </div>
     </div>
@@ -1430,7 +1441,7 @@ function InlineEditCard({ label, children }: { label: string; children: React.Re
   return (
     <div style={{ marginTop: 'var(--mint-sp-2)', padding: 'var(--mint-sp-2) var(--mint-sp-3)', background: 'var(--mint-warning-bg-soft)', borderRadius: 'var(--mint-radius-button)' }}>
       <div style={{ fontSize: 'var(--mint-text-nano)', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--mint-warning-fg-strong)', fontWeight: 700, marginBottom: 6 }}>{label}</div>
-      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>{children}</div>
+      <div style={{ display: 'flex', gap: 6, rowGap: 6, alignItems: 'center', flexWrap: 'wrap' }}>{children}</div>
     </div>
   );
 }

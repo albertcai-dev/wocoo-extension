@@ -45,7 +45,7 @@ import { I2cCard, KohoCard } from './MessagingCards';
 import { fetchAtlasAccountIdHeadless } from '../data/atlasAccountLookup';
 import { isInterestRelatedWorkType, isInterestFeeInContent } from '../data/reverseFeeDetect';
 import { subscribeToTicketTransitions, emitTicketTransition, type TicketTransitionEvent } from './ticketLogEvents';
-import { logTicketViaBridge, acknowledgeReplyViaBridge, type TicketReply } from '../api/bridge';
+import { logTicketViaBridge, acknowledgeReplyViaBridge, findI2cThreadViaBridge, i2cThreadUrl, type TicketReply } from '../api/bridge';
 import { NotePrompt } from './NotePrompt';
 import type { TicketTransitionKind } from '../data/ticketLogTypes';
 
@@ -425,7 +425,7 @@ function TicketViewInner({ ticket, onTicketUpdate, onStartTriage, onStartReverse
       </section>
 
       {/* REPLY PILL — shown when the current ticket has an unacknowledged Koho/i2c reply. */}
-      <ReplyPill ticketId={ticket.id} clientEmail={ticket.clientEmail} />
+      <ReplyPill ticketId={ticket.id} clientEmail={ticket.clientEmail} i2cTicketRef={ticket.i2cTicketRef} />
 
       {/* EXTERNAL TOOLS ROW — Atlas always, then i2c (Credit Card) or Koho (Prepaid Card) */}
       <ExternalToolsRow ticket={ticket} />
@@ -807,28 +807,6 @@ function QuickActions({ ticket, onTicketUpdate, onStartTriage, onStartReverseFee
       </div>
       <div style={{ display: 'flex', gap: 'var(--mint-sp-2)' }}>
         <ActionButton
-          variant="warning"
-          onClick={onStartReverseFee}
-          // Interest tickets (by workType OR by content) don't need a ticket-provided
-          // clientEmail — the workflow fetches it from Atlas on entry.
-          disabled={
-            isInterestRelatedWorkType(ticket.workType) || isInterestFeeInContent(ticket.summary, ticket.description)
-              ? !ticket.identityId
-              : !ticket.clientEmail
-          }
-          title="Start Reverse Fee workflow"
-        >
-          ↗ Reverse Fee
-        </ActionButton>
-        <ActionButton variant="neutral" onClick={onStartQCFeeWaiver} disabled={!ticket.clientEmail} title="Start QC Fee Waiver workflow">
-          ⚖️ QC Fee Waiver
-        </ActionButton>
-        <ActionButton variant="neutral" onClick={onStartRetentionFeeWaiver} disabled={!ticket.clientEmail} title="Start Retention Fee Waiver workflow ($20 × months, admin credit in i2c)">
-          🎁 Retention Fee Waiver
-        </ActionButton>
-      </div>
-      <div style={{ display: 'flex', gap: 'var(--mint-sp-2)' }}>
-        <ActionButton
           variant="positive"
           onClick={() => {
             if (!ticket.identityId) return;
@@ -896,6 +874,31 @@ function QuickActions({ ticket, onTicketUpdate, onStartTriage, onStartReverseFee
           {interestNote.text}
         </div>
       ) : null}
+      {/* Fee-remediation row. Sits below the Visa Companion / Investigate Interest /
+          Refund Auth Letter row, and below `interestNote` specifically so that note stays
+          adjacent to the Investigate Interest button that produces it. */}
+      <div style={{ display: 'flex', gap: 'var(--mint-sp-2)' }}>
+        <ActionButton
+          variant="warning"
+          onClick={onStartReverseFee}
+          // Interest tickets (by workType OR by content) don't need a ticket-provided
+          // clientEmail — the workflow fetches it from Atlas on entry.
+          disabled={
+            isInterestRelatedWorkType(ticket.workType) || isInterestFeeInContent(ticket.summary, ticket.description)
+              ? !ticket.identityId
+              : !ticket.clientEmail
+          }
+          title="Start Reverse Fee workflow"
+        >
+          ↗ Reverse Fee
+        </ActionButton>
+        <ActionButton variant="neutral" onClick={onStartQCFeeWaiver} disabled={!ticket.clientEmail} title="Start QC Fee Waiver workflow">
+          ⚖️ QC Fee Waiver
+        </ActionButton>
+        <ActionButton variant="neutral" onClick={onStartRetentionFeeWaiver} disabled={!ticket.clientEmail} title="Start Retention Fee Waiver workflow ($20 × months, admin credit in i2c)">
+          🎁 Retention Fee Waiver
+        </ActionButton>
+      </div>
       {doneState === 'error' && errorMsg ? (
         <div
           role="alert"
@@ -1118,18 +1121,32 @@ function fmtReplyDate(iso: string, opts: Intl.DateTimeFormatOptions): string | n
 
 /** What to put in a Gmail search when there's no message ID to permalink to.
  *
- *  i2c rows already track the client's address, so their trackKey is the right query.
- *  Koho rows track the WOCOO id instead — and searching that mostly turns up Jira
- *  notification mail, not the Koho thread. The client's address finds the real thread,
- *  so prefer it whenever the panel has one. */
-function gmailSearchKey(reply: TicketReply, clientEmail: string | undefined, ticketId: string): string {
+ *  An i2c PO ref wins for i2c threads: it's in the notification subject, it's unique to the
+ *  one investigation, and — unlike the client's address — it's present even on tickets where
+ *  the Client Email field is blank (which is most of them, since that field comes back
+ *  masked or empty).
+ *
+ *  Otherwise: i2c rows already track the client's address, so their trackKey is the right
+ *  query. Koho rows track the WOCOO id instead — and searching that mostly turns up Jira
+ *  notification mail, not the Koho thread. The client's address finds the real thread, so
+ *  prefer it whenever the panel has one. */
+function gmailSearchKey(
+  reply: TicketReply,
+  clientEmail: string | undefined,
+  ticketId: string,
+  i2cTicketRef?: string,
+): string {
+  if (reply.kind === 'i2c' && i2cTicketRef) return i2cTicketRef;
   const trackKey = reply.trackKey || '';
   if (trackKey.includes('@')) return trackKey;
   return clientEmail || trackKey || ticketId;
 }
 
-function ReplyPill({ ticketId, clientEmail }: { ticketId: string; clientEmail?: string }) {
+function ReplyPill({ ticketId, clientEmail, i2cTicketRef }: { ticketId: string; clientEmail?: string; i2cTicketRef?: string }) {
   const [reply, setReply] = useState<TicketReply | null>(null);
+  // True while the bridge is resolving an i2c ref to its exact thread — the round-trip
+  // opens a background GAS tab, so it's slow enough to need its own label.
+  const [resolving, setResolving] = useState(false);
 
   useEffect(() => {
     const read = () => {
@@ -1150,15 +1167,50 @@ function ReplyPill({ ticketId, clientEmail }: { ticketId: string; clientEmail?: 
     return () => chrome.storage.onChanged.removeListener(onChange);
   }, [ticketId]);
 
-  if (!reply) return null;
+  // A tracking row only exists when the extension itself sent the Koho email or opened the
+  // i2c form. An i2c ticket raised by hand — pasted into a Jira comment, which is the common
+  // case — has no row, so the pill used to render nothing at all. The ticket's own PO ref is
+  // enough to find the thread, so synthesise a reply-less entry and let the existing muted
+  // chip handle it. messageId stays empty, so it renders as `awaiting` (no ✕, no ack call:
+  // there's no sheet row to acknowledge).
+  const effective: TicketReply | null =
+    reply ?? (i2cTicketRef
+      ? { wocooTicketId: ticketId, kind: 'i2c', messageId: '', trackKey: i2cTicketRef, from: '', snippet: '', receivedAt: '', acked: true }
+      : null);
+
+  if (!effective) return null;
+
+  const searchUrl = () =>
+    `https://mail.google.com/mail/u/0/#search/${encodeURIComponent(gmailSearchKey(effective, clientEmail, ticketId, i2cTicketRef))}`;
 
   const openEmail = () => {
-    // Gmail permalink accepts a raw message ID after the folder anchor. With no reply
-    // matched yet there's nothing to permalink to, so search the thread instead.
-    const url = reply.messageId
-      ? `https://mail.google.com/mail/u/0/#inbox/${reply.messageId}`
-      : `https://mail.google.com/mail/u/0/#search/${encodeURIComponent(gmailSearchKey(reply, clientEmail, ticketId))}`;
-    window.open(url, '_blank', 'noopener,noreferrer');
+    // A matched reply already has a message ID to permalink to.
+    if (effective.messageId) {
+      window.open(`https://mail.google.com/mail/u/0/#inbox/${effective.messageId}`, '_blank', 'noopener,noreferrer');
+      return;
+    }
+    // No reply matched, but an i2c ref can be resolved to the exact thread by the bridge
+    // (GAS reads Gmail; the extension can't). Resolve on click rather than on mount — this
+    // opens a background bridge tab, which is far too costly to do for every ticket the
+    // agent merely looks at. Cached, so only the first click on a ticket pays for it.
+    if (i2cTicketRef) {
+      setResolving(true);
+      void findI2cThreadViaBridge(i2cTicketRef)
+        .then((result) => {
+          const url = i2cThreadUrl(result);
+          // Nothing matched — the notification may not have arrived yet. Fall back to the
+          // search rather than leaving the click dead.
+          void chrome.tabs.create({ url: url || searchUrl() });
+        })
+        .catch((err) => {
+          // Bridge down, or findI2cThread not deployed yet. Degrade to the search.
+          console.warn('[wocoo-reply-pill] i2c thread lookup failed, falling back to search:', err);
+          void chrome.tabs.create({ url: searchUrl() });
+        })
+        .finally(() => setResolving(false));
+      return;
+    }
+    window.open(searchUrl(), '_blank', 'noopener,noreferrer');
   };
 
   const markAsRead = (e: React.MouseEvent) => {
@@ -1170,29 +1222,32 @@ function ReplyPill({ ticketId, clientEmail }: { ticketId: string; clientEmail?: 
       if (map[ticketId]) map[ticketId] = { ...map[ticketId], acked: true };
       void chrome.storage.local.set({ [REPLIES_STORAGE_KEY]: map });
     });
-    void acknowledgeReplyViaBridge(ticketId, reply.messageId).catch((err) => {
+    void acknowledgeReplyViaBridge(ticketId, effective.messageId).catch((err) => {
       console.warn('[wocoo-reply-pill] ack failed:', err);
     });
   };
 
-  const label = reply.kind === 'koho' ? 'Koho' : 'i2c';
-  const truncated = reply.snippet.length > 140 ? reply.snippet.slice(0, 140) + '…' : reply.snippet;
+  const label = effective.kind === 'koho' ? 'Koho' : 'i2c';
+  const truncated = effective.snippet.length > 140 ? effective.snippet.slice(0, 140) + '…' : effective.snippet;
   // No messageId = tracked but nothing inbound yet. There's no reply to shout about,
   // so it shares the muted chip and links to a Gmail search for the outbound thread.
-  const awaiting = !reply.messageId;
-  const acked = reply.acked === true || awaiting;
-  const seenDate = fmtReplyDate(reply.receivedAt, { month: 'short', day: 'numeric' });
+  const awaiting = !effective.messageId;
+  const acked = effective.acked === true || awaiting;
+  const seenDate = fmtReplyDate(effective.receivedAt, { month: 'short', day: 'numeric' });
 
   if (acked) {
     // Muted "seen" chip — small, single-line, still deep-links to Gmail.
     return (
       <button
         type="button"
-        onClick={openEmail}
-        title={awaiting
-          ? `Search Gmail for the ${label} thread. No reply has been captured for this ticket — ` +
-            `that can mean none has arrived, or that reply detection didn't match the thread.`
-          : `Reopen the ${label} reply in Gmail`}
+        onClick={resolving ? undefined : openEmail}
+        title={!awaiting
+          ? `Reopen the ${label} reply in Gmail`
+          : i2cTicketRef
+            ? `Open the Gmail thread for i2c ${i2cTicketRef}. Looked up through the Apps Script bridge ` +
+              `on first click, then cached; falls back to a Gmail search if no thread matches yet.`
+            : `Search Gmail for the ${label} thread. No reply has been captured for this ticket — ` +
+              `that can mean none has arrived, or that reply detection didn't match the thread.`}
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -1210,14 +1265,16 @@ function ReplyPill({ ticketId, clientEmail }: { ticketId: string; clientEmail?: 
           color: 'var(--mint-fg-soft)',
         }}
       >
-        <span style={{ fontSize: 12, lineHeight: 1, flexShrink: 0 }}>{awaiting ? '📤' : '📭'}</span>
+        <span style={{ fontSize: 12, lineHeight: 1, flexShrink: 0 }}>{resolving ? '⏳' : awaiting ? '📤' : '📭'}</span>
         <span style={{ fontSize: 'var(--mint-text-nano)', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
           {/* Deliberately makes no claim about whether a reply exists — detection can
               miss a thread, and asserting "no reply yet" over a real reply is worse
               than saying nothing. */}
-          {awaiting
-            ? `↗ Find ${label} thread in Gmail`
-            : `↗ Reopen ${label} reply${seenDate ? ` — ${seenDate}` : ''}`}
+          {resolving
+            ? `Finding ${i2cTicketRef || label} thread…`
+            : awaiting
+              ? `↗ Open ${label} thread${label === 'i2c' && i2cTicketRef ? ` — ${i2cTicketRef}` : ' in Gmail'}`
+              : `↗ Reopen ${label} reply${seenDate ? ` — ${seenDate}` : ''}`}
         </span>
       </button>
     );
@@ -1262,7 +1319,7 @@ function ReplyPill({ ticketId, clientEmail }: { ticketId: string; clientEmail?: 
           <span style={{ fontSize: 'var(--mint-text-micro)', fontWeight: 700, color: 'var(--mint-negative-fg-strong)' }}>
             New reply from {label}
             {(() => {
-              const at = fmtReplyDate(reply.receivedAt, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+              const at = fmtReplyDate(effective.receivedAt, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
               return at ? ` · ${at}` : '';
             })()}
           </span>

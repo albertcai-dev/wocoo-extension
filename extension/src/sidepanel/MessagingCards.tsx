@@ -1,6 +1,7 @@
 // Copy-paste i2c ticket templates + Koho one-click email send.
-// Templates lifted verbatim from v3 (wocoo-triage-v3 app-core.js). Koho send routes
-// through the Apps Script bridge (Gmail MCP only drafts).
+// Templates started as v3's (wocoo-triage-v3 app-core.js) and have since dropped v3's
+// internal-metadata header block — see buildI2cDraft. Koho send routes through the
+// Apps Script bridge (Gmail MCP only drafts).
 
 import { useState } from 'react';
 import type { WocooTicket } from '../data/mockTicket';
@@ -9,29 +10,29 @@ import { sendKohoEmailViaBridge, logKohoSendViaBridge, logI2cSubmitViaBridge } f
 const I2C_FORM_URL = 'https://tracking.i2cinc.com/servicedesk/customer/portal/2/create/17';
 const KOHO_RECIPIENT = 'wealthsimplesupport@koho.ca';
 
+// i2c reads these as a plain request from a colleague, so the draft is the ticket's own
+// wording and nothing else — no work-type prefix on the summary, and no WOCOO link /
+// Work Type / Priority header on the description. The internal metadata was noise to the
+// vendor (and the Atlassian link isn't theirs to follow); it all stays in WOCOO.
 function buildI2cDraft(t: WocooTicket): { summary: string; description: string } {
   return {
-    summary: '[' + (t.workType || 'Credit Card') + '] ' + (t.summary || ''),
-    description:
-      'WOCOO Ticket: https://wealthsimple.atlassian.net/browse/' + t.id + '\n' +
-      'Work Type: ' + (t.workType || '—') + '\n' +
-      'Priority: ' + (t.priority || '—') + '\n\n' +
-      'Description:\n' + (t.description || ''),
+    summary: t.summary || '',
+    description: t.description || '',
   };
 }
 
+// Same de-boilerplating as buildI2cDraft — the WOCOO link / Work Type / Priority block and
+// the subject's [WOCOO-xxxxx] prefix are internal metadata Koho can't act on. The greeting
+// and sign-off stay: unlike the i2c portal form, this one actually goes out as an email.
 function buildKohoDraft(t: WocooTicket): { subject: string; body: string } {
   return {
-    subject: '[' + t.id + '] ' + (t.summary || 'Prepaid Card Inquiry'),
+    subject: t.summary || 'Prepaid Card Inquiry',
     body:
       'Hi Koho Support team,\n\n' +
       'We have a client inquiry regarding the following:\n\n' +
-      'WOCOO Ticket: https://wealthsimple.atlassian.net/browse/' + t.id + '\n' +
-      'Work Type: ' + (t.workType || '—') + '\n' +
-      'Priority: ' + (t.priority || '—') + '\n\n' +
-      'Issue Description:\n' + (t.description || '') + '\n\n' +
+      (t.description || '') + '\n\n' +
       'Could you please investigate and let us know your findings?\n\n' +
-      'Thank you,\nWealthsimple Cash & Card Operations',
+      'Thank you,\nAlbert Cai',
   };
 }
 

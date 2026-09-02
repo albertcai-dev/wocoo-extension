@@ -8,8 +8,9 @@
 //   - Confirm + execute: shows the bulk-move call's success/error state inline
 //
 // FRAUD is UI-only — modal shows a "use Jira native Move" affordance with link out
-// to the ticket. PFO (restored alongside DBO) handles Express Shipping Request card
-// reissues and Cheques: Delivery Issue via hardcoded issue-type IDs.
+// to the ticket. PFO handles Express Shipping Request card reissues against the
+// rebuilt Physical Fulfillment Operations project (board 12356) using the same
+// createmeta-driven dynamic form as DBO / PRR / FRAUD.
 
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
@@ -30,19 +31,8 @@ import {
   type PrrRequiredField,
   FRAUD_PROJECT_KEY,
   FRAUD_ISSUE_TYPES,
-  PFO_PROJECT_ID,
-  PFO_EXPRESS_SHIPPING_ISSUETYPE_ID,
-  PFO_CHEQUES_DELIVERY_ISSUETYPE_ID,
-  EXPRESS_SHIPPING_FIELDS,
-  CARD_TYPE_LABELS,
-  type CardType,
-  USER_TIER_LABELS,
-  type UserTier,
-  REISSUE_REASON_LABELS,
-  PFO_API_SUPPORTED_WORK_TYPES,
-  type PfoWorkType,
-  recommendedCardType,
-  recommendedPfoWorkType,
+  PFO_PROJECT_KEY,
+  PFO_ISSUE_TYPES,
   tierToUserTierLabel,
 } from '../data/moveConfig';
 import {
@@ -52,7 +42,6 @@ import {
   MOVE_FIELDS,
   lookupProjectAndIssueType,
   resolveEocProblemAreaId,
-  resolveOptionId,
   fetchCreateMetaFields,
   type CreateMetaField,
   type CreateMetaAllowedValue,
@@ -65,15 +54,84 @@ import {
 } from '../api/jira';
 import { logMoveViaBridge } from '../api/bridge';
 import { emitMoveTransition } from './ticketLogEvents';
-import { fetchAtlasAccountIdHeadless } from '../data/atlasAccountLookup';
+import {
+  fetchAtlasAccountIdHeadless,
+  fetchAtlasClientDetailsHeadless,
+  type AtlasClientDetails,
+} from '../data/atlasAccountLookup';
 
 type Status = 'configuring' | 'confirming' | 'executing' | 'success' | 'error';
 
 type FetchState = 'idle' | 'pending' | 'success' | 'failed';
 
+/** Seed a dynamic form's field values from the source ticket. Text-typed prefills only —
+ *  option-typed ones need createmeta to map a label onto an option ID, so they land in
+ *  applyOptionPrefills once the metadata resolves. */
+function textPrefills(fields: PrrRequiredField[], ticket: WocooTicket): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const f of fields) {
+    if (f.prefillFrom === 'identityId' && ticket.identityId) out[f.fieldId] = ticket.identityId;
+    else if (f.prefillFrom === 'ticketUrl') out[f.fieldId] = `https://wealthsimple.atlassian.net/browse/${ticket.id}`;
+    else if (f.prefillFrom === 'atlasUrl' && ticket.identityId) {
+      out[f.fieldId] = `https://atlas.wealthsimple.com/identity/${ticket.identityId}/overview?ticketId=${ticket.id}`;
+    }
+  }
+  return out;
+}
+
+/** Second prefill pass, run after createmeta lands: resolve option-typed prefills (today just
+ *  User Tier) from a label to the option ID the <select> and the move payload both expect.
+ *  A tier with no matching option is left blank rather than guessed — the operator picks. */
+function applyOptionPrefills(
+  fields: PrrRequiredField[],
+  meta: CreateMetaField[],
+  ticket: WocooTicket,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const f of fields) {
+    if (f.prefillFrom !== 'tier') continue;
+    const target = tierToUserTierLabel(ticket.tier).toLowerCase();
+    const opts = meta.find((m) => m.fieldId === f.fieldId)?.allowedValues || [];
+    const hit = opts.find((o) => (o.value ?? o.name ?? '').toString().toLowerCase() === target);
+    if (hit) out[f.fieldId] = hit.id;
+  }
+  return out;
+}
+
+/** Third prefill pass, for fields that live in Atlas rather than on the ticket (PFO's
+ *  Cardholder Name + Shipping Address). Runs whenever the headless scrape resolves, which
+ *  is well after the form first renders. Only fills blanks — anything the operator has
+ *  already typed wins, since this can land mid-edit. */
+function atlasPrefills(
+  fields: PrrRequiredField[],
+  details: AtlasClientDetails,
+  current: Record<string, string>,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  // Shipping label shape: street on line 1, "City  Postal" on line 2.
+  const address = [details.street, [details.cityProvince, details.postal].filter(Boolean).join('  ')]
+    .filter(Boolean)
+    .join('\n');
+  for (const f of fields) {
+    if ((current[f.fieldId] || '').trim()) continue;
+    if (f.prefillFrom === 'atlasName' && details.name) out[f.fieldId] = details.name;
+    else if (f.prefillFrom === 'atlasAddress' && address) out[f.fieldId] = address;
+  }
+  return out;
+}
+
 export function MoveModal({ ticket, onClose, initialDestKey = 'EOC' }: { ticket: WocooTicket; onClose: () => void; initialDestKey?: MoveDestination }) {
   const [destKey, setDestKey] = useState<MoveDestination>(initialDestKey);
-  const [clientStatus, setClientStatus] = useState<keyof typeof EOC_CLIENT_STATUS_IDS>('Premium');
+  // EOC's Client Status is the same three-way tier the WOCOO ticket already carries in
+  // User Tier (customfield_11416), so derive it instead of guessing — this used to be
+  // hardcoded to 'Premium', which silently mislabelled every Core and Generation client
+  // unless the agent noticed and corrected it. `EOC_CLIENT_STATUS_IDS`'s keys and
+  // `UserTier` are the same union, so no mapping is needed; an unrecognised or missing
+  // tier lands on 'Core' via tierToUserTierLabel, matching the REIMB and PFO paths.
+  // Derived in the initialiser rather than an effect, so a manual override sticks.
+  const [clientStatus, setClientStatus] = useState<keyof typeof EOC_CLIENT_STATUS_IDS>(
+    tierToUserTierLabel(ticket.tier),
+  );
   const [problemArea, setProblemArea] = useState<string>(recommendedProblemArea(ticket.category) || '');
   const [accountIdInput, setAccountIdInput] = useState<string>(ticket.accountId || '');
   // Shared Atlas fetch state — used by both the Source Card row and the EOC input, so we don't
@@ -121,14 +179,22 @@ export function MoveModal({ ticket, onClose, initialDestKey = 'EOC' }: { ticket:
   const [fraudMetaState, setFraudMetaState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
   const [fraudMetaError, setFraudMetaError] = useState<string | null>(null);
 
-  // PFO: hardcoded issue types (Express Shipping Request 14656, Cheques Delivery 14658).
-  // Express Shipping form has its own bespoke UI — auto-prefilled from ticket.workType /
-  // ticket.tier and driven by resolveOptionId at submit.
-  const [pfoWorkType, setPfoWorkType] = useState<PfoWorkType>(recommendedPfoWorkType(ticket.workType));
-  const [cardType, setCardType] = useState<CardType>(recommendedCardType(ticket.workType));
-  const [userTier, setUserTier] = useState<UserTier>(tierToUserTierLabel(ticket.tier));
-  const [reissueReason, setReissueReason] = useState<string>('');
-  const [dateNeeded, setDateNeeded] = useState<string>('ASAP');
+  // PFO: dynamic form driven by createmeta (mirrors DBO/PRR/FRAUD). The bespoke
+  // Express Shipping UI this replaced hardcoded field IDs and option labels from the
+  // now-deprecated OLDPFO project — see the PFO block in moveConfig.ts.
+  const [pfoIssueTypeId, setPfoIssueTypeId] = useState<string>(PFO_ISSUE_TYPES[0].id);
+  const [pfoFieldValues, setPfoFieldValues] = useState<Record<string, string>>({});
+  const [pfoMeta, setPfoMeta] = useState<CreateMetaField[] | null>(null);
+  const [pfoMetaState, setPfoMetaState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
+  const [pfoMetaError, setPfoMetaError] = useState<string | null>(null);
+  // Cardholder Name + Shipping Address aren't on the WOCOO ticket — they come from the
+  // same headless Atlas scrape the Refund Auth Letter workflow uses. Held as the scraped
+  // record rather than pushed straight into pfoFieldValues so an issue-type switch (which
+  // resets the field values) can re-apply it without a second Atlas tab.
+  const [pfoAtlas, setPfoAtlas] = useState<AtlasClientDetails | null>(null);
+  const [pfoAtlasState, setPfoAtlasState] = useState<FetchState>('idle');
+  const [pfoAtlasError, setPfoAtlasError] = useState<string | null>(null);
+  const pfoAtlasAttempted = useRef(false);
 
   // Close on Esc
   useEffect(() => {
@@ -136,13 +202,6 @@ export function MoveModal({ ticket, onClose, initialDestKey = 'EOC' }: { ticket:
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose, status]);
-
-  // Keep Card Type in sync with the PFO work-type button. Always overwrites — the picker
-  // is the primary intent, so a stale toggle from a previous selection stays consistent.
-  useEffect(() => {
-    if (pfoWorkType === 'Credit Card: Delivery Issue') setCardType('Credit Card');
-    else if (pfoWorkType === 'Prepaid Card: Delivery Issue') setCardType('Prepaid Mastercard');
-  }, [pfoWorkType]);
 
   // Shared Atlas Account-ID fetch. Safe to call from any destination's field OR from the
   // Source Card fallback button — dedupes concurrent calls via `fetchState`.
@@ -173,6 +232,26 @@ export function MoveModal({ ticket, onClose, initialDestKey = 'EOC' }: { ticket:
     }
   }, [ticket.accountId, ticket.identityId, runAtlasFetch]);
 
+  // PFO-only Atlas scrape for the client's name + mailing address. Deliberately NOT run on
+  // modal open like the account-ID lookup — it costs a background tab, and every other
+  // destination ignores the result.
+  const runPfoAtlasFetch = useCallback(async () => {
+    if (!ticket.identityId) return;
+    setPfoAtlasState('pending');
+    setPfoAtlasError(null);
+    try {
+      const details = await fetchAtlasClientDetailsHeadless({
+        identityId: ticket.identityId,
+        sourceTicketId: ticket.id,
+      });
+      setPfoAtlas(details);
+      setPfoAtlasState('success');
+    } catch (e: any) {
+      setPfoAtlasError(e?.message || 'Atlas lookup failed');
+      setPfoAtlasState('failed');
+    }
+  }, [ticket.id, ticket.identityId]);
+
   const dest = useMemo(() => DESTINATIONS.find((d) => d.key === destKey)!, [destKey]);
 
   const prrConfig: PrrIssueTypeConfig | null = useMemo(
@@ -190,6 +269,11 @@ export function MoveModal({ ticket, onClose, initialDestKey = 'EOC' }: { ticket:
     [fraudIssueTypeId],
   );
 
+  const pfoConfig: PrrIssueTypeConfig | null = useMemo(
+    () => PFO_ISSUE_TYPES.find((t) => t.id === pfoIssueTypeId) || null,
+    [pfoIssueTypeId],
+  );
+
   // When the PRR issue type changes: reset field values (with prefill from ticket), and
   // fetch createmeta so option pickers have real labels to render.
   useEffect(() => {
@@ -200,12 +284,7 @@ export function MoveModal({ ticket, onClose, initialDestKey = 'EOC' }: { ticket:
       setPrrFieldValues({});
       return;
     }
-    const prefilled: Record<string, string> = {};
-    for (const f of prrConfig.requiredFields) {
-      if (f.prefillFrom === 'identityId' && ticket.identityId) prefilled[f.fieldId] = ticket.identityId;
-      else if (f.prefillFrom === 'ticketUrl') prefilled[f.fieldId] = `https://wealthsimple.atlassian.net/browse/${ticket.id}`;
-    }
-    setPrrFieldValues(prefilled);
+    setPrrFieldValues(textPrefills(prrConfig.requiredFields, ticket));
     setPrrMetaState('loading');
     setPrrMetaError(null);
     let cancelled = false;
@@ -233,12 +312,7 @@ export function MoveModal({ ticket, onClose, initialDestKey = 'EOC' }: { ticket:
       setFraudFieldValues({});
       return;
     }
-    const prefilled: Record<string, string> = {};
-    for (const f of fraudConfig.requiredFields) {
-      if (f.prefillFrom === 'identityId' && ticket.identityId) prefilled[f.fieldId] = ticket.identityId;
-      else if (f.prefillFrom === 'ticketUrl') prefilled[f.fieldId] = `https://wealthsimple.atlassian.net/browse/${ticket.id}`;
-    }
-    setFraudFieldValues(prefilled);
+    setFraudFieldValues(textPrefills(fraudConfig.requiredFields, ticket));
     setFraudMetaState('loading');
     setFraudMetaError(null);
     let cancelled = false;
@@ -266,12 +340,7 @@ export function MoveModal({ ticket, onClose, initialDestKey = 'EOC' }: { ticket:
       setDboFieldValues({});
       return;
     }
-    const prefilled: Record<string, string> = {};
-    for (const f of dboConfig.requiredFields) {
-      if (f.prefillFrom === 'identityId' && ticket.identityId) prefilled[f.fieldId] = ticket.identityId;
-      else if (f.prefillFrom === 'ticketUrl') prefilled[f.fieldId] = `https://wealthsimple.atlassian.net/browse/${ticket.id}`;
-    }
-    setDboFieldValues(prefilled);
+    setDboFieldValues(textPrefills(dboConfig.requiredFields, ticket));
     setDboMetaState('loading');
     setDboMetaError(null);
     let cancelled = false;
@@ -289,6 +358,61 @@ export function MoveModal({ ticket, onClose, initialDestKey = 'EOC' }: { ticket:
       });
     return () => { cancelled = true; };
   }, [dboConfig, ticket.identityId, ticket.id]);
+
+  // Same effect for PFO. Extra step vs the others: User Tier is an option-typed prefill, so
+  // it can only be seeded once createmeta has resolved its option IDs — hence the merge in
+  // .then() rather than a single setState up front.
+  useEffect(() => {
+    if (!pfoConfig) {
+      setPfoMeta(null);
+      setPfoMetaState('idle');
+      setPfoMetaError(null);
+      setPfoFieldValues({});
+      return;
+    }
+    setPfoFieldValues(textPrefills(pfoConfig.requiredFields, ticket));
+    setPfoMetaState('loading');
+    setPfoMetaError(null);
+    let cancelled = false;
+    fetchCreateMetaFields(PFO_PROJECT_KEY, pfoConfig.id)
+      .then((fields) => {
+        if (cancelled) return;
+        setPfoMeta(fields);
+        setPfoFieldValues((prev) => ({ ...prev, ...applyOptionPrefills(pfoConfig.requiredFields, fields, ticket) }));
+        setPfoMetaState('ready');
+      })
+      .catch((e: any) => {
+        if (cancelled) return;
+        setPfoMeta(null);
+        setPfoMetaError(e?.message || 'Failed to load PFO metadata');
+        setPfoMetaState('error');
+      });
+    return () => { cancelled = true; };
+  }, [pfoConfig, ticket.identityId, ticket.id, ticket.tier]);
+
+  // Fire the Atlas lookup once, the first time PFO is selected with an issue type that has
+  // somewhere to put the result — Internal Projects and Bug don't, and shouldn't cost a tab.
+  // The retry button calls runPfoAtlasFetch directly, so the ref guard only suppresses the
+  // automatic run.
+  useEffect(() => {
+    if (destKey !== 'PFO' || !ticket.identityId || pfoAtlasAttempted.current) return;
+    const wantsAtlas = pfoConfig?.requiredFields.some(
+      (f) => f.prefillFrom === 'atlasName' || f.prefillFrom === 'atlasAddress',
+    );
+    if (!wantsAtlas) return;
+    pfoAtlasAttempted.current = true;
+    void runPfoAtlasFetch();
+  }, [destKey, ticket.identityId, pfoConfig, runPfoAtlasFetch]);
+
+  // Apply the Atlas scrape once it lands. Declared after the effect above so an issue-type
+  // change (which resets pfoFieldValues) is followed by a re-apply in the same commit.
+  useEffect(() => {
+    if (!pfoConfig || !pfoAtlas) return;
+    setPfoFieldValues((prev) => {
+      const add = atlasPrefills(pfoConfig.requiredFields, pfoAtlas, prev);
+      return Object.keys(add).length ? { ...prev, ...add } : prev;
+    });
+  }, [pfoConfig, pfoAtlas]);
 
   function reset() {
     setStatus('configuring');
@@ -361,12 +485,16 @@ export function MoveModal({ ticket, onClose, initialDestKey = 'EOC' }: { ticket:
       return true;
     });
 
-  const isPfoCheques = pfoWorkType === 'Cheques: Delivery Issue';
-  const pfoReady = !!ticket.identityId && (
-    isPfoCheques
-      ? true
-      : !!reissueReason && !!dateNeeded.trim() && !!cardType && !!userTier
-  );
+  const pfoReady =
+    !!pfoConfig &&
+    !!ticket.identityId &&
+    pfoMetaState === 'ready' &&
+    // `optional` fields are listed only because we can prefill them — Jira doesn't require
+    // them, so a blank one (failed Atlas scrape) must not hold the move.
+    pfoConfig.requiredFields.filter((f) => !f.optional).every((f) => {
+      const v = pfoFieldValues[f.fieldId];
+      return !!v && !!v.trim();
+    });
 
   const reasonReady = reason.trim().length > 0;
   const ready =
@@ -518,51 +646,30 @@ export function MoveModal({ ticket, onClose, initialDestKey = 'EOC' }: { ticket:
           mandatoryFields: fields,
         });
       } else if (dest.key === 'PFO') {
+        if (!pfoConfig) throw new Error('Select a PFO issue type first.');
         if (!ticket.identityId) throw new Error('Source ticket has no Identity ID.');
-
-        if (isPfoCheques) {
-          destLabel = `PFO (${pfoWorkType})`;
-          moveCall = () => moveTicket({
-            sourceKey: ticket.id,
-            destProjectId: PFO_PROJECT_ID,
-            destIssueTypeId: PFO_CHEQUES_DELIVERY_ISSUETYPE_ID,
-            mandatoryFields: {
-              [EXPRESS_SHIPPING_FIELDS.SUMMARY]:     rawField(ticket.summary),
-              [EXPRESS_SHIPPING_FIELDS.IDENTITY_ID]: rawField(ticket.identityId),
-            },
-          });
-        } else {
-          if (!reissueReason) throw new Error('Pick a Reissue Reason first.');
-          if (!dateNeeded.trim()) throw new Error('Enter a Date that card is needed.');
-
-          const [cardTypeId, userTierId, reissueReasonId, didReissueId, cxKeepsId] = await Promise.all([
-            resolveOptionId('PFO', PFO_EXPRESS_SHIPPING_ISSUETYPE_ID, EXPRESS_SHIPPING_FIELDS.CARD_TYPE, cardType),
-            resolveOptionId('PFO', PFO_EXPRESS_SHIPPING_ISSUETYPE_ID, EXPRESS_SHIPPING_FIELDS.USER_TIER, userTier),
-            resolveOptionId('PFO', PFO_EXPRESS_SHIPPING_ISSUETYPE_ID, EXPRESS_SHIPPING_FIELDS.REISSUE_REASON, reissueReason),
-            resolveOptionId('PFO', PFO_EXPRESS_SHIPPING_ISSUETYPE_ID, EXPRESS_SHIPPING_FIELDS.DID_REISSUE, 'No'),
-            resolveOptionId('PFO', PFO_EXPRESS_SHIPPING_ISSUETYPE_ID, EXPRESS_SHIPPING_FIELDS.CX_KEEPS_OWNERSHIP, 'Yes'),
-          ]);
-
-          destLabel = `PFO (Express Shipping Request · ${cardType} · ${reissueReason})`;
-
-          moveCall = () => moveTicket({
-            sourceKey: ticket.id,
-            destProjectId: PFO_PROJECT_ID,
-            destIssueTypeId: PFO_EXPRESS_SHIPPING_ISSUETYPE_ID,
-            mandatoryFields: {
-              [EXPRESS_SHIPPING_FIELDS.SUMMARY]:               rawField(ticket.summary),
-              [EXPRESS_SHIPPING_FIELDS.IDENTITY_ID]:           rawField(ticket.identityId),
-              [EXPRESS_SHIPPING_FIELDS.CARD_TYPE]:             rawField(cardTypeId),
-              [EXPRESS_SHIPPING_FIELDS.USER_TIER]:             rawField(userTierId),
-              [EXPRESS_SHIPPING_FIELDS.REISSUE_REASON]:        rawField(reissueReasonId),
-              [EXPRESS_SHIPPING_FIELDS.DATE_NEEDED]:           rawField(dateNeeded.trim()),
-              [EXPRESS_SHIPPING_FIELDS.DID_REISSUE]:           rawField(didReissueId),
-              [EXPRESS_SHIPPING_FIELDS.CX_KEEPS_OWNERSHIP]:    rawField(cxKeepsId),
-              [EXPRESS_SHIPPING_FIELDS.UNABLE_REISSUE_REASON]: rawField('CX does not have tooling to perform the card reissue; requires PFO to action.'),
-              [EXPRESS_SHIPPING_FIELDS.KEEP_OWNERSHIP_REASON]: rawField('CX to send final comms to client.'),
-            },
-          });
+        // Resolved by key, never by hardcoded id — the previous numeric id (13086) silently
+        // became the deprecated OLDPFO project when fulfillment was rebuilt.
+        const { projectId } = await lookupProjectAndIssueType(PFO_PROJECT_KEY, pfoConfig.name);
+        destLabel = `PFO (${pfoConfig.name})`;
+        const fields: Record<string, ReturnType<typeof rawField>> = {
+          [MOVE_FIELDS.SUMMARY]: rawField(ticket.summary),
+        };
+        for (const f of pfoConfig.requiredFields) {
+          const v = pfoFieldValues[f.fieldId];
+          // A blank optional field is omitted rather than sent empty — Jira rejects an
+          // empty value on a field it didn't ask for. Non-optional fields can't be blank
+          // here; pfoReady gates the button on them.
+          if (f.optional && !(v || '').trim()) continue;
+          if (f.type === 'paragraph') fields[f.fieldId] = adfField(v);
+          else fields[f.fieldId] = rawField(v);
         }
+        moveCall = () => moveTicket({
+          sourceKey: ticket.id,
+          destProjectId: projectId,
+          destIssueTypeId: pfoConfig.id,
+          mandatoryFields: fields,
+        });
       } else {
         // FRAUD path is handled by the UI-only branch (no execute button shown).
         throw new Error(`Destination ${dest.key} is not API-supported.`);
@@ -752,21 +859,16 @@ export function MoveModal({ ticket, onClose, initialDestKey = 'EOC' }: { ticket:
 
               {dest.key === 'PFO' && (
                 <PfoFields
-                  workType={pfoWorkType}
-                  onWorkType={setPfoWorkType}
-                  locked={status === 'confirming' || status === 'executing'}
-                />
-              )}
-              {dest.key === 'PFO' && !isPfoCheques && (
-                <ExpressShippingFields
-                  cardType={cardType}
-                  onCardType={setCardType}
-                  userTier={userTier}
-                  onUserTier={setUserTier}
-                  reissueReason={reissueReason}
-                  onReissueReason={setReissueReason}
-                  dateNeeded={dateNeeded}
-                  onDateNeeded={setDateNeeded}
+                  issueTypeId={pfoIssueTypeId}
+                  onIssueTypeId={setPfoIssueTypeId}
+                  fieldValues={pfoFieldValues}
+                  onFieldValues={setPfoFieldValues}
+                  meta={pfoMeta}
+                  metaState={pfoMetaState}
+                  metaError={pfoMetaError}
+                  atlasState={pfoAtlasState}
+                  atlasError={pfoAtlasError}
+                  onRetryAtlas={() => { void runPfoAtlasFetch(); }}
                   locked={status === 'confirming' || status === 'executing'}
                 />
               )}
@@ -1167,153 +1269,207 @@ function DboFields(props: {
   );
 }
 
-// PFO work-type picker — three-way button row (Credit Card / Prepaid Card / Cheques).
-// Credit Card + Prepaid Card both route to Express Shipping Request; Cheques routes
-// to the minimal Cheques: Delivery Issue path.
+// PFO destination fields — issue-type picker plus dynamic required fields resolved via
+// createmeta, same shape as DboFields / PrrFields / FraudFields. Replaced a bespoke
+// work-type + Express Shipping form whose field IDs and option labels were pinned to the
+// now-deprecated OLDPFO project; see the PFO block in moveConfig.ts for the mapping.
 function PfoFields(props: {
-  workType: PfoWorkType;
-  onWorkType: (w: PfoWorkType) => void;
+  issueTypeId: string;
+  onIssueTypeId: (id: string) => void;
+  fieldValues: Record<string, string>;
+  onFieldValues: (updater: (prev: Record<string, string>) => Record<string, string>) => void;
+  meta: CreateMetaField[] | null;
+  metaState: 'idle' | 'loading' | 'ready' | 'error';
+  metaError: string | null;
+  atlasState: FetchState;
+  atlasError: string | null;
+  onRetryAtlas: () => void;
   locked: boolean;
 }) {
+  const { issueTypeId, onIssueTypeId, fieldValues, onFieldValues, meta, metaState, metaError, atlasState, atlasError, onRetryAtlas, locked } = props;
+  const cfg = PFO_ISSUE_TYPES.find((t) => t.id === issueTypeId) || null;
+
+  const setField = (fieldId: string, value: string) =>
+    onFieldValues((prev) => ({ ...prev, [fieldId]: value }));
+
+  // Express Shipping Request requires all 11 of its fields, so none can be dropped from the
+  // move payload — but the ones we can resolve for the operator (Identity ID, Atlas URL and
+  // User Tier from the ticket; Cardholder Name and Shipping Address from Atlas) don't need
+  // to occupy the form. They collapse behind a summary line, leaving only what has to be
+  // filled by hand. A prefill that resolved empty (ticket with no identityId, a tier with no
+  // matching option, an Atlas lookup that failed) stays in the visible list: a blank required
+  // field has to be fixable here or the move 400s.
+  //
+  // The set is sticky — a field joins it the moment its prefill lands and never leaves. That
+  // covers the Atlas values, which arrive seconds after the form first renders, without
+  // letting a field jump out from under the cursor if the operator clears it mid-edit.
+  // It resets when metaState leaves 'ready', which is what an issue-type change triggers.
+  const autoIdsRef = useRef<Set<string>>(new Set());
+  const autoGenRef = useRef<string>('');
+  const gen = metaState === 'ready' && cfg ? cfg.id : '';
+  if (autoGenRef.current !== gen) {
+    autoGenRef.current = gen;
+    autoIdsRef.current = new Set();
+  }
+  if (gen && cfg) {
+    for (const f of cfg.requiredFields) {
+      if (f.prefillFrom && (fieldValues[f.fieldId] || '').trim()) autoIdsRef.current.add(f.fieldId);
+    }
+  }
+  const autoIds = autoIdsRef.current;
+  const autoFields = cfg && gen ? cfg.requiredFields.filter((f) => autoIds.has(f.fieldId)) : [];
+  const manualFields = cfg && gen ? cfg.requiredFields.filter((f) => !autoIds.has(f.fieldId)) : (cfg?.requiredFields || []);
+
   return (
     <section style={sectionStyle}>
-      <Label>Step 3: PFO work type</Label>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--mint-sp-2)' }}>
-        {PFO_API_SUPPORTED_WORK_TYPES.map((w) => {
-          const active = props.workType === w;
-          return (
-            <button
-              key={w}
-              disabled={props.locked}
-              onClick={() => props.onWorkType(w)}
-              style={{
-                padding: '8px 12px',
-                background: active ? 'var(--mint-fg-strong)' : 'var(--mint-bg-card)',
-                color: active ? 'var(--mint-fg-inverted)' : 'var(--mint-fg-strong)',
-                border: 'var(--mint-card-stroke)',
-                borderRadius: 'var(--mint-radius-button)',
-                fontWeight: 600,
-                fontSize: 'var(--mint-text-meta)',
-                cursor: props.locked ? 'not-allowed' : 'pointer',
-                textAlign: 'left',
-                opacity: props.locked ? 0.6 : 1,
-              }}
-            >
-              {w}
-            </button>
-          );
-        })}
+      <Label>Step 3: PFO fields</Label>
+
+      <div style={{ marginBottom: 'var(--mint-sp-3)' }}>
+        <FieldLabel>Issue Type</FieldLabel>
+        <select
+          value={issueTypeId}
+          disabled={locked}
+          onChange={(e) => onIssueTypeId(e.target.value)}
+          style={selectStyle}
+        >
+          <option value="">— Pick an issue type —</option>
+          {PFO_ISSUE_TYPES.map((t) => (
+            <option key={t.id} value={t.id}>{t.name}</option>
+          ))}
+        </select>
+        {cfg && (
+          <div style={{ marginTop: 6, fontSize: 'var(--mint-text-nano)', color: 'var(--mint-fg-soft)', lineHeight: 1.4 }}>
+            {cfg.description}
+          </div>
+        )}
       </div>
+
+      {cfg && metaState === 'loading' && (
+        <InfoCard tone="info">Loading PFO field options from Jira…</InfoCard>
+      )}
+      {cfg && metaState === 'error' && (
+        <InfoCard tone="negative">Failed to load PFO fields: {metaError || 'unknown error'}. Reopen the modal to retry.</InfoCard>
+      )}
+
+      {cfg && metaState === 'ready' && atlasState === 'pending' && (
+        <div style={{ marginBottom: 'var(--mint-sp-3)' }}>
+          <InfoCard tone="info">Looking up Cardholder Name + Shipping Address in Atlas…</InfoCard>
+        </div>
+      )}
+      {cfg && metaState === 'ready' && atlasState === 'failed' && (
+        <div style={{ marginBottom: 'var(--mint-sp-3)' }}>
+          <InfoCard tone="warning">
+            Atlas lookup failed ({atlasError || 'unknown error'}) — fill Cardholder Name and Shipping Address by hand.{' '}
+            <button
+              type="button"
+              onClick={onRetryAtlas}
+              disabled={locked}
+              style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', font: 'inherit', fontWeight: 700, color: 'inherit', textDecoration: 'underline' }}
+            >
+              Retry
+            </button>
+          </InfoCard>
+        </div>
+      )}
+
+      {cfg && metaState === 'ready' && meta && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--mint-sp-3)' }}>
+          {autoFields.length > 0 && (
+            <AutoFilledFields
+              fields={autoFields}
+              meta={meta}
+              fieldValues={fieldValues}
+              onChange={setField}
+              onChildChange={(id, v) => setField(`${id}__child`, v)}
+              locked={locked}
+            />
+          )}
+          {manualFields.map((f) => (
+            <PrrFieldInput
+              key={f.fieldId}
+              field={f}
+              meta={meta}
+              value={fieldValues[f.fieldId] || ''}
+              childValue={fieldValues[`${f.fieldId}__child`] || ''}
+              onChange={(v) => setField(f.fieldId, v)}
+              onChildChange={(v) => setField(`${f.fieldId}__child`, v)}
+              locked={locked}
+            />
+          ))}
+        </div>
+      )}
     </section>
   );
 }
 
-// Express Shipping Request form — 4 visible fields. Four more (DID_REISSUE,
-// CX_KEEPS_OWNERSHIP, UNABLE_REISSUE_REASON, KEEP_OWNERSHIP_REASON) are hidden
-// and hardcoded at submit (the last two are Jira-required follow-ups to the
-// first two answers).
-function ExpressShippingFields(props: {
-  cardType: CardType;
-  onCardType: (c: CardType) => void;
-  userTier: UserTier;
-  onUserTier: (t: UserTier) => void;
-  reissueReason: string;
-  onReissueReason: (r: string) => void;
-  dateNeeded: string;
-  onDateNeeded: (d: string) => void;
+// Collapsed summary for fields already prefilled from the source ticket. Expands into the
+// same PrrFieldInput controls so a wrong prefill is still correctable before the move.
+function AutoFilledFields({ fields, meta, fieldValues, onChange, onChildChange, locked }: {
+  fields: PrrRequiredField[];
+  meta: CreateMetaField[];
+  fieldValues: Record<string, string>;
+  onChange: (fieldId: string, value: string) => void;
+  onChildChange: (fieldId: string, value: string) => void;
   locked: boolean;
 }) {
+  const [open, setOpen] = useState(false);
+
+  // Option-typed values are stored as option IDs, so the summary has to map back through
+  // createmeta to show the label the operator would recognise ("Core", not "13704").
+  const summaryFor = (f: PrrRequiredField) => {
+    const raw = fieldValues[f.fieldId] || '';
+    if (f.type === 'option' || f.type === 'array-option' || f.type === 'option-with-child') {
+      const opt = meta.find((m) => m.fieldId === f.fieldId)?.allowedValues?.find((o) => o.id === raw);
+      const label = (opt?.value ?? opt?.name ?? '').toString();
+      return label ? `${f.name} (${label})` : f.name;
+    }
+    // Identity IDs and Atlas URLs are far too long to inline — name only.
+    return raw.length <= 24 ? `${f.name} (${raw})` : f.name;
+  };
+
   return (
-    <section style={sectionStyle}>
-      <Label>Step 4: Express Shipping Request details</Label>
-
-      <div style={{ marginBottom: 'var(--mint-sp-3)' }}>
-        <FieldLabel>Card Type</FieldLabel>
-        <div style={{ display: 'flex', gap: 'var(--mint-sp-2)' }}>
-          {CARD_TYPE_LABELS.map((ct) => {
-            const active = props.cardType === ct;
-            return (
-              <button
-                key={ct}
-                disabled={props.locked}
-                onClick={() => props.onCardType(ct)}
-                style={{
-                  flex: 1,
-                  padding: '6px 12px',
-                  background: active ? 'var(--mint-fg-strong)' : 'var(--mint-bg-card)',
-                  color: active ? 'var(--mint-fg-inverted)' : 'var(--mint-fg-strong)',
-                  border: 'var(--mint-card-stroke)',
-                  borderRadius: 'var(--mint-radius-button)',
-                  fontWeight: 600,
-                  fontSize: 'var(--mint-text-meta)',
-                  cursor: props.locked ? 'not-allowed' : 'pointer',
-                  opacity: props.locked ? 0.6 : 1,
-                }}
-              >
-                {ct}
-              </button>
-            );
-          })}
+    <div style={{
+      background: 'var(--mint-bg-subtle)',
+      border: '1px solid var(--mint-outline)',
+      borderRadius: 'var(--mint-radius-button)',
+      padding: 'var(--mint-sp-2) var(--mint-sp-3)',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 'var(--mint-sp-2)' }}>
+        <div style={{ flex: 1, fontSize: 'var(--mint-text-nano)', color: 'var(--mint-fg-soft)', lineHeight: 1.5 }}>
+          <span style={{ color: 'var(--mint-positive-fg-strong)', fontWeight: 700 }}>✓ Auto-filled</span>
+          {' — '}
+          {fields.map((f) => summaryFor(f)).join(' · ')}
         </div>
-      </div>
-
-      <div style={{ marginBottom: 'var(--mint-sp-3)' }}>
-        <FieldLabel>User Tier</FieldLabel>
-        <div style={{ display: 'flex', gap: 'var(--mint-sp-2)' }}>
-          {USER_TIER_LABELS.map((t) => {
-            const active = props.userTier === t;
-            return (
-              <button
-                key={t}
-                disabled={props.locked}
-                onClick={() => props.onUserTier(t)}
-                style={{
-                  flex: 1,
-                  padding: '6px 12px',
-                  background: active ? 'var(--mint-warning-fg-graphic)' : 'var(--mint-bg-card)',
-                  color: active ? '#fff' : 'var(--mint-fg-strong)',
-                  border: 'var(--mint-card-stroke)',
-                  borderRadius: 'var(--mint-radius-button)',
-                  fontWeight: 600,
-                  fontSize: 'var(--mint-text-meta)',
-                  cursor: props.locked ? 'not-allowed' : 'pointer',
-                  opacity: props.locked ? 0.6 : 1,
-                }}
-              >
-                {t}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      <div style={{ marginBottom: 'var(--mint-sp-3)' }}>
-        <FieldLabel>Reissue Reason <span style={{ color: 'var(--mint-negative-fg-strong)' }}>*</span></FieldLabel>
-        <select
-          value={props.reissueReason}
-          disabled={props.locked}
-          onChange={(e) => props.onReissueReason(e.target.value)}
-          style={selectStyle}
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          style={{
+            background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+            fontSize: 'var(--mint-text-nano)', fontWeight: 700,
+            color: 'var(--mint-fg-subdued-title)', textDecoration: 'underline',
+          }}
         >
-          <option value="">Select a reason…</option>
-          {REISSUE_REASON_LABELS.map((r) => (
-            <option key={r} value={r}>{r}</option>
-          ))}
-        </select>
+          {open ? 'Hide' : 'Show'}
+        </button>
       </div>
 
-      <div>
-        <FieldLabel>Date that card is needed <span style={{ color: 'var(--mint-negative-fg-strong)' }}>*</span></FieldLabel>
-        <input
-          type="text"
-          value={props.dateNeeded}
-          disabled={props.locked}
-          onChange={(e) => props.onDateNeeded(e.target.value)}
-          placeholder="e.g. ASAP, June 26 2026, Not urgent"
-          style={inputStyle}
-        />
-      </div>
-    </section>
+      {open && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--mint-sp-3)', marginTop: 'var(--mint-sp-3)' }}>
+          {fields.map((f) => (
+            <PrrFieldInput
+              key={f.fieldId}
+              field={f}
+              meta={meta}
+              value={fieldValues[f.fieldId] || ''}
+              childValue={fieldValues[`${f.fieldId}__child`] || ''}
+              onChange={(v) => onChange(f.fieldId, v)}
+              onChildChange={(v) => onChildChange(f.fieldId, v)}
+              locked={locked}
+            />
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -1734,11 +1890,15 @@ function PrrFieldInput({ field, meta, value, childValue, onChange, onChildChange
   const metaField = meta.find((m) => m.fieldId === field.fieldId);
   const options = metaField?.allowedValues || [];
   const labelFor = (v: CreateMetaAllowedValue) => v.value ?? v.name ?? v.id;
+  // Only PFO marks fields optional today (fields it lists purely to prefill them). Saying so
+  // matters when a prefill fails and the input turns up blank in the manual list — without it
+  // the operator can't tell it apart from something the move actually needs.
+  const name = field.optional ? `${field.name} (optional)` : field.name;
 
   if (field.type === 'string') {
     return (
       <div>
-        <FieldLabel>{field.name}</FieldLabel>
+        <FieldLabel>{name}</FieldLabel>
         <input type="text" value={value} disabled={locked} onChange={(e) => onChange(e.target.value)} style={inputStyle} />
       </div>
     );
@@ -1746,7 +1906,7 @@ function PrrFieldInput({ field, meta, value, childValue, onChange, onChildChange
   if (field.type === 'number') {
     return (
       <div>
-        <FieldLabel>{field.name}</FieldLabel>
+        <FieldLabel>{name}</FieldLabel>
         <input type="number" value={value} disabled={locked} onChange={(e) => onChange(e.target.value)} style={inputStyle} />
       </div>
     );
@@ -1754,7 +1914,7 @@ function PrrFieldInput({ field, meta, value, childValue, onChange, onChildChange
   if (field.type === 'paragraph') {
     return (
       <div>
-        <FieldLabel>{field.name}</FieldLabel>
+        <FieldLabel>{name}</FieldLabel>
         <textarea value={value} disabled={locked} onChange={(e) => onChange(e.target.value)} rows={3} style={{ ...inputStyle, resize: 'vertical', minHeight: 60 }} />
       </div>
     );
@@ -1762,7 +1922,7 @@ function PrrFieldInput({ field, meta, value, childValue, onChange, onChildChange
   if (field.type === 'date') {
     return (
       <div>
-        <FieldLabel>{field.name}</FieldLabel>
+        <FieldLabel>{name}</FieldLabel>
         <input type="date" value={value} disabled={locked} onChange={(e) => onChange(e.target.value)} style={inputStyle} />
       </div>
     );
@@ -1773,7 +1933,7 @@ function PrrFieldInput({ field, meta, value, childValue, onChange, onChildChange
     // 1-length array so Jira accepts it. Agent can add more selections via Jira after.
     return (
       <div>
-        <FieldLabel>{field.name}{field.type === 'array-option' ? ' (pick one)' : ''}</FieldLabel>
+        <FieldLabel>{name}{field.type === 'array-option' ? ' (pick one)' : ''}</FieldLabel>
         <select value={value} disabled={locked} onChange={(e) => onChange(e.target.value)} style={selectStyle}>
           <option value="">— Select —</option>
           {options.map((o) => (
@@ -1788,7 +1948,7 @@ function PrrFieldInput({ field, meta, value, childValue, onChange, onChildChange
     const children = parent?.children || [];
     return (
       <div>
-        <FieldLabel>{field.name}</FieldLabel>
+        <FieldLabel>{name}</FieldLabel>
         <select value={value} disabled={locked} onChange={(e) => { onChange(e.target.value); onChildChange(''); }} style={selectStyle}>
           <option value="">— Select —</option>
           {options.map((o) => (

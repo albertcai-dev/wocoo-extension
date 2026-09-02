@@ -23,6 +23,12 @@ export interface WocooTicket {
   assignee: string;
   created: string;
   recentComments: Array<{ author: string; timestamp: string; body: string }>;
+  /** i2c service-desk ticket ref (e.g. "PO-420974") found anywhere in the description or
+   *  the FULL comment history — not just `recentComments`, which is capped at 3 and so
+   *  usually misses the "i2c ticket created" comment on a long-running ticket.
+   *  Empty when the ticket has no i2c ref. Lets the panel offer the i2c email thread even
+   *  when the i2c ticket was raised by hand (no reply-tracking row exists). */
+  i2cTicketRef: string;
   zendeskTranscript: {
     state: 'success' | 'fetching' | 'partial' | 'error';
     zendeskTicketId?: string;
@@ -58,6 +64,7 @@ export const MOCK_TICKET: WocooTicket = {
       body: 'Atlas Identity Link: https://atlas.wealthsimple.com/identity/identity-gJLRchfi_P_5fOXq0b0cxBWcM0M/overview/?ticketId=WOCOO-22597',
     },
   ],
+  i2cTicketRef: '',
   zendeskTranscript: {
     state: 'success',
     zendeskTicketId: '13605113',
