@@ -29,3 +29,23 @@ export async function setI2cCredentials(creds: I2cCredentials): Promise<void> {
 export async function clearI2cCredentials(): Promise<void> {
   await chrome.storage.local.remove(I2C_KEY);
 }
+
+// ============ LLM Gateway developer key ============
+// Same trust model as the i2c credentials above: chrome.storage.local is scoped to this
+// extension. The key is a personal LiteLLM developer key, not a shared secret.
+
+const LLM_GATEWAY_KEY = 'llmGatewayKey';
+
+export async function getLlmGatewayKey(): Promise<string | null> {
+  const res = await chrome.storage.local.get(LLM_GATEWAY_KEY);
+  const v = res[LLM_GATEWAY_KEY];
+  return typeof v === 'string' && v.trim() ? v : null;
+}
+
+export async function setLlmGatewayKey(key: string): Promise<void> {
+  await chrome.storage.local.set({ [LLM_GATEWAY_KEY]: key.trim() });
+}
+
+export async function clearLlmGatewayKey(): Promise<void> {
+  await chrome.storage.local.remove(LLM_GATEWAY_KEY);
+}

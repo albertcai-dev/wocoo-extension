@@ -73,6 +73,7 @@
   "permissions": ["sidePanel", "storage", "scripting", "tabs", "identity", "alarms", "nativeMessaging"],
   "host_permissions": [
     "http://localhost:8501/*",
+    "https://llm.w10e.com/*",
     "https://wealthsimple.atlassian.net/*",
     "https://atlas.wealthsimple.com/*",
     "https://cs-tools-satori.wealthsimple.com/*",
