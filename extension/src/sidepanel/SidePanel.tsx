@@ -26,6 +26,7 @@ import { RetentionFeeWaiverCard } from './RetentionFeeWaiverCard';
 import { VisaCompanionCard } from './VisaCompanionCard';
 import type { MoveDestination } from '../data/moveConfig';
 import { CredRouteCard } from './CredRouteCard';
+import { AITriageCard } from './AITriageCard';
 import { OverpaymentTriage } from './OverpaymentTriage';
 import { ReverseFeeWorkflow } from './ReverseFeeWorkflow';
 import { QCFeeWaiverWorkflow } from './QCFeeWaiverWorkflow';
@@ -544,6 +545,9 @@ function TicketViewInner({ ticket, onTicketUpdate, onStartTriage, onStartReverse
           onClose={() => setCreateReimbActive(false)}
         />
       ) : null}
+
+      {/* AI VERDICT — grounded in the ticket log + Notion playbook */}
+      <AITriageCard ticket={ticket} onOpenSettings={onOpenSettings} />
 
       {/* RECENT COMMENTS (collapsed) */}
       {ticket.recentComments.length > 0 ? (
