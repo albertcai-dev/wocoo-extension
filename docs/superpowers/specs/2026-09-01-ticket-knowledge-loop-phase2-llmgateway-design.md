@@ -1,6 +1,7 @@
 # Ticket Knowledge Loop — Phase 2 (Retrieval) Design
 
 **Date:** 2026-09-01
+**Amended:** 2026-09-03 — folds in Jira precedent retrieval as a third source (§2b).
 **Status:** Approved design, no implementation plan yet
 **Supersedes:** `2026-07-03-ticket-knowledge-loop-phase2-retrieval.md` (Voyage embeddings + MagicAI via GAS). Do not execute that plan.
 **Parent spec:** `2026-07-02-ticket-knowledge-loop-design.md`
@@ -8,8 +9,9 @@
 ## Goal
 
 Replace the sidepanel's heuristic suggested-response with an AI verdict card grounded in
-(a) Albert's own resolved-ticket log and (b) his Notion playbook. The card answers
-"how did I handle this kind of ticket before, and where should this one go?"
+(a) Albert's own resolved-ticket log, (b) his Notion playbook, and (c) past Done WOCOO
+tickets of the same work type. The card answers "how did I handle this kind of ticket
+before, and where should this one go?"
 
 ## Non-goals
 
@@ -20,12 +22,14 @@ Replace the sidepanel's heuristic suggested-response with an AI verdict card gro
 
 ## 1. Architecture
 
-Three participants:
+Four participants:
 
 - **Extension (sidepanel)** — owns retrieval orchestration, prompt construction, the LLM
   call, caching, and rendering. All prompt logic lives here so iteration is an HMR reload
   rather than a GAS redeploy.
 - **Apps Script bridge** — pure data layer. Two new read-only actions. No LLM calls.
+- **Jira REST** — queried directly from the extension over the existing Atlassian OAuth
+  token for precedent candidates (§2b). No new auth.
 - **LLM Gateway** (`llm.w10e.com`) — called directly from the extension.
 
 The bridge cannot call the gateway: the gateway is VPN-locked and Apps Script runs on
@@ -35,10 +39,14 @@ Flow on WOCOO ticket open:
 
 1. Sidepanel resolves the current ticket and its `original_work_type`.
 2. Cache lookup by `ticket_id + versionTag`. Hit -> render, stop.
-3. Miss -> `getRecentLog(work_type)` and `getPlaybook()` in parallel via the bridge.
-4. Build one prompt containing the filtered log rows plus the relevant playbook chunks.
-5. `POST https://llm.w10e.com/api/v2/chat/completions` with `response_format: json_object`.
-6. Parse into a `TriageVerdict`, cache it, render the card.
+3. Miss -> `getRecentLog(work_type)` and `getPlaybook()` via the bridge, and
+   `searchPrecedent(work_type, currentKey)` against Jira, all three in parallel.
+4. Join the precedent candidates against the log rows by ticket id, so a candidate Albert
+   logged carries its `resolution_note` and the rest are marked intake-only.
+5. Build one prompt containing the filtered log rows, the relevant playbook chunks, and
+   the joined precedent candidates.
+6. `POST https://llm.w10e.com/api/v2/chat/completions` with `response_format: json_object`.
+7. Parse into a `TriageVerdict`, cache it, render the card.
 
 ## 2. Bridge changes
 
@@ -61,22 +69,50 @@ Notion page is not a source. No automated sync in this phase.
 
 The `Log` tab's `embedding` and `embedded_at` columns stay unused.
 
+## 2b. Jira precedent retrieval (amendment 2026-09-03)
+
+The log and playbook only cover tickets Albert personally handled and wrote up. This
+source adds the rest of the board's history. Retrieval is deterministic; the LLM only
+ranks and summarises what it is handed.
+
+- **Candidate query.** `searchPrecedent(workType, excludeKey)` in `api/jira.ts` runs
+  `project = WOCOO AND statusCategory = Done AND issuetype = "<workType>" AND key !=
+  <excludeKey> ORDER BY created DESC`, capped at 40 rows. WOCOO's "work type" *is*
+  `issuetype.name` — see the mapping already relied on at `api/jira.ts:1127`. There is no
+  separate work-type custom field to query.
+- **Fields.** `searchTickets` does not request `description` today. It gains an optional
+  `extraFields?: string[]` parameter rather than a parallel helper, so both callers keep
+  one code path.
+- **Outcome join.** `getRecentLog(work_type)` already returns only rows with a non-empty
+  `resolution_note` for the matching work type — exactly the join population. The join is
+  an in-memory match on ticket id, so it costs no extra call. A candidate with a hit
+  carries `outcome: <resolution_note>`; a candidate without one is passed as
+  `source: 'intake-only'`.
+- **Why not keyword or LLM-authored JQL.** Both were considered. Work type plus recency
+  needs no query validation and no second round trip; the accepted cost is missing
+  precedent that was filed under a different work type.
+- **Degradation.** A precedent-fetch failure must not fail the card. The verdict still
+  renders from log plus playbook, with "precedent unavailable" noted on the card.
+
 ## 3. Extension file layout
 
 New:
 
-- `data/aiTriageTypes.ts` — `TriageVerdict`, `RecentLogRow`, `PlaybookChunk`.
+- `data/aiTriageTypes.ts` — `TriageVerdict`, `RecentLogRow`, `PlaybookChunk`,
+  `PrecedentCandidate`.
 - `api/llmGateway.ts` — `callLlmGateway(messages, key, opts)`. Header
   `X-LiteLLM-Dev-Key`, model `bedrock-claude-sonnet-4-6`, `response_format:
   { type: 'json_object' }`, 45s timeout via `AbortController`.
 - `sidepanel/composePrompt.ts` — pure `buildTriagePrompt(...)` and
   `parseTriageVerdict(...)`. Unit-tested with Vitest; no network, no chrome APIs.
-- `sidepanel/AITriageCard.tsx` — the card.
+- `sidepanel/AITriageCard.tsx` — the card, including the precedent list. Each cited
+  ticket renders as a Jira link with a `logged` / `intake-only` source badge.
 - `sidepanel/aiTriageCache.ts` — in-memory Map plus in-flight promise map.
 
 Modified:
 
 - `api/bridge.ts` — `getRecentLogViaBridge`, `getPlaybookViaBridge`.
+- `api/jira.ts` — new `searchPrecedent`; `searchTickets` gains `extraFields`.
 - `sidepanel/SidePanel.tsx` — render `<AITriageCard>` between the `QuickActions` block
   (~line 521) and the `{/* RECENT COMMENTS (collapsed) */}` block (~line 548).
 - `sidepanel/SettingsView.tsx` — LLM Gateway key field (Section 5).
@@ -84,17 +120,29 @@ Modified:
 
 ## 4. Prompt shape and the LLM call
 
-One user message, four labelled parts: the current ticket (summary + description), the
-scored log rows, the playbook chunks, and the output contract. System message states the
-role and forbids inventing work types outside the list it is given.
+One user message, five labelled parts: the current ticket (summary + description), the
+scored log rows, the playbook chunks, a `PRECEDENT CANDIDATES` block, and the output
+contract. Each candidate renders as key, summary, description, and either its outcome or
+the literal `intake-only`. The instruction is to rank the candidates, keep the top 3–5,
+and cite their keys verbatim. System message states the role, forbids inventing work
+types outside the list it is given, and forbids citing any ticket key not in the
+candidate block.
 
 Model choice is constrained: **private VPC-hosted models only**. External models get
 WS PII masking applied, which mangles client names and emails inside ticket text.
 
 `TriageVerdict` fields: `work_type`, `confidence` (`high` | `medium` | `low`),
-`rationale`, `steps` (string array), `similar_tickets` (ticket id + one-line what-happened),
-`gotchas`. `parseTriageVerdict` validates shape and returns a parse error rather than
-throwing, so a malformed response renders as an error state, not a crash.
+`rationale`, `steps` (string array), `similar_tickets`, `gotchas`.
+
+`similar_tickets` entries are `{ key, what_happened, source }` where `source` is `logged`
+or `intake-only`. The card must not present an intake-only entry as a resolution — that
+text is the original request, not the outcome.
+
+`parseTriageVerdict` validates shape and returns a parse error rather than throwing, so a
+malformed response renders as an error state, not a crash. It additionally rejects any
+`similar_tickets` key absent from the supplied candidate set: the model will otherwise
+emit plausible-looking WOCOO keys that do not exist. An empty `similar_tickets` array is
+valid and renders as "no precedent found".
 
 ## 5. Settings and first-run UX
 
@@ -129,11 +177,16 @@ hidden card makes the feature permanently invisible to its only user.
 
 - Vitest unit tests for `buildTriagePrompt` and `parseTriageVerdict` (well-formed,
   malformed, missing-field responses).
+- Vitest unit tests for the precedent path: prompt built with 0, 1, and 40 candidates;
+  `parseTriageVerdict` rejecting a key outside the candidate set; the log join matching by
+  ticket id; intake-only labelling of unmatched candidates.
 - Vitest unit tests for the cache: hit, expiry, invalidation on `versionTag` change,
   in-flight dedup, errors not cached.
 - Bridge actions verified manually against the live sheet; scoring checked against a row
   set with exact, substring, and non-matching work types.
 - End-to-end on a real WOCOO ticket, on VPN, before the card is enabled by default.
+- Acceptance check for precedent: open an interest-charged-after-cutoff ticket and confirm
+  `WOCOO-24990` and `WOCOO-24715` appear among the cited precedent.
 
 ## Open risks
 
@@ -143,3 +196,11 @@ hidden card makes the feature permanently invisible to its only user.
   first fix is work-type filtering in the extension, not embeddings.
 - The `Playbook` tab is refreshed by hand via the sync runbook and will drift from Notion
   between runs.
+- Precedent recall is bounded by work type. A ticket filed under a different issue type
+  than its true procedure will not surface as precedent, and WOCOO's 37 issue types do not
+  map cleanly onto triage procedures.
+- Precedent freshness is bounded by the cache key, which is the *current* ticket's
+  `fields.updated`. A ticket that closes during the 30-minute TTL will not appear until the
+  entry expires or Regenerate is clicked.
+- Outcome coverage is limited to tickets Albert logged with a `resolution_note`. Everything
+  else contributes intake text only, which is weaker evidence.
