@@ -2,7 +2,8 @@
 
 **Date:** 2026-09-01
 **Amended:** 2026-09-03 — folds in Jira precedent retrieval as a third source (§2b).
-**Status:** Approved design, no implementation plan yet
+**Status:** Base retrieval implemented (commits `30c8d0e`..`16a4bb7`). The §2b precedent
+delta has a plan at `docs/superpowers/plans/2026-09-03-jira-precedent-retrieval.md`.
 **Supersedes:** `2026-07-03-ticket-knowledge-loop-phase2-retrieval.md` (Voyage embeddings + MagicAI via GAS). Do not execute that plan.
 **Parent spec:** `2026-07-02-ticket-knowledge-loop-design.md`
 
