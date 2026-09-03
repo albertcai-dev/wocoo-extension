@@ -3,6 +3,7 @@
 
 import { getValidAccessToken } from '../auth/oauth';
 import type { WocooTicket } from '../data/mockTicket';
+import { buildPrecedentJql, PRECEDENT_MAX_RESULTS, type PrecedentRowInput } from '../data/precedent';
 
 const ACCESSIBLE_RESOURCES_URL = 'https://api.atlassian.com/oauth/token/accessible-resources';
 
@@ -876,6 +877,9 @@ export async function findExistingClone(
 export interface TicketRow {
   id: string;
   summary: string;
+  /** Only populated when the caller passes `description` in `extraFields`. The Jira
+   *  search response returns ADF, so this is the flattened plain text. */
+  description?: string;
   issueType: string;
   status: string;
   priority: WocooTicket['priority'];
@@ -893,7 +897,11 @@ export interface TicketRow {
  * removed (HTTP 410) per Atlassian CHANGE-2046. The new endpoint is POST-only and uses
  * token-based pagination (`nextPageToken`) instead of `startAt`.
  */
-export async function searchTickets(jql: string, maxResults = 50): Promise<TicketRow[]> {
+export async function searchTickets(
+  jql: string,
+  maxResults = 50,
+  extraFields: string[] = [],
+): Promise<TicketRow[]> {
   const token = await getValidAccessToken();
   const cloudId = await getCloudId();
   const url = `https://api.atlassian.com/ex/jira/${cloudId}/rest/api/3/search/jql`;
@@ -907,7 +915,11 @@ export async function searchTickets(jql: string, maxResults = 50): Promise<Ticke
     body: JSON.stringify({
       jql,
       maxResults,
-      fields: ['summary', 'status', 'priority', 'issuetype', 'updated', 'statuscategorychangedate', FIELD_TIER],
+      fields: [
+        'summary', 'status', 'priority', 'issuetype', 'updated',
+        'statuscategorychangedate', FIELD_TIER,
+        ...extraFields,
+      ],
     }),
   });
   if (!resp.ok) {
@@ -926,6 +938,7 @@ export async function searchTickets(jql: string, maxResults = 50): Promise<Ticke
     return {
       id: issue.key,
       summary: f.summary || '',
+      description: f.description === undefined ? undefined : extractDescription(f.description),
       issueType: f.issuetype?.name || 'Other',
       status: f.status?.name || 'Unknown',
       priority: ['Highest', 'High', 'Medium', 'Low', 'Lowest'].includes(priorityName) ? priorityName : 'Medium',
@@ -935,6 +948,27 @@ export async function searchTickets(jql: string, maxResults = 50): Promise<Ticke
       statusCategoryChangedAt: f.statuscategorychangedate || f.created || f.updated || new Date().toISOString(),
     };
   });
+}
+
+/**
+ * Precedent candidates for the AI verdict card (spec §2b): past Done WOCOO tickets of
+ * the same work type, newest first, capped at PRECEDENT_MAX_RESULTS.
+ *
+ * Deliberately deterministic. Keyword JQL and LLM-authored JQL were both considered and
+ * rejected: work type plus recency needs no query validation and no second round trip.
+ * The accepted cost is missing precedent filed under a different work type.
+ */
+export async function searchPrecedent(
+  workType: string,
+  excludeKey: string,
+): Promise<PrecedentRowInput[]> {
+  if (!workType) return [];
+  const rows = await searchTickets(
+    buildPrecedentJql(workType, excludeKey),
+    PRECEDENT_MAX_RESULTS,
+    ['description'],
+  );
+  return rows.map((r) => ({ id: r.id, summary: r.summary, description: r.description || '' }));
 }
 
 /**
@@ -1180,7 +1214,7 @@ export function extractI2cTicketRef(sources: string[]): string {
 }
 
 /** Convert Atlassian's ADF (Atlassian Document Format) JSON to plain text, best-effort. */
-function extractDescription(adfOrString: any): string {
+export function extractDescription(adfOrString: any): string {
   if (!adfOrString) return '';
   if (typeof adfOrString === 'string') return adfOrString;
   // ADF: walk content nodes and pull text. Lossy but adequate for triage UI.
