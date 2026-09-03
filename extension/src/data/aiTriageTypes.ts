@@ -26,9 +26,23 @@ export interface PlaybookChunk {
   updatedAt: string;
 }
 
+/** One past Done WOCOO ticket offered to the model as precedent (§2b).
+ *  `source` is `logged` when Albert's own log supplied a resolution note for this
+ *  ticket, and `intake-only` when all we have is the original request text. The card
+ *  must not present an intake-only entry as a resolution. */
+export interface PrecedentCandidate {
+  ticketId: string;
+  summary: string;
+  description: string;
+  source: 'logged' | 'intake-only';
+  /** The resolution note when `source === 'logged'`, otherwise the empty string. */
+  outcome: string;
+}
+
 export interface SimilarTicket {
   ticketId: string;
   whatHappened: string;
+  source: 'logged' | 'intake-only';
 }
 
 /** The model's answer, after parsing and validation. */
@@ -49,4 +63,5 @@ export interface TriagePromptInput {
   allowedWorkTypes: string[];
   recentRows: RecentLogRow[];
   playbookChunks: PlaybookChunk[];
+  precedent: PrecedentCandidate[];
 }
