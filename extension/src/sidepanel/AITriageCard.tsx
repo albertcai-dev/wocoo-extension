@@ -7,6 +7,8 @@ import type { TriageVerdict } from '../data/aiTriageTypes';
 import { getLlmGatewayKey } from '../auth/credentials';
 import { callLlmGateway } from '../api/llmGateway';
 import { getRecentLogViaBridge, getPlaybookViaBridge } from '../api/bridge';
+import { searchPrecedent } from '../api/jira';
+import { joinPrecedentOutcomes } from '../data/precedent';
 import { buildTriagePrompt, parseTriageVerdict } from './composePrompt';
 import { getOrCompute, invalidate } from './aiTriageCache';
 
@@ -18,20 +20,27 @@ type State =
 
 export function AITriageCard({ ticket, onOpenSettings }: { ticket: WocooTicket; onOpenSettings: () => void }) {
   const [state, setState] = useState<State>({ kind: 'loading' });
+  const [precedentFailed, setPrecedentFailed] = useState(false);
 
   const run = useCallback(async (force: boolean) => {
     const key = await getLlmGatewayKey();
     if (!key) { setState({ kind: 'no-key' }); return; }
 
     setState({ kind: 'loading' });
+    setPrecedentFailed(false);
     if (force) invalidate(ticket.id, ticket.updated);
 
     try {
       const verdict = await getOrCompute(ticket.id, ticket.updated, async () => {
-        const [recentRows, playbookChunks] = await Promise.all([
+        const [recentRows, playbookChunks, precedentRows] = await Promise.all([
           getRecentLogViaBridge(ticket.workType),
           getPlaybookViaBridge(),
+          // A precedent-fetch failure must not fail the card: the verdict still renders
+          // from log plus playbook. Spec §2b, Degradation.
+          searchPrecedent(ticket.workType, ticket.id).catch(() => null),
         ]);
+        setPrecedentFailed(precedentRows === null);
+        const precedent = joinPrecedentOutcomes(precedentRows ?? [], recentRows);
         const messages = buildTriagePrompt({
           ticketId: ticket.id,
           summary: ticket.summary,
@@ -43,9 +52,10 @@ export function AITriageCard({ ticket, onOpenSettings }: { ticket: WocooTicket; 
           ].filter(Boolean))),
           recentRows,
           playbookChunks,
+          precedent,
         });
         const raw = await callLlmGateway(messages, key);
-        const parsed = parseTriageVerdict(raw);
+        const parsed = parseTriageVerdict(raw, precedent.map((c) => c.ticketId));
         if (!parsed.ok) throw new Error(parsed.error);
         return parsed.verdict;
       });
@@ -74,7 +84,7 @@ export function AITriageCard({ ticket, onOpenSettings }: { ticket: WocooTicket; 
     return (
       <div style={cardStyle}>
         <Header />
-        <div style={mutedStyle}>Reading your past tickets…</div>
+        <div style={mutedStyle}>Reading your log, playbook and past tickets…</div>
       </div>
     );
   }
@@ -110,7 +120,7 @@ export function AITriageCard({ ticket, onOpenSettings }: { ticket: WocooTicket; 
 
       {v.similarTickets.length > 0 && (
         <div style={{ marginTop: 'var(--mint-sp-2)' }}>
-          <div style={{ ...mutedStyle, fontWeight: 600 }}>Similar tickets you closed</div>
+          <div style={{ ...mutedStyle, fontWeight: 600 }}>Precedent</div>
           {v.similarTickets.map((s) => (
             <div key={s.ticketId} style={mutedStyle}>
               <a
@@ -119,9 +129,16 @@ export function AITriageCard({ ticket, onOpenSettings }: { ticket: WocooTicket; 
                 rel="noreferrer"
                 style={{ color: 'var(--mint-fg-strong)' }}
               >{s.ticketId}</a>
+              <SourceBadge source={s.source} />
               {' — '}{s.whatHappened}
             </div>
           ))}
+        </div>
+      )}
+
+      {precedentFailed && (
+        <div style={{ ...mutedStyle, color: 'var(--mint-fg-soft)' }}>
+          Precedent unavailable — verdict is from your log and playbook only.
         </div>
       )}
 
@@ -144,6 +161,23 @@ function ConfidenceChip({ level }: { level: TriageVerdict['confidence'] }) {
     ? 'var(--mint-positive-fg-strong)'
     : level === 'medium' ? 'var(--mint-fg-subdued-title)' : 'var(--mint-fg-soft)';
   return <span style={{ fontSize: 'var(--mint-text-nano)', fontWeight: 600, color }}>{level} confidence</span>;
+}
+
+function SourceBadge({ source }: { source: 'logged' | 'intake-only' }) {
+  // intake-only means we only have the original request, never the outcome. Say so, so
+  // the request text is not read as a resolution.
+  const logged = source === 'logged';
+  return (
+    <span
+      title={logged ? 'You logged a resolution note for this ticket' : 'No recorded outcome — request text only'}
+      style={{
+        marginLeft: 6,
+        fontSize: 'var(--mint-text-nano)',
+        fontWeight: 600,
+        color: logged ? 'var(--mint-positive-fg-strong)' : 'var(--mint-fg-soft)',
+      }}
+    >{logged ? 'logged' : 'intake only'}</span>
+  );
 }
 
 const cardStyle: React.CSSProperties = {
