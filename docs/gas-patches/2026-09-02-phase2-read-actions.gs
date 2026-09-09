@@ -90,11 +90,11 @@ function handleGetPlaybook() {
 
 // The browser bridge only resolves on a postMessage from the rendered HTML page. A
 // handler that returns JSON directly works under the Run button and hangs in the panel.
-function _handleGetRecentLogFromGet_(params) {
-  return _bridgeHtmlReply_(handleGetRecentLog(params));
+function _handleGetRecentLogFromGet_(e) {
+  return _bridgeHtmlReply_(handleGetRecentLog(e.parameter));
 }
 
-function _handleGetPlaybookFromGet_() {
+function _handleGetPlaybookFromGet_(e) {
   return _bridgeHtmlReply_(handleGetPlaybook());
 }
 
@@ -114,10 +114,15 @@ function _bridgeHtmlReply_(payload) {
 }
 
 // ---------------------------------------------------------------------------
-// Add these two lines to the existing doGet dispatch, matching its style:
+// Add these two blocks to the existing doGet dispatch, immediately after the
+// 'transitionTicket' block and before the final `return HtmlService.createTemplateFromFile`:
 //
-//   if (action === 'getRecentLog') return _handleGetRecentLogFromGet_(params);
-//   if (action === 'getPlaybook')  return _handleGetPlaybookFromGet_();
+//   if (e && e.parameter && e.parameter.action === 'getRecentLog') {
+//     return _handleGetRecentLogFromGet_(e);
+//   }
+//   if (e && e.parameter && e.parameter.action === 'getPlaybook') {
+//     return _handleGetPlaybookFromGet_(e);
+//   }
 //
 // Then: Deploy -> Manage deployments -> edit the active deployment -> Deploy.
 // Apps Script snapshots code at deploy time; saving alone changes nothing.
