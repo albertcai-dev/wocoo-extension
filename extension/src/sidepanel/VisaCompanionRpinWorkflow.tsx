@@ -14,6 +14,7 @@
 import { useEffect, useState } from 'react';
 import type { WocooTicket } from '../data/mockTicket';
 import { postComment, transitionTicketThroughPath } from '../api/jira';
+import { stagePresetIdentity } from '../data/presetIdentity';
 
 const RPIN_DASHBOARD_URL = 'https://8a26d867.wealthsimple-aws-mpc.app.preset.io/superset/dashboard/7666/';
 const I2C_FORM_URL = 'https://tracking.i2cinc.com/servicedesk/customer/portal/2/create/17';
@@ -82,7 +83,7 @@ export function VisaCompanionRpinWorkflow({ ticket, onClose }: { ticket: WocooTi
   // Auto-open the Preset dashboard once when the workflow mounts.
   useEffect(() => {
     if (presetOpened || !ticket.identityId) return;
-    void chrome.storage.local.set({ pending_preset_identity_id: ticket.identityId });
+    void stagePresetIdentity(ticket.identityId, ticket.id);
     window.open(RPIN_DASHBOARD_URL, '_blank', 'noopener,noreferrer');
     setPresetOpened(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -90,7 +91,7 @@ export function VisaCompanionRpinWorkflow({ ticket, onClose }: { ticket: WocooTi
 
   const reopenPreset = () => {
     if (!ticket.identityId) return;
-    void chrome.storage.local.set({ pending_preset_identity_id: ticket.identityId });
+    void stagePresetIdentity(ticket.identityId, ticket.id);
     window.open(RPIN_DASHBOARD_URL, '_blank', 'noopener,noreferrer');
   };
 

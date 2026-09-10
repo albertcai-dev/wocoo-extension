@@ -22,6 +22,7 @@ import {
 } from '../api/jira';
 import type { ReimbApproverKey } from '../api/jira';
 import { fetchAtlasAccountIdHeadless } from '../data/atlasAccountLookup';
+import { stagePresetIdentity as stageIdentityForPreset } from '../data/presetIdentity';
 
 const TRANSITION_TO_DONE_ID = '251';
 
@@ -838,7 +839,7 @@ function Step3Body(props: {
   };
   const stagePresetIdentity = () => {
     if (props.ticket.identityId) {
-      void chrome.storage.local.set({ pending_preset_identity_id: props.ticket.identityId });
+      void stageIdentityForPreset(props.ticket.identityId, props.ticket.id);
     }
   };
 

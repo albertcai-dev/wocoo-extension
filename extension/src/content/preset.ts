@@ -1,5 +1,11 @@
 export {}; // Treat as module → file-scoped declarations, no collision with i2c.ts.
 
+import {
+  clearStagedPresetIdentity,
+  readPresetIdentity,
+  type ResolvedPresetIdentity,
+} from '../data/presetIdentity';
+
 console.log('[wocoo-preset] content script loaded on', location.href);
 
 // Content script for Preset (Superset SaaS) dashboards.
@@ -8,24 +14,23 @@ console.log('[wocoo-preset] content script loaded on', location.href);
 //   2. Type the ticket's identity ID into the filter
 //   3. Pick the matching option from the autocomplete dropdown
 //   4. Click "Apply Filters"
-//   5. Click the "Activity" tab
+//   5. Click the "Activity" tab, if this dashboard has one
+//
+// Which identity gets typed comes from data/presetIdentity: the identity a workflow
+// button staged for this tab, or else the ticket the side panel currently has open.
 //
 // Preset uses Ant Design components under the hood, so selectors target Ant Design class
 // names (.ant-select-selection-item, .ant-tabs-tab, etc.). If a selector misses, the
 // content script falls back to text-based matching where possible.
 
-const PENDING_KEY = 'pending_preset_identity_id';
-
-async function loadPending(): Promise<string | null> {
+async function loadPending(): Promise<ResolvedPresetIdentity | null> {
   try {
-    const res = await chrome.storage.local.get(PENDING_KEY);
-    const v = res[PENDING_KEY];
-    return typeof v === 'string' ? v : null;
+    return await readPresetIdentity();
   } catch { return null; }
 }
 
 async function clearPending() {
-  try { await chrome.storage.local.remove(PENDING_KEY); } catch { /* fine */ }
+  try { await clearStagedPresetIdentity(); } catch { /* fine */ }
 }
 
 function log(msg: string, ...args: unknown[]) {
@@ -326,13 +331,16 @@ let chainStep: ChainStep = 'init';
 let chainIdentity: string | null = null;
 let clearAttempts = 0;
 let typeAttempts = 0;
+let activityAttempts = 0;
 
 async function tick() {
   if (chainStep === 'done' || chainStep === 'error') return;
   if (!chainIdentity) {
-    chainIdentity = await loadPending();
-    if (!chainIdentity) return;
-    log('chain start, identity =', chainIdentity);
+    const resolved = await loadPending();
+    if (!resolved) return;
+    chainIdentity = resolved.identityId;
+    log('chain start, identity =', chainIdentity,
+        '(source =', resolved.source, ', ticket =', resolved.ticketKey || 'unknown', ')');
   }
   const id = chainIdentity;
   switch (chainStep) {
@@ -405,17 +413,30 @@ async function tick() {
     case 'selected': {
       const applied = await clickApplyFilters();
       if (!applied) return;
+      // Consume the staged identity here rather than after the Activity tab: plenty of
+      // dashboards have no Activity tab, and gating the cleanup on that click left the
+      // stage behind on every such run. The next Preset page then autofilled a long-dead
+      // ticket's identity. The filter is already committed at this point, so nothing
+      // downstream needs the staged value.
+      await clearPending();
       // Don't wait for chart refresh — clicking Activity is independent of chart load.
       await sleep(300);
       chainStep = 'applied';
-      log('step → applied');
+      log('step → applied (staged identity consumed)');
       break;
     }
     case 'applied': {
       const tabbed = await clickActivityTab();
-      if (!tabbed) return;
+      if (!tabbed) {
+        // No Activity tab on this dashboard — the filter is applied, so the chain is
+        // done. Returning here instead would spin until bootstrap's deadline.
+        activityAttempts++;
+        if (activityAttempts < 5) return;
+        log('no Activity tab found after', activityAttempts, 'attempts — chain complete without it');
+        chainStep = 'done';
+        break;
+      }
       chainStep = 'done';
-      await clearPending();
       log('chain complete');
       break;
     }

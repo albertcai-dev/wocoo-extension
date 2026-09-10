@@ -41,6 +41,7 @@ import { detectL3Escalation } from '../data/l3EscalationDetect';
 import { detectInterestInvestigation } from '../data/interestInvestigationDetect';
 import { HomeView } from './HomeView';
 import { WiresPendingPosting } from './WiresPendingPosting';
+import { WiresPendingPostingV2 } from './WiresPendingPostingV2';
 import { SettingsView } from './SettingsView';
 import { I2cCard, KohoCard } from './MessagingCards';
 import { fetchAtlasAccountIdHeadless } from '../data/atlasAccountLookup';
@@ -49,6 +50,7 @@ import { subscribeToTicketTransitions, emitTicketTransition, type TicketTransiti
 import { logTicketViaBridge, acknowledgeReplyViaBridge, findI2cThreadViaBridge, i2cThreadUrl, type TicketReply } from '../api/bridge';
 import { NotePrompt } from './NotePrompt';
 import type { TicketTransitionKind } from '../data/ticketLogTypes';
+import { clearPresetIdentityMirror, mirrorPresetIdentity, stagePresetIdentity } from '../data/presetIdentity';
 
 // Bridge: DOM-observer transition detections come in as chrome.runtime messages from
 // the service worker. Feed them into the local event bus so a single subscribe path
@@ -78,6 +80,7 @@ export function SidePanel() {
   const [homeMode, setHomeMode] = useState(false);
   const [settingsMode, setSettingsMode] = useState(false);
   const [wiresPendingActive, setWiresPendingActive] = useState(false);
+  const [wiresPendingV2Active, setWiresPendingV2Active] = useState(false);
   const [ticket, setTicket] = useState<WocooTicket | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -114,6 +117,22 @@ export function SidePanel() {
     return () => { cancelled = true; };
   }, [authState, ticketKey]);
 
+  // Mirror the open ticket's identity for the Preset content script. A Preset page the
+  // user opens by hand (rather than through a workflow button) has no staged identity of
+  // its own, and before this it fell back to whatever identity was last left in storage —
+  // i.e. an unrelated client's. Publishing the current ticket here makes a hand-opened
+  // dashboard filter to the ticket sitting in the panel.
+  useEffect(() => {
+    if (ticket?.identityId) {
+      void mirrorPresetIdentity(ticket.identityId, ticket.id);
+    } else {
+      // No identity to publish — including while a newly picked ticket is still
+      // loading. Drop the mirror rather than leave the previous ticket's identity
+      // standing in for it.
+      void clearPresetIdentityMirror();
+    }
+  }, [ticket?.identityId, ticket?.id, ticketKey]);
+
   // Auto-exit modal views (Home / Settings / WiresPendingPosting) when a new ticket key
   // arrives — e.g. the user is on Home and clicks a card in the Jira board, which
   // publishes the ticket key via chrome.storage.session. Without this, the panel stays
@@ -123,6 +142,7 @@ export function SidePanel() {
     setHomeMode(false);
     setSettingsMode(false);
     setWiresPendingActive(false);
+    setWiresPendingV2Active(false);
   }, [ticketKey]);
 
   if (authState === 'checking') return <CenteredText>Checking sign-in…</CenteredText>;
@@ -138,11 +158,16 @@ export function SidePanel() {
     return <WiresPendingPosting onClose={() => setWiresPendingActive(false)} />;
   }
 
+  if (wiresPendingV2Active) {
+    return <WiresPendingPostingV2 onClose={() => setWiresPendingV2Active(false)} />;
+  }
+
   if (homeMode) {
     return (
       <HomeView
         onOpenTicket={onOpenTicket}
         onOpenWiresPending={() => setWiresPendingActive(true)}
+        onOpenWiresPendingV2={() => setWiresPendingV2Active(true)}
         header={<HomeHeader onOpenSettings={onOpenSettings} />}
       />
     );
@@ -154,6 +179,7 @@ export function SidePanel() {
       <HomeView
         onOpenTicket={onOpenTicket}
         onOpenWiresPending={() => setWiresPendingActive(true)}
+        onOpenWiresPendingV2={() => setWiresPendingV2Active(true)}
         header={<HomeHeader onOpenSettings={onOpenSettings} />}
       />
     );
@@ -815,14 +841,14 @@ function QuickActions({ ticket, onTicketUpdate, onStartTriage, onStartReverseFee
           onClick={() => {
             if (!ticket.identityId) return;
             const id = ticket.identityId;
-            void chrome.storage.local.set({ pending_preset_identity_id: id });
+            void stagePresetIdentity(id, ticket.id);
             window.open(VERIFY_ELIGIBLE_DD_URLS[0], '_blank', 'noopener,noreferrer');
             // Re-write the pending identity before opening the second tab — the first
             // tab's content script clears the key once its chain completes (Apply →
             // Activity), so this guarantees the second tab also picks it up regardless
             // of timing. Both tabs share the same filter-fill machinery.
             window.setTimeout(() => {
-              void chrome.storage.local.set({ pending_preset_identity_id: id });
+              void stagePresetIdentity(id, ticket.id);
               window.open(VERIFY_ELIGIBLE_DD_URLS[1], '_blank', 'noopener,noreferrer');
             }, 600);
           }}

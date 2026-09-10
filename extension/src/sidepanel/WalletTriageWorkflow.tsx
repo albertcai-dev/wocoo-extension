@@ -17,6 +17,7 @@ import {
   type WalletTriageOutcome,
   buildOutcomeCommentText,
 } from '../data/walletTriageConfig';
+import { stagePresetIdentity } from '../data/presetIdentity';
 
 type StepNum = 1 | 2 | 3 | 4;
 
@@ -76,7 +77,7 @@ export function WalletTriageWorkflow({ ticket, onClose, onTicketUpdate }: {
     setBusy(true);
     setError(null);
     try {
-      await chrome.storage.local.set({ pending_preset_identity_id: ticket.identityId });
+      await stagePresetIdentity(ticket.identityId, ticket.id);
       window.open(WALLET_TRIAGE_DASHBOARD_URL, '_blank', 'noopener,noreferrer');
       window.open(WALLET_TRIAGE_DOC_URL, '_blank', 'noopener,noreferrer');
       setOpenedBoth(true);

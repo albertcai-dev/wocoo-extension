@@ -50,6 +50,11 @@
       "run_at": "document_idle"
     },
     {
+      "matches": ["https://ledge-spa.cac1.pro1.production.w10e.com/*"],
+      "js": ["src/content/ledgeSpa.ts"],
+      "run_at": "document_idle"
+    },
+    {
       "matches": ["https://app.slack.com/*"],
       "js": ["src/content/slack.ts"],
       "run_at": "document_idle"
@@ -83,6 +88,8 @@
     "https://*.preset.io/*",
     "https://admin.koho.ca/*",
     "https://ledge.wealthsimple.com/*",
+    "https://ledge-spa.cac1.pro1.production.w10e.com/*",
+    "https://ledge.cac1.pro1.production.w10e.com/*",
     "https://app.slack.com/*",
     "https://hooks.slack.com/*",
     "https://tracking.i2cinc.com/*",
