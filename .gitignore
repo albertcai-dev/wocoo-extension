@@ -35,3 +35,6 @@ scratchpad/
 
 # triage-map generated diagrams
 docs/triage-map/out/
+
+# Extension signing key — private half lives in 1Password, never commit it
+*.pem

@@ -1,5 +1,6 @@
 {
   "manifest_version": 3,
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0f9ZyKxRaGnj6wLED3lgNs2T6L6HRfQRtvpqLrMYzi1Jc9/jws3wZJvcwKv+dKvfCam/WEwBOGGIfVgU0IOx09zxs5ifIgaQ1R7jd7EadmGxasYCxiui4R+8ZXohy/9gF46CstVqKw4vCwak23fDaHosxjkHx0FTpSfkLUTdHV3rEU47ZvGzOlNeQ66X+G2JU9Zf5vFep1EvAOwYsZkydFZrLG0I322TpsMJuI2fh07mtXGf2Y5fbhR0QRH33QjwY3eqjO1I91tcfWIdjC6T2gwfA2IACQHxD+xiONh90SLC8umzgEk9PKZbQO7X+xy4qHcQ4/JzX5f8ayKqaJhX6QIDAQAB",
   "name": "WOCOO Triager",
   "version": "0.1.0",
   "description": "Ticket-in-context side panel for the Wealthsimple Cash & Card Operations triage workflow.",

@@ -5,7 +5,7 @@
 set -euo pipefail
 
 HOST_NAME="com.wealthsimple.wocoo_launcher"
-EXT_ID="pdmbcpaejdbacemeegajigebhkjalkkj"
+EXT_ID="djejbgmocodkljfgikchppnabmickenk"
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
 HOST_PATH="$DIR/wocoo_launcher.py"
