@@ -144,9 +144,9 @@ holds in `AITriageCard.tsx`, which tolerates `precedentRows === null`.
 - `joinPrecedentOutcomes` — the three-way source precedence.
 - Network paths stay untested, consistent with the rest of the repo.
 
-## Privacy consequence — needs resolving before build
+## Privacy consequences
 
-Two changes here matter, and both contradict statements now published.
+Two changes here matter, and both contradict statements published today.
 
 1. **Volume to the gateway** rises from one ticket's text to 25 tickets' descriptions and
    comments per verdict. The question of whether `bedrock-claude-sonnet-4-6-global`
