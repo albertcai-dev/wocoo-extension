@@ -22,8 +22,10 @@ describe('callLlmGateway', () => {
 
     const [url, init] = (fetchMock as any).mock.calls[0];
     expect(url).toBe(LLM_GATEWAY_URL);
-    expect((init.headers as Record<string, string>)['X-LiteLLM-Dev-Key']).toBe('sk-test');
-    expect((init.headers as Record<string, string>).Authorization).toBeUndefined();
+    // Open WebUI fronts the gateway and authenticates with a bearer token. The older
+    // LiteLLM-specific header is rejected by it, which is what made every call 401.
+    expect((init.headers as Record<string, string>).Authorization).toBe('Bearer sk-test');
+    expect((init.headers as Record<string, string>)['X-LiteLLM-Dev-Key']).toBeUndefined();
     const body = JSON.parse(init.body as string);
     expect(body.model).toBe(LLM_GATEWAY_MODEL);
     expect(body.response_format).toEqual({ type: 'json_object' });
@@ -62,5 +64,11 @@ describe('pingLlmGateway', () => {
       expect(res.error).toMatch(/VPN/i);
       expect(res.error).toMatch(/key/i);
     }
+  });
+});
+
+describe('LLM_GATEWAY_URL', () => {
+  it('targets Open WebUI chat completions, not the retired LiteLLM v2 path', () => {
+    expect(LLM_GATEWAY_URL).toBe('https://llm.w10e.com/api/chat/completions');
   });
 });

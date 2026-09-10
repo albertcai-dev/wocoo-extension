@@ -1,9 +1,16 @@
-// Direct browser calls to the Wealthsimple LLM Gateway (LiteLLM, OpenAI-shaped).
+// Direct browser calls to the Wealthsimple LLM Gateway (OpenAI-shaped).
+//
+// The gateway is fronted by Open WebUI, which owns the API keys shown under its
+// Account settings and authenticates them with a bearer token. Calls used to go to a
+// LiteLLM path (`/api/v2/chat/completions`) with an `X-LiteLLM-Dev-Key` header; after
+// the migration that path rejects every Open WebUI key with a 401 reading "Unable to
+// find token in ... LiteLLM_VerificationTokenTable", because the key genuinely is not
+// in LiteLLM's own store. Response bodies are unchanged, so only the transport moved.
 //
 // This cannot live on the Apps Script bridge: the gateway is VPN-locked and Apps Script
 // runs on Google's public servers. The extension is inside the VPN whenever Albert is.
 
-export const LLM_GATEWAY_URL = 'https://llm.w10e.com/api/v2/chat/completions';
+export const LLM_GATEWAY_URL = 'https://llm.w10e.com/api/chat/completions';
 /** Private VPC-hosted model. External models get WS PII masking, which mangles client
  *  names and emails inside ticket text. Do not switch this to an external model. */
 export const LLM_GATEWAY_MODEL = 'bedrock-claude-sonnet-4-6';
@@ -35,7 +42,7 @@ export async function callLlmGateway(
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-LiteLLM-Dev-Key': key,
+        Authorization: `Bearer ${key}`,
       },
       signal: controller.signal,
       body: JSON.stringify({
