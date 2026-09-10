@@ -72,3 +72,11 @@ describe('LLM_GATEWAY_URL', () => {
     expect(LLM_GATEWAY_URL).toBe('https://llm.w10e.com/api/chat/completions');
   });
 });
+
+describe('LLM_GATEWAY_MODEL', () => {
+  it('names a model id the gateway still serves', () => {
+    // The un-suffixed bedrock-claude-sonnet-4-6 was retired; the gateway now lists
+    // only the -global inference profile, and the old id returns 400 "Model not found".
+    expect(LLM_GATEWAY_MODEL).toBe('bedrock-claude-sonnet-4-6-global');
+  });
+});

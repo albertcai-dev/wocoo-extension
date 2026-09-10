@@ -11,9 +11,16 @@
 // runs on Google's public servers. The extension is inside the VPN whenever Albert is.
 
 export const LLM_GATEWAY_URL = 'https://llm.w10e.com/api/chat/completions';
-/** Private VPC-hosted model. External models get WS PII masking, which mangles client
- *  names and emails inside ticket text. Do not switch this to an external model. */
-export const LLM_GATEWAY_MODEL = 'bedrock-claude-sonnet-4-6';
+/** The un-suffixed `bedrock-claude-sonnet-4-6` was retired and now returns 400 "Model
+ *  not found"; the gateway lists only the `-global` cross-region inference profile.
+ *
+ *  This used to carry a note that the model had to stay VPC-hosted, because external
+ *  models get WS PII masking that mangles client names and emails inside ticket text.
+ *  Under Open WebUI every base model reports `connection_type: external`, which is a
+ *  statement about how Open WebUI reaches its backend rather than about VPC hosting —
+ *  so that field cannot be used to tell the two apart. Confirm with #ml-platform
+ *  before assuming ticket text reaches this model unmasked. */
+export const LLM_GATEWAY_MODEL = 'bedrock-claude-sonnet-4-6-global';
 export const LLM_GATEWAY_TIMEOUT_MS = 45_000;
 
 export interface LlmMessage {
