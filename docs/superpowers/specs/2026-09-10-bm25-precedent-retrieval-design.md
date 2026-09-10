@@ -67,7 +67,7 @@ interface CorpusTicket {
   createdAt: string;
   summary: string;
   description: string;      // ADF-flattened, capped at 1200 chars
-  comments: string[];       // last N comments, ADF-flattened, each capped at 600 chars
+  comments: string[];       // last 4 comments, ADF-flattened, each capped at 600 chars
 }
 ```
 
@@ -75,8 +75,8 @@ interface CorpusTicket {
 exported. Descriptions go through the existing `extractDescription`.
 
 **Cache.** `chrome.storage.local` under `precedent_corpus_v1`, with `fetchedAt` and a
-`schemaVersion` so a shape change invalidates rather than mis-parses. Roughly 750 KB at
-500 tickets, comfortably inside `storage.local`.
+`schemaVersion` so a shape change invalidates rather than mis-parses. Roughly 1.5 MB at
+500 tickets with four comments each, comfortably inside `storage.local`.
 
 This is a deliberate departure from `aiTriageCache.ts`, which keeps verdicts in memory
 only and says so in a comment. That trade-off does not carry over: re-paging five Jira
@@ -102,6 +102,12 @@ weighted ×2, plus description, plus comments — summary terms are the best sig
 a ticket is actually about.
 
 **Output.** Top 25 by score, ties broken by recency. The other 475 never reach the model.
+
+**Corpus depth and prompt depth are decoupled.** The corpus keeps four comments per
+ticket because BM25 scores better with more text to match against, but the prompt carries
+only the last two. Sending all four would put ~92,000 characters of precedent in front of
+the model — roughly 23k tokens — for text that mostly repeats what the final comment
+already says. Ranking wants breadth; the model wants the conclusion.
 
 ### 3. Wiring: `precedent.ts`, `composePrompt.ts`, `AITriageCard.tsx`
 
@@ -147,8 +153,16 @@ Two changes here matter, and both contradict statements now published.
    applies WS PII masking is still open with `#ml-platform`. If it masks, this design
    sends 25× more mangled text and the card's quality claim weakens rather than improves.
 2. **500 ticket descriptions and comments would sit in `chrome.storage.local`** on each
-   analyst's machine. That is new: the privacy page published today states the Ticket Log
+   analyst's machine. The cache is cleared on sign-out alongside the OAuth tokens, so a
+   signed-out account leaves no client text on disk; the cost is that the next sign-in
+   re-pages all five requests once. That is new: the privacy page published today states the Ticket Log
    sheet is the only place the extension retains personal data beyond a session. That
    page needs updating, and the cache needs clearing on sign-out alongside the tokens.
 
-Neither blocks the design, but both should be settled before implementation starts.
+Decision: implementation proceeds while the masking question is asked in parallel. If it
+turns out ticket text is masked, the design still holds — the quality gain is simply
+smaller than hoped, because comments would be mangled the same way descriptions are.
+
+The card's precedent list keeps its current shape. Showing matched terms or BM25 scores
+was considered and rejected as noise; if a precedent ever looks irrelevant, the ranking
+is reproducible from the cached corpus offline.
