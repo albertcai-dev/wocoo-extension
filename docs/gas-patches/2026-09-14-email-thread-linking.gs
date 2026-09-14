@@ -6,10 +6,20 @@
  * behaviour is the `awaitingMyReply` field that `checkForReplies` starts returning,
  * which older extension builds ignore.
  *
- * VERIFY BEFORE PASTING: this assumes the tracking sheet's `trackKey` column can hold a
- * hex Gmail thread id for `kind='email'` rows, and that the sheet has a header row with
- * the column names `wocooTicketId`, `kind`, `trackKey`. Confirm against the live sheet
- * and adjust the header.indexOf(...) lookups if the names differ.
+ * SHEET SCHEMA — verified 2026-09-14 against the live sheet
+ *   https://docs.google.com/spreadsheets/d/1Jx9ykUNAlUkohM5UAqu-XyqKZ0yNgQ9VhzGg2Ts_nCc
+ *   Tab "Replies", header row A1:F1:
+ *     wocooTicketId | kind | trackKey | createdAt | lastSeenMsgId | acknowledged
+ *   `trackKey` is free text (holds client emails today), so it takes a hex thread id
+ *   without a schema change. `acknowledged` is the string TRUE/FALSE.
+ *
+ *   NOTE the `createdAt` column: appendReplyTrackingRow_ below does not pass it, on the
+ *   assumption that the existing helper stamps it. Check that helper — if it doesn't,
+ *   add `createdAt: new Date().toISOString()` to the object passed in.
+ *
+ *   CAUTION: a second, stale spreadsheet of the same name exists —
+ *   1CyaMyVb3GMtuonUsjTD-ML-qdcS4vJFmIBq9TAqMpAw, same headers, rows stopping in July.
+ *   Confirm getReplyTrackingSheet_() points at 1Jx9yk… before trusting any debugging.
  *
  * It also assumes three helpers already exist in the project: getReplyTrackingSheet_(),
  * appendReplyTrackingRow_(sheet, fields) and setReplyTrackingRow_(sheet, rowNumber,
