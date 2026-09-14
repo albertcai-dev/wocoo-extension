@@ -82,3 +82,35 @@ export function normalizeRepliesMap(raw: unknown): Record<string, TicketReply[]>
   }
   return out;
 }
+
+/** Senders whose mail must never mean "they are waiting on you."
+ *
+ *  The Koho flow ends in a Kustomer satisfaction survey. Without this guard every
+ *  completed Koho ticket would go red forever, with the survey as its unanswered
+ *  message. Such mail still counts as a *new reply* if it is genuinely new — that is
+ *  today's behaviour and is what the agent expects to see. */
+export const AUTOMATED_SENDER = /(noreply|no-reply|donotreply|do-not-reply|survey)/i;
+
+/** `"Juan (DailyPay Support)" <support@dailypay.com>` → `support@dailypay.com`.
+ *  Lowercased, because header casing is not meaningful. */
+export function extractEmailAddress(from: string): string {
+  const s = from || '';
+  const angled = s.match(/<([^>]+)>/);
+  const candidate = (angled ? angled[1] : s).trim().toLowerCase();
+  return candidate.includes('@') ? candidate : '';
+}
+
+/** Did the agent send this message? Compared on address only — display names differ
+ *  between Gmail, Zendesk quoting, and mailing lists.
+ *
+ *  An unknown `me` returns false rather than true: claiming every message is yours
+ *  would silently disable the whole awaiting-reply feature. */
+export function isSelfSender(from: string, me: string): boolean {
+  const mine = extractEmailAddress(me) || (me || '').trim().toLowerCase();
+  if (!mine) return false;
+  return extractEmailAddress(from) === mine;
+}
+
+export function isAutomatedSender(from: string): boolean {
+  return AUTOMATED_SENDER.test(from || '');
+}

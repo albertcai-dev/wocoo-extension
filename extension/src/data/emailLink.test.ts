@@ -133,3 +133,63 @@ describe('normalizeRepliesMap', () => {
     expect(normalizeRepliesMap({ 'WOCOO-1': [null, 'x'] })).toEqual({});
   });
 });
+
+import { extractEmailAddress, isAutomatedSender, isSelfSender } from './emailLink';
+
+describe('extractEmailAddress', () => {
+  it('pulls the address out of a display-name header', () => {
+    expect(extractEmailAddress('"Juan (DailyPay Support)" <support@dailypay.com>'))
+      .toBe('support@dailypay.com');
+  });
+
+  it('returns a bare address unchanged', () => {
+    expect(extractEmailAddress('support@dailypay.com')).toBe('support@dailypay.com');
+  });
+
+  it('lowercases so comparison is case-insensitive', () => {
+    expect(extractEmailAddress('Albert Cai <Albert.Cai@Wealthsimple.com>'))
+      .toBe('albert.cai@wealthsimple.com');
+  });
+
+  it('returns an empty string for junk', () => {
+    expect(extractEmailAddress('')).toBe('');
+    expect(extractEmailAddress('Nobody')).toBe('');
+  });
+});
+
+describe('isSelfSender', () => {
+  it('matches on the address, not the display name', () => {
+    expect(isSelfSender('Albert Cai <albert.cai@wealthsimple.com>', 'albert.cai@wealthsimple.com'))
+      .toBe(true);
+  });
+
+  it('ignores case on both sides', () => {
+    expect(isSelfSender('<ALBERT.CAI@WEALTHSIMPLE.COM>', 'albert.cai@wealthsimple.com')).toBe(true);
+  });
+
+  it('is false for the other party', () => {
+    expect(isSelfSender('"Juan (DailyPay Support)" <support@dailypay.com>', 'albert.cai@wealthsimple.com'))
+      .toBe(false);
+  });
+
+  it('is false when we do not know who we are, rather than matching everything', () => {
+    expect(isSelfSender('support@dailypay.com', '')).toBe(false);
+  });
+});
+
+describe('isAutomatedSender', () => {
+  it('flags the Kustomer survey address that would otherwise pin tickets red', () => {
+    expect(isAutomatedSender('KOHO <survey@koho.kustomer.help>')).toBe(true);
+  });
+
+  it('flags the usual no-reply spellings', () => {
+    expect(isAutomatedSender('noreply@koho.ca')).toBe(true);
+    expect(isAutomatedSender('no-reply@koho.ca')).toBe(true);
+    expect(isAutomatedSender('donotreply@koho.ca')).toBe(true);
+    expect(isAutomatedSender('do-not-reply@koho.ca')).toBe(true);
+  });
+
+  it('does not flag a human agent', () => {
+    expect(isAutomatedSender('"Juan (DailyPay Support)" <support@dailypay.com>')).toBe(false);
+  });
+});
