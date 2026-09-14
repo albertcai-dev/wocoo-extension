@@ -395,13 +395,23 @@ export async function logI2cSubmitViaBridge(wocooTicketId: string, clientEmail: 
 
 export interface TicketReply {
   wocooTicketId: string;
-  kind: 'koho' | 'i2c';
+  kind: 'koho' | 'i2c' | 'email';
   /** Empty when the tracking row exists but no inbound reply has been matched yet —
    *  the pill then falls back to a Gmail search on `trackKey`. */
   messageId: string;
-  /** The tracking sheet's trackKey (ticket id for Koho, client email for i2c). Used
-   *  to build the Gmail search fallback. */
+  /** The tracking sheet's trackKey: ticket id or client email for Koho, client email
+   *  for i2c, hex Gmail thread id for a linked email thread. Used to build the Gmail
+   *  search fallback. */
   trackKey?: string;
+  /** Hex Gmail thread id. Set for `kind='email'` rows, and for Koho/i2c rows once the
+   *  poll has resolved their thread. This — never the `FMfcgz…` permalink id — is what
+   *  `GmailApp.getThreadById` accepts. */
+  threadId?: string;
+  /** Thread subject, used to name the card when there is no sender display name. */
+  subject?: string;
+  /** The last message in the thread is not from the agent, so the other side is
+   *  waiting. `undefined` means undetermined (no thread handle yet) — not `false`. */
+  awaitingMyReply?: boolean;
   from: string;
   snippet: string;
   receivedAt: string;
@@ -426,6 +436,13 @@ export async function checkForRepliesViaBridge(): Promise<TicketReply[]> {
       kind: (String(o.kind ?? '').toLowerCase() === 'i2c' ? 'i2c' : 'koho') as 'koho' | 'i2c',
       messageId: String(o.messageId ?? ''),
       trackKey: o.trackKey != null ? String(o.trackKey) : undefined,
+      threadId: o.threadId != null ? String(o.threadId) : undefined,
+      subject: o.subject != null ? String(o.subject) : undefined,
+      awaitingMyReply: o.awaitingMyReply === true || o.awaitingMyReply === 'TRUE' || o.awaitingMyReply === 'true'
+        ? true
+        : o.awaitingMyReply === false || o.awaitingMyReply === 'FALSE' || o.awaitingMyReply === 'false'
+          ? false
+          : undefined,
       from: String(o.from ?? ''),
       snippet: String(o.snippet ?? ''),
       receivedAt: String(o.receivedAt ?? ''),
@@ -456,6 +473,8 @@ export async function listTrackedTicketsViaBridge(): Promise<TicketReply[]> {
       // The sheet's lastSeenMsgId. Blank until a reply has been matched.
       messageId: String(o.messageId ?? ''),
       trackKey: o.trackKey != null ? String(o.trackKey) : undefined,
+      threadId: o.threadId != null ? String(o.threadId) : undefined,
+      subject: o.subject != null ? String(o.subject) : undefined,
       from: '',
       snippet: '',
       // The sheet has no reply timestamp, only when we sent. Leave blank rather than
@@ -466,10 +485,93 @@ export async function listTrackedTicketsViaBridge(): Promise<TicketReply[]> {
   }).filter((r) => r.wocooTicketId);
 }
 
-/** Flip a tracking row's `acknowledged` flag so the red dot / pill goes away.
- *  Called when the user clicks through to the Gmail permalink. */
-export async function acknowledgeReplyViaBridge(wocooTicketId: string, messageId: string): Promise<void> {
-  await callBridge('acknowledgeReply', { wocooTicketId, messageId }, 'replyAcknowledged', 30_000, true);
+/** Flip a tracking row's `acknowledged` flag so the red card goes away.
+ *
+ *  `trackKey` disambiguates when a ticket has several tracked threads. It is optional so
+ *  an older GAS deployment — which matches on ticket id alone — keeps working; that
+ *  deployment simply ignores the extra parameter. */
+export async function acknowledgeReplyViaBridge(
+  wocooTicketId: string,
+  messageId: string,
+  trackKey?: string,
+): Promise<void> {
+  await callBridge(
+    'acknowledgeReply',
+    { wocooTicketId, messageId, trackKey: trackKey || '' },
+    'replyAcknowledged',
+    30_000,
+    true,
+  );
+}
+
+// ============ Manual email-thread linking ============
+// Koho and i2c rows appear as a side effect of sending mail. These actions let the agent
+// attach any Gmail thread to a ticket by hand, so partner and escalation threads join
+// the same notification machinery.
+
+export interface EmailThreadCandidate {
+  /** Hex Gmail thread id. */
+  threadId: string;
+  subject: string;
+  /** Sender of the first message — who the thread is with. */
+  from: string;
+  /** Sender of the most recent message — who spoke last. */
+  lastFrom: string;
+  /** ISO timestamp of the most recent message. */
+  lastDate: string;
+  messageCount: number;
+  /** WOCOO id this thread is already linked to, if any. A warning, not a blocker. */
+  linkedTo?: string;
+}
+
+/** Search Gmail for link candidates. Runs in GAS because the extension has no Gmail
+ *  access and MCP masks addresses. The caller shows the results for the agent to pick
+ *  from rather than auto-taking the top hit: a bare term like `dailypay` reliably
+ *  returns unrelated Jira digests. */
+export async function searchEmailThreadsViaBridge(query: string, limit = 8): Promise<EmailThreadCandidate[]> {
+  const res = await callBridge(
+    'searchEmailThreads',
+    { query, limit: String(limit) },
+    'emailThreadsSearched',
+    60_000,
+    true,
+  );
+  const raw = (res.threads as unknown) ?? [];
+  if (!Array.isArray(raw)) return [];
+  return raw.map((t) => {
+    const o = t as Record<string, unknown>;
+    return {
+      threadId: String(o.threadId ?? ''),
+      subject: String(o.subject ?? ''),
+      from: String(o.from ?? ''),
+      lastFrom: String(o.lastFrom ?? ''),
+      lastDate: String(o.lastDate ?? ''),
+      messageCount: Number(o.messageCount ?? 0),
+      linkedTo: o.linkedTo ? String(o.linkedTo) : undefined,
+    };
+  }).filter((t) => t.threadId);
+}
+
+/** Write a `kind='email'` tracking row. GAS sets `lastSeenMsgId` to the thread's current
+ *  last message and `acknowledged=TRUE`, so linking a thread you are looking at cannot
+ *  manufacture a "new reply" alert. An unanswered thread still turns red immediately —
+ *  through `awaitingMyReply`, which is the accurate reason. */
+export async function linkEmailThreadViaBridge(wocooTicketId: string, threadId: string): Promise<void> {
+  await callBridge('linkEmailThread', { wocooTicketId, threadId }, 'emailThreadLinked', 45_000, true);
+  try { await chrome.storage.local.set({ has_tracked_replies: true }); } catch { /* fine */ }
+}
+
+/** Remove a linked row. Required, not a nicety: the archive is deliberately sticky so a
+ *  deeplink survives a poll that drops its row, which means without an explicit unlink a
+ *  misclick in the picker would be permanent. */
+export async function unlinkEmailThreadViaBridge(wocooTicketId: string, threadId: string): Promise<void> {
+  await callBridge('unlinkEmailThread', { wocooTicketId, threadId }, 'emailThreadUnlinked', 30_000, true);
+}
+
+/** `#all/` rather than `#inbox/` so an archived thread still opens. Same choice as
+ *  `i2cThreadUrl`. */
+export function emailThreadUrl(threadId: string): string {
+  return threadId ? `https://mail.google.com/mail/u/0/#all/${encodeURIComponent(threadId)}` : '';
 }
 
 // ============ i2c thread lookup (I2cThreadLookup.gs) ============
