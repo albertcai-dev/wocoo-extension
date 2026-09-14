@@ -47,7 +47,9 @@ import { I2cCard, KohoCard } from './MessagingCards';
 import { fetchAtlasAccountIdHeadless } from '../data/atlasAccountLookup';
 import { isInterestRelatedWorkType, isInterestFeeInContent } from '../data/reverseFeeDetect';
 import { subscribeToTicketTransitions, emitTicketTransition, type TicketTransitionEvent } from './ticketLogEvents';
-import { logTicketViaBridge, acknowledgeReplyViaBridge, findI2cThreadViaBridge, i2cThreadUrl, type TicketReply } from '../api/bridge';
+import { logTicketViaBridge, acknowledgeReplyViaBridge, findI2cThreadViaBridge, i2cThreadUrl, emailThreadUrl, type TicketReply } from '../api/bridge';
+import { entryKey, isAwaiting, isNewReply, normalizeRepliesMap, sortEntries, threadLabel } from '../data/emailLink';
+import { LinkEmailCard } from './LinkEmailCard';
 import { NotePrompt } from './NotePrompt';
 import type { TicketTransitionKind } from '../data/ticketLogTypes';
 import { clearPresetIdentityMirror, mirrorPresetIdentity, stagePresetIdentity } from '../data/presetIdentity';
@@ -451,8 +453,9 @@ function TicketViewInner({ ticket, onTicketUpdate, onStartTriage, onStartReverse
         ) : null}
       </section>
 
-      {/* REPLY PILL — shown when the current ticket has an unacknowledged Koho/i2c reply. */}
-      <ReplyPill ticketId={ticket.id} clientEmail={ticket.clientEmail} i2cTicketRef={ticket.i2cTicketRef} />
+      {/* REPLY CARDS — one per tracked thread: Koho, i2c, and manually linked emails. */}
+      <ReplyPills ticketId={ticket.id} clientEmail={ticket.clientEmail} i2cTicketRef={ticket.i2cTicketRef} />
+      <LinkEmailCard ticketId={ticket.id} />
 
       {/* EXTERNAL TOOLS ROW — Atlas always, then i2c (Credit Card) or Koho (Prepaid Card) */}
       <ExternalToolsRow ticket={ticket} />
@@ -1120,23 +1123,25 @@ function ActionButton({ variant, children, onClick, title, disabled }: { variant
   return <button onClick={onClick} title={title} disabled={disabled} style={{ ...base, ...variantStyle[variant] }}>{children}</button>;
 }
 
-// ---------- reply pill (Koho / i2c inbox notification) ----------
+// ---------- reply cards (Koho / i2c / linked email threads) ----------
 //
-// Subscribes to chrome.storage.local[`ticket_replies`] — a map keyed by wocooTicketId
-// that the background reply-poll updates every 5 min (and on manual refresh).
+// `ReplyPills` subscribes to chrome.storage.local[`ticket_replies`] — a map of
+// wocooTicketId → tracked threads, updated by the background poll every 5 min (and on
+// manual refresh) — and renders one `ReplyCard` per thread.
 //
-// The pill renders in one of two states:
-//   • unacked (red): "New reply from …" — needs attention
-//   • acked (muted): a compact "Reopen last reply in Gmail" chip — the deeplink
-//     stays accessible after ack so the agent can revisit the email
+// Each card renders in one of three states:
+//   • new reply (red): "New reply from …" — inbound message the agent hasn't seen
+//   • awaiting (red): "Awaiting your reply — …" — seen, but the last message isn't ours
+//   • muted: a compact "Reopen …" chip whose deeplink stays reachable forever
 //
-// It is deliberately sticky: once a ticket has been tracked, the chip stays on the
-// panel for good. Reading the reply only downgrades red → muted, and the lookup falls
-// back to the append-only archive so a poll that no longer returns the row (bridge
-// filters acked rows, transient short response) can't make the deeplink vanish.
+// Cards are deliberately sticky: once a thread is tracked it keeps its chip. Reading a
+// reply only downgrades red → muted, and the lookup falls back to the append-only
+// archive so a poll that no longer returns the row (bridge filters acked rows,
+// transient short response) can't make the deeplink vanish.
 //
 // Main click opens the Gmail permalink without touching ack state (idempotent —
-// safe to click as many times as needed). The ✕ button flips ack (unacked → acked).
+// safe to click as many times as needed). The ✕ button flips ack (unacked → acked);
+// the awaiting card has none, because only replying should clear it.
 
 const REPLIES_STORAGE_KEY = 'ticket_replies';
 const REPLIES_ARCHIVE_KEY = 'ticket_replies_archive';
@@ -1172,21 +1177,19 @@ function gmailSearchKey(
   return clientEmail || trackKey || ticketId;
 }
 
-function ReplyPill({ ticketId, clientEmail, i2cTicketRef }: { ticketId: string; clientEmail?: string; i2cTicketRef?: string }) {
-  const [reply, setReply] = useState<TicketReply | null>(null);
-  // True while the bridge is resolving an i2c ref to its exact thread — the round-trip
-  // opens a background GAS tab, so it's slow enough to need its own label.
-  const [resolving, setResolving] = useState(false);
+function ReplyPills({ ticketId, clientEmail, i2cTicketRef }: { ticketId: string; clientEmail?: string; i2cTicketRef?: string }) {
+  const [entries, setEntries] = useState<TicketReply[]>([]);
 
   useEffect(() => {
     const read = () => {
       chrome.storage.local.get([REPLIES_STORAGE_KEY, REPLIES_ARCHIVE_KEY]).then((res) => {
-        const map = res[REPLIES_STORAGE_KEY] as Record<string, TicketReply> | undefined;
-        const archive = res[REPLIES_ARCHIVE_KEY] as Record<string, TicketReply> | undefined;
-        const live = map?.[ticketId];
+        const live = normalizeRepliesMap(res[REPLIES_STORAGE_KEY])[ticketId] || [];
+        const archived = normalizeRepliesMap(res[REPLIES_ARCHIVE_KEY])[ticketId] || [];
         // Archive-only hits are by definition already-seen, so render them muted.
-        const archived = archive?.[ticketId];
-        setReply(live || (archived ? { ...archived, acked: true } : null));
+        const byKey = new Map<string, TicketReply>();
+        for (const r of archived) byKey.set(entryKey(r), { ...r, acked: true });
+        for (const r of live) byKey.set(entryKey(r), r);
+        setEntries(sortEntries([...byKey.values()]));
       });
     };
     read();
@@ -1199,21 +1202,53 @@ function ReplyPill({ ticketId, clientEmail, i2cTicketRef }: { ticketId: string; 
 
   // A tracking row only exists when the extension itself sent the Koho email or opened the
   // i2c form. An i2c ticket raised by hand — pasted into a Jira comment, which is the common
-  // case — has no row, so the pill used to render nothing at all. The ticket's own PO ref is
+  // case — has no row, so the panel used to render nothing at all. The ticket's own PO ref is
   // enough to find the thread, so synthesise a reply-less entry and let the existing muted
   // chip handle it. messageId stays empty, so it renders as `awaiting` (no ✕, no ack call:
   // there's no sheet row to acknowledge).
-  const effective: TicketReply | null =
-    reply ?? (i2cTicketRef
-      ? { wocooTicketId: ticketId, kind: 'i2c', messageId: '', trackKey: i2cTicketRef, from: '', snippet: '', receivedAt: '', acked: true }
-      : null);
+  const synthetic: TicketReply[] =
+    !entries.length && i2cTicketRef
+      ? [{ wocooTicketId: ticketId, kind: 'i2c', messageId: '', trackKey: i2cTicketRef, from: '', snippet: '', receivedAt: '', acked: true }]
+      : [];
 
-  if (!effective) return null;
+  const all = entries.length ? entries : synthetic;
+  if (!all.length) return null;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {all.map((entry) => (
+        <ReplyCard
+          key={entryKey(entry)}
+          entry={entry}
+          ticketId={ticketId}
+          clientEmail={clientEmail}
+          i2cTicketRef={i2cTicketRef}
+        />
+      ))}
+    </div>
+  );
+}
+
+function ReplyCard({ entry, ticketId, clientEmail, i2cTicketRef }: {
+  entry: TicketReply;
+  ticketId: string;
+  clientEmail?: string;
+  i2cTicketRef?: string;
+}) {
+  // True while the bridge is resolving an i2c ref to its exact thread — the round-trip
+  // opens a background GAS tab, so it's slow enough to need its own label.
+  const [resolving, setResolving] = useState(false);
+  const effective = entry;
 
   const searchUrl = () =>
     `https://mail.google.com/mail/u/0/#search/${encodeURIComponent(gmailSearchKey(effective, clientEmail, ticketId, i2cTicketRef))}`;
 
   const openEmail = () => {
+    // A linked thread's hex id is a better anchor than any single message id.
+    if (effective.kind === 'email' && effective.threadId) {
+      window.open(emailThreadUrl(effective.threadId), '_blank', 'noopener,noreferrer');
+      return;
+    }
     // A matched reply already has a message ID to permalink to.
     if (effective.messageId) {
       window.open(`https://mail.google.com/mail/u/0/#inbox/${effective.messageId}`, '_blank', 'noopener,noreferrer');
@@ -1248,22 +1283,72 @@ function ReplyPill({ ticketId, clientEmail, i2cTicketRef }: { ticketId: string; 
     // Optimistically flip local acked=true + tell the bridge to persist. The pill
     // stays visible in muted style so the deeplink remains reachable.
     void chrome.storage.local.get(REPLIES_STORAGE_KEY).then((res) => {
-      const map = { ...(res[REPLIES_STORAGE_KEY] as Record<string, TicketReply> | undefined || {}) };
-      if (map[ticketId]) map[ticketId] = { ...map[ticketId], acked: true };
-      void chrome.storage.local.set({ [REPLIES_STORAGE_KEY]: map });
+      const map = normalizeRepliesMap(res[REPLIES_STORAGE_KEY]);
+      const list = map[ticketId];
+      if (list) {
+        const k = entryKey(effective);
+        map[ticketId] = list.map((r) => (entryKey(r) === k ? { ...r, acked: true } : r));
+        void chrome.storage.local.set({ [REPLIES_STORAGE_KEY]: map });
+      }
     });
-    void acknowledgeReplyViaBridge(ticketId, effective.messageId).catch((err) => {
-      console.warn('[wocoo-reply-pill] ack failed:', err);
+    void acknowledgeReplyViaBridge(ticketId, effective.messageId, effective.trackKey).catch((err) => {
+      console.warn('[wocoo-reply-card] ack failed:', err);
     });
   };
 
-  const label = effective.kind === 'koho' ? 'Koho' : 'i2c';
+  const label = threadLabel(effective);
   const truncated = effective.snippet.length > 140 ? effective.snippet.slice(0, 140) + '…' : effective.snippet;
   // No messageId = tracked but nothing inbound yet. There's no reply to shout about,
   // so it shares the muted chip and links to a Gmail search for the outbound thread.
-  const awaiting = !effective.messageId;
-  const acked = effective.acked === true || awaiting;
+  // A linked thread always has an anchor, so it is never in that "search for it" state.
+  const awaiting = !effective.messageId && !(effective.kind === 'email' && effective.threadId);
+  const newReply = isNewReply(effective);
+  const awaitingMyReply = !newReply && isAwaiting(effective);
+  const acked = !newReply && !awaitingMyReply;
   const seenDate = fmtReplyDate(effective.receivedAt, { month: 'short', day: 'numeric' });
+
+  if (awaitingMyReply) {
+    // Same red treatment as a new reply, different claim: the message has been seen, it
+    // just hasn't been answered. No ✕ — dismissing it would defeat the point, and the
+    // only thing that clears it is actually replying, which the next poll notices.
+    return (
+      <button
+        type="button"
+        onClick={openEmail}
+        title={`The last message in the ${label} thread isn't from you. Click to open it in Gmail and reply.`}
+        style={{
+          display: 'flex',
+          alignItems: 'flex-start',
+          gap: 8,
+          padding: '8px 12px',
+          margin: '0 var(--mint-sp-3)',
+          background: 'var(--mint-negative-bg-soft)',
+          border: '1px solid var(--mint-negative-fg-graphic)',
+          borderRadius: 'var(--mint-radius-card)',
+          width: 'calc(100% - 2 * var(--mint-sp-3))',
+          boxSizing: 'border-box',
+          cursor: 'pointer',
+          textAlign: 'left',
+          font: 'inherit',
+          color: 'inherit',
+        }}
+      >
+        <span style={{ fontSize: 16, lineHeight: 1.2, flexShrink: 0 }}>📮</span>
+        <span style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0, flex: 1 }}>
+          <span style={{ fontSize: 'var(--mint-text-micro)', fontWeight: 700, color: 'var(--mint-negative-fg-strong)' }}>
+            Awaiting your reply — {label}
+            {seenDate ? ` · ${seenDate}` : ''}
+          </span>
+          <span style={{ fontSize: 'var(--mint-text-nano)', color: 'var(--mint-fg-strong)', lineHeight: 1.4 }}>
+            {truncated || <em style={{ color: 'var(--mint-fg-soft)' }}>(no preview)</em>}
+          </span>
+          <span style={{ fontSize: 'var(--mint-text-nano)', color: 'var(--mint-fg-soft)', fontStyle: 'italic' }}>
+            Last message isn't from you · click to reply in Gmail
+          </span>
+        </span>
+      </button>
+    );
+  }
 
   if (acked) {
     // Muted "seen" chip — small, single-line, still deep-links to Gmail.
@@ -1271,7 +1356,9 @@ function ReplyPill({ ticketId, clientEmail, i2cTicketRef }: { ticketId: string; 
       <button
         type="button"
         onClick={resolving ? undefined : openEmail}
-        title={!awaiting
+        title={effective.kind === 'email' && !effective.receivedAt
+          ? `Open the linked Gmail thread. If it doesn't open, the thread may have been deleted or moved out of reach — the link stays here either way.`
+          : !awaiting
           ? `Reopen the ${label} reply in Gmail`
           : i2cTicketRef
             ? `Open the Gmail thread for i2c ${i2cTicketRef}. Looked up through the Apps Script bridge ` +
