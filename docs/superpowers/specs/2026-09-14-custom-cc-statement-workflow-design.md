@@ -82,7 +82,7 @@ Two approaches were rejected:
 ### Payload transport
 
 The bridge is query-string GET only (cross-origin POST to a GAS web app is blocked). A
-62-row statement is roughly 4 KB once URL-encoded, which is uncomfortably close to the
+64-row statement is roughly 4 KB once URL-encoded, which is uncomfortably close to the
 practical Apps Script URL ceiling and grows with transaction count.
 
 The workflow therefore makes **three kinds of call**:
@@ -222,6 +222,10 @@ A one-time tokenized copy of `1dS5BsRFGF4g-ktHHtdkdVvhMWrP75sx3Siw7diVPNlI`
 what preserves the logo image, the page breaks, the table column widths and the
 header-row bold — none of which the Docs API sets well from scratch.
 
+**Built:** `1K5tpUdWdsxGYcs1Lgdbg5G4S51ilQgcv_yX6G4P6kRM` — "WOCOO | Custom CC Statement
+TEMPLATE (tokenized — do not edit per-client)". This is the `CC_TEMPLATE_ID_DEFAULT` in
+`CustomCcStatement.gs`, overridable via the `cc_statement_template_id` script property.
+
 Changes made to the copy:
 
 - Every literal value becomes a `{{TOKEN}}`, matching `RefundLetter.gs`'s
@@ -263,11 +267,14 @@ Script properties, both optional:
 ### Quick-action swap
 
 - `🧾 Custom CC Statement` replaces `⚖️ QC Fee Waiver` in `QuickActions`.
-- `QCFeeWaiverWorkflow.tsx`, `QCFeeWaiverCard.tsx` and `data/qcFeeWaiverDetect.ts` are
-  deleted along with their `SidePanel.tsx` wiring.
-- `data/retentionFeeWaiverDetect.ts` keeps its QC veto. It only reads QC *signals* from
-  ticket text; it does not import the deleted detector, so the veto behaviour is
-  unchanged and its test stays green.
+- `QCFeeWaiverWorkflow.tsx` and `QCFeeWaiverCard.tsx` are deleted, along with their
+  `SidePanel.tsx` wiring (the state hook, the route and the auto-detect card).
+- **`data/qcFeeWaiverDetect.ts` stays.** It is not only the deleted card's detector —
+  `data/l3EscalationDetect.ts` imports `detectQCFeeWaiver` and counts a QC fee-waiver
+  match as one of its L3-escalation signals. Deleting it would silently change L3
+  escalation behaviour, which is outside this change's scope.
+- `data/retentionFeeWaiverDetect.ts` keeps its QC veto, which reads QC *signals* from
+  ticket text rather than calling the detector, so it is unaffected either way.
 - The new button is enabled unconditionally. Unlike the QC flow it does not require
   `ticket.clientEmail`, because its inputs are a PDF and an identity ID.
 
@@ -287,12 +294,17 @@ Script properties, both optional:
 
 ## Testing
 
-- `data/ccStatementParse.test.ts` (vitest) against a fixture captured from the
-  WOCOO-28171 statement: asserts 62 rows, `newBalance === '$7,209.36'`,
-  `statementBalance === '$7,209.36'`, the two FX rows carry their sub-line, the payment
-  row keeps its en-dash, and every `Aug 1 1`-style artifact is repaired.
-- Targeted cases: a row whose merchant name contains digits (`DOLLARAMA #1496`,
-  `00103 MACS CONV. STORES`) must not be damaged by the digit-space repair.
+- `data/ccStatementParse.test.ts` (vitest) against `ccStatementFixture.ts`, a **synthetic**
+  statement. The fixture is synthetic on purpose: a captured real statement would put a
+  client's name, address, card and full transaction history into git permanently. It
+  reproduces every pdf.js extraction artifact instead — `BAL ANCE`, `$320.1 1`,
+  `Aug 1 1` in both date columns, merged summary columns, the FX sub-line, and merchants
+  that start with or contain digits (`00103 MACS CONV. STORES`, `DOLLARAMA #1496`) which
+  the digit-space repair must leave alone.
+- Validated once against the real WOCOO-28171 PDF in a throwaway local test (not
+  committed): all 21 header/summary fields correct, 64 activity rows, zero warnings. The
+  arithmetic check passing is what independently proves all 64 amounts were read
+  correctly — `sum(charges) === totalCharges === $7,209.36`.
 - `npm run build` for the MV3 bundle, which is also what proves the pdf.js worker asset
   is emitted.
 - Apps Script side is verified by one live run against WOCOO-28171, checked in the Docs

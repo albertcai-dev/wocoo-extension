@@ -742,6 +742,145 @@ export async function createRefundLetterViaBridge(p: RefundLetterParams): Promis
   return result;
 }
 
+// ============ Custom CC Statement bridge calls ============
+// Three actions rather than one, because a full statement's activity does not fit in a
+// query string and the bridge is GET-only. See CustomCcStatement.gs in the
+// wocoo-gas-bridge repo, and the design doc's "Payload transport" section.
+
+/** Rows per `appendCcStatementRows` call. Sized for URL length, NOT for pagination —
+ *  Apps Script decides how many rows go on a page. 15 rows is ~1 KB encoded. */
+export const CC_STATEMENT_ROWS_PER_CALL = 15;
+
+/** Stands in for a newline inside a DETAILS cell (the FX sub-line). Chosen because it
+ *  never occurs in statement text, so round-tripping it through a query string is safe. */
+export const CC_STATEMENT_NEWLINE = '⏎';
+
+export interface CcStatementHeaderParams {
+  /** Corrected identity block — the whole point of the workflow. */
+  clientName: string;
+  addressStreet: string;
+  addressCityProvince: string;
+  addressPostal: string;
+
+  cardMasked: string;
+  statementDate: string;
+  openingDate: string;
+  closingDate: string;
+  paymentDueDate: string;
+  creditLimit: string;
+  minimumPayment: string;
+  statementBalance: string;
+
+  previousBalance: string;
+  payments: string;
+  otherCredits: string;
+  purchases: string;
+  fees: string;
+  interest: string;
+  cashAdvances: string;
+  totalCharges: string;
+  totalPaymentsCredits: string;
+  newBalance: string;
+  annualInterestRate: string;
+  cashAdvanceInterestRate: string;
+
+  /** Names the Doc: "{clientName} | Credit Card Statement {statementPeriodLabel}". */
+  statementPeriodLabel: string;
+  wocooTicketId?: string;
+}
+
+export interface CcStatementCreateResult {
+  docId: string;
+  docUrl: string;
+  fileName: string;
+}
+
+export interface CcStatementFinalizeResult {
+  docId: string;
+  docUrl: string;
+  pdfId: string;
+  pdfUrl: string;
+  fileName: string;
+  pdfBase64?: string;
+}
+
+export interface CcStatementRowInput {
+  transDate: string;
+  postedDate: string;
+  type: string;
+  details: string;
+  amount: string;
+}
+
+/** Copy the tokenized statement template and fill everything except the activity rows. */
+export async function createCcStatementViaBridge(p: CcStatementHeaderParams): Promise<CcStatementCreateResult> {
+  const params: Record<string, string> = {};
+  // Every key becomes a {{TOKEN}} on the Apps Script side, same convention as
+  // createRefundLetter — so adding a template field needs no bridge change.
+  for (const [key, value] of Object.entries(p)) {
+    params[key] = value == null ? '' : String(value);
+  }
+
+  const res = await callBridge('createCcStatement', params, 'ccStatementCreated', 90_000, true);
+  if (res.ok === false) throw new Error(String(res.error || 'Bridge could not create the statement'));
+  const result = res.result as CcStatementCreateResult | undefined;
+  if (!result || !result.docId) throw new Error('Bridge returned no statement Doc.');
+  return result;
+}
+
+/**
+ * Append one batch of activity rows to an already-created statement Doc.
+ *
+ * `startIndex` is the row's position in the whole statement, not in this batch — Apps
+ * Script uses it to decide which activity page each row belongs on, so batching here and
+ * pagination there stay independent.
+ */
+export async function appendCcStatementRowsViaBridge(args: {
+  docId: string;
+  startIndex: number;
+  totalRows: number;
+  rows: CcStatementRowInput[];
+}): Promise<{ rowsAppended: number }> {
+  const params: Record<string, string> = {
+    docId: args.docId,
+    startIndex: String(args.startIndex),
+    totalRows: String(args.totalRows),
+  };
+  args.rows.forEach((row, i) => {
+    const fields = [row.transDate, row.postedDate, row.type, row.details, row.amount]
+      .map(stripRowDelimiters);
+    // Only after stripping — otherwise the strip would eat the marker we just inserted.
+    fields[3] = fields[3].replace(/\n/g, CC_STATEMENT_NEWLINE);
+    params[`r${i}`] = fields.join('|');
+  });
+
+  const res = await callBridge('appendCcStatementRows', params, 'ccStatementRowsAppended', 120_000, true);
+  if (res.ok === false) throw new Error(String(res.error || 'Bridge could not append activity rows'));
+  return { rowsAppended: Number((res.result as { rowsAppended?: number } | undefined)?.rowsAppended ?? 0) };
+}
+
+/** Save the Doc and export the PDF. Must run after the last row batch — the PDF blob
+ *  only reflects saved content. */
+export async function finalizeCcStatementViaBridge(args: {
+  docId: string;
+  includePdfBase64?: boolean;
+}): Promise<CcStatementFinalizeResult> {
+  const params: Record<string, string> = { docId: args.docId };
+  if (args.includePdfBase64) params.includePdfBase64 = '1';
+
+  const res = await callBridge('finalizeCcStatement', params, 'ccStatementFinalized', 120_000, true);
+  if (res.ok === false) throw new Error(String(res.error || 'Bridge could not export the statement PDF'));
+  const result = res.result as CcStatementFinalizeResult | undefined;
+  if (!result || !result.pdfUrl) throw new Error('Bridge returned no statement PDF.');
+  return result;
+}
+
+/** `|` separates a row's fields and `⏎` marks its line break, so neither can survive
+ *  inside a value. Neither appears in real statement text; this is belt-and-braces. */
+function stripRowDelimiters(value: string): string {
+  return (value || '').split('|').join('/').split(CC_STATEMENT_NEWLINE).join(' ');
+}
+
 // ============ Ticket Knowledge Loop Phase 2 reads ============
 // Both run headless (background tab, auto-closed) — the verdict card fires on every
 // ticket open, so a visible script.google.com tab flashing each time is unacceptable.

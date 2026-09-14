@@ -21,7 +21,6 @@ import { WalletTriageWorkflow } from './WalletTriageWorkflow';
 import { WalletTriageCard } from './WalletTriageCard';
 import { OverpaymentTriageCard } from './OverpaymentTriageCard';
 import { ReverseFeeCard } from './ReverseFeeCard';
-import { QCFeeWaiverCard } from './QCFeeWaiverCard';
 import { RetentionFeeWaiverCard } from './RetentionFeeWaiverCard';
 import { VisaCompanionCard } from './VisaCompanionCard';
 import type { MoveDestination } from '../data/moveConfig';
@@ -29,7 +28,7 @@ import { CredRouteCard } from './CredRouteCard';
 import { AITriageCard } from './AITriageCard';
 import { OverpaymentTriage } from './OverpaymentTriage';
 import { ReverseFeeWorkflow } from './ReverseFeeWorkflow';
-import { QCFeeWaiverWorkflow } from './QCFeeWaiverWorkflow';
+import { CustomCcStatementWorkflow } from './CustomCcStatementWorkflow';
 import { RetentionFeeWaiverWorkflow } from './RetentionFeeWaiverWorkflow';
 import { VisaCompanionRpinWorkflow } from './VisaCompanionRpinWorkflow';
 import { QCAutoReimbCard } from './QCAutoReimbCard';
@@ -213,7 +212,7 @@ function TicketView({ ticket, onTicketUpdate, onGoHome, onOpenSettings }: { tick
   const [triageActive, setTriageActive] = useState(false);
   const [reverseFeeActive, setReverseFeeActive] = useState(false);
   const [walletTriageActive, setWalletTriageActive] = useState(false);
-  const [qcFeeWaiverActive, setQCFeeWaiverActive] = useState(false);
+  const [customCcStatementActive, setCustomCcStatementActive] = useState(false);
   const [retentionFeeWaiverActive, setRetentionFeeWaiverActive] = useState(false);
   const [visaCompanionRpinActive, setVisaCompanionRpinActive] = useState(false);
   const [refundAuthLetterActive, setRefundAuthLetterActive] = useState(false);
@@ -243,12 +242,11 @@ function TicketView({ ticket, onTicketUpdate, onGoHome, onOpenSettings }: { tick
       />
     );
   }
-  if (qcFeeWaiverActive) {
+  if (customCcStatementActive) {
     return (
-      <QCFeeWaiverWorkflow
+      <CustomCcStatementWorkflow
         ticket={ticket}
-        onClose={() => setQCFeeWaiverActive(false)}
-        onTicketUpdate={onTicketUpdate}
+        onClose={() => setCustomCcStatementActive(false)}
       />
     );
   }
@@ -284,7 +282,7 @@ function TicketView({ ticket, onTicketUpdate, onGoHome, onOpenSettings }: { tick
       onTicketUpdate={onTicketUpdate}
       onStartTriage={() => setTriageActive(true)}
       onStartReverseFee={() => setReverseFeeActive(true)}
-      onStartQCFeeWaiver={() => setQCFeeWaiverActive(true)}
+      onStartCustomCcStatement={() => setCustomCcStatementActive(true)}
       onStartWalletTriage={() => setWalletTriageActive(true)}
       onStartRetentionFeeWaiver={() => setRetentionFeeWaiverActive(true)}
       onStartVisaCompanionRpin={() => setVisaCompanionRpinActive(true)}
@@ -295,7 +293,7 @@ function TicketView({ ticket, onTicketUpdate, onGoHome, onOpenSettings }: { tick
   );
 }
 
-function TicketViewInner({ ticket, onTicketUpdate, onStartTriage, onStartReverseFee, onStartQCFeeWaiver, onStartWalletTriage, onStartRetentionFeeWaiver, onStartVisaCompanionRpin, onStartRefundAuthLetter, onGoHome, onOpenSettings }: { ticket: WocooTicket; onTicketUpdate: (t: WocooTicket) => void; onStartTriage: () => void; onStartReverseFee: () => void; onStartQCFeeWaiver: () => void; onStartWalletTriage: () => void; onStartRetentionFeeWaiver: () => void; onStartVisaCompanionRpin: () => void; onStartRefundAuthLetter: () => void; onGoHome: () => void; onOpenSettings: () => void }) {
+function TicketViewInner({ ticket, onTicketUpdate, onStartTriage, onStartReverseFee, onStartCustomCcStatement, onStartWalletTriage, onStartRetentionFeeWaiver, onStartVisaCompanionRpin, onStartRefundAuthLetter, onGoHome, onOpenSettings }: { ticket: WocooTicket; onTicketUpdate: (t: WocooTicket) => void; onStartTriage: () => void; onStartReverseFee: () => void; onStartCustomCcStatement: () => void; onStartWalletTriage: () => void; onStartRetentionFeeWaiver: () => void; onStartVisaCompanionRpin: () => void; onStartRefundAuthLetter: () => void; onGoHome: () => void; onOpenSettings: () => void }) {
   const [showFullDescription, setShowFullDescription] = useState(false);
   const [showComments, setShowComments] = useState(false);
   // Lifted from QuickActions so other surfaces (e.g. CredRouteCard recommendation banner)
@@ -532,9 +530,6 @@ function TicketViewInner({ ticket, onTicketUpdate, onStartTriage, onStartReverse
       {/* REVERSE FEE DETECTION — fee reversal request (FX/ATM/foreign transaction) */}
       {l3Matched || interestInvestigationMatched ? null : <ReverseFeeCard ticket={ticket} onStart={onStartReverseFee} />}
 
-      {/* QC FEE WAIVER DETECTION — Quebec client needs MANUAL annual-fee waiver */}
-      {l3Matched ? null : <QCFeeWaiverCard ticket={ticket} onStart={onStartQCFeeWaiver} />}
-
       {/* RETENTION FEE WAIVER DETECTION — non-QC "waive CC fee for N months" retention ask */}
       <RetentionFeeWaiverCard ticket={ticket} onStart={onStartRetentionFeeWaiver} />
 
@@ -553,7 +548,7 @@ function TicketViewInner({ ticket, onTicketUpdate, onStartTriage, onStartReverse
         onTicketUpdate={onTicketUpdate}
         onStartTriage={onStartTriage}
         onStartReverseFee={onStartReverseFee}
-        onStartQCFeeWaiver={onStartQCFeeWaiver}
+        onStartCustomCcStatement={onStartCustomCcStatement}
         onStartWalletTriage={onStartWalletTriage}
         onStartRetentionFeeWaiver={onStartRetentionFeeWaiver}
         onStartVisaCompanionRpin={onStartVisaCompanionRpin}
@@ -781,7 +776,7 @@ function ExternalToolsRow({ ticket }: { ticket: WocooTicket }) {
 
 const TRANSITION_TO_DONE_ID = '251'; // matches v3 / Apps Script bridge convention
 
-function QuickActions({ ticket, onTicketUpdate, onStartTriage, onStartReverseFee, onStartQCFeeWaiver, onStartWalletTriage, onStartRetentionFeeWaiver, onStartVisaCompanionRpin, onStartRefundAuthLetter, onOpenCloneMove, onOpenCreateReimb }: { ticket: WocooTicket; onTicketUpdate: (t: WocooTicket) => void; onStartTriage: () => void; onStartReverseFee: () => void; onStartQCFeeWaiver: () => void; onStartWalletTriage: () => void; onStartRetentionFeeWaiver: () => void; onStartVisaCompanionRpin: () => void; onStartRefundAuthLetter: () => void; onOpenCloneMove: (initialDestKey?: MoveDestination) => void; onOpenCreateReimb: () => void }) {
+function QuickActions({ ticket, onTicketUpdate, onStartTriage, onStartReverseFee, onStartCustomCcStatement, onStartWalletTriage, onStartRetentionFeeWaiver, onStartVisaCompanionRpin, onStartRefundAuthLetter, onOpenCloneMove, onOpenCreateReimb }: { ticket: WocooTicket; onTicketUpdate: (t: WocooTicket) => void; onStartTriage: () => void; onStartReverseFee: () => void; onStartCustomCcStatement: () => void; onStartWalletTriage: () => void; onStartRetentionFeeWaiver: () => void; onStartVisaCompanionRpin: () => void; onStartRefundAuthLetter: () => void; onOpenCloneMove: (initialDestKey?: MoveDestination) => void; onOpenCreateReimb: () => void }) {
   const [doneState, setDoneState] = useState<'idle' | 'pending' | 'done' | 'error'>(
     ticket.status === 'Done' ? 'done' : 'idle',
   );
@@ -925,8 +920,8 @@ function QuickActions({ ticket, onTicketUpdate, onStartTriage, onStartReverseFee
         >
           ↗ Reverse Fee
         </ActionButton>
-        <ActionButton variant="neutral" onClick={onStartQCFeeWaiver} disabled={!ticket.clientEmail} title="Start QC Fee Waiver workflow">
-          ⚖️ QC Fee Waiver
+        <ActionButton variant="neutral" onClick={onStartCustomCcStatement} title="Start Custom CC Statement workflow (corrected statement from the client's statement PDF)">
+          🧾 Custom CC Statement
         </ActionButton>
         <ActionButton variant="neutral" onClick={onStartRetentionFeeWaiver} disabled={!ticket.clientEmail} title="Start Retention Fee Waiver workflow ($20 × months, admin credit in i2c)">
           🎁 Retention Fee Waiver
