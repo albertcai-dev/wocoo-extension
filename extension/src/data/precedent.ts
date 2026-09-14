@@ -15,6 +15,29 @@ export interface PrecedentRowInput {
   id: string;
   summary: string;
   description?: string;
+  /** Closing comments from Jira, oldest first. Absent when the caller did not ask for
+   *  the `comment` field. */
+  comments?: string[];
+}
+
+/** Comments kept per candidate. The resolution is nearly always the final comment, and
+ *  the one before it supplies the reasoning; taking more multiplies prompt size across
+ *  40 candidates for text that mostly restates the conclusion. */
+export const MAX_CANDIDATE_COMMENTS = 2;
+
+/** Per-comment character cap. Stops one rambling thread from crowding out 39 other
+ *  candidates. */
+export const COMMENT_CHAR_CAP = 600;
+
+/** Flatten a candidate's comments into an outcome string: drop blanks, keep the last
+ *  MAX_CANDIDATE_COMMENTS in chronological order, truncate each. */
+export function outcomeFromComments(comments: string[] | undefined): string {
+  const kept = (comments || [])
+    .map((c) => (c || '').trim())
+    .filter(Boolean)
+    .slice(-MAX_CANDIDATE_COMMENTS)
+    .map((c) => (c.length > COMMENT_CHAR_CAP ? c.slice(0, COMMENT_CHAR_CAP) + '…' : c));
+  return kept.join('\n');
 }
 
 export function buildPrecedentJql(workType: string, excludeKey: string): string {
@@ -42,13 +65,26 @@ export function joinPrecedentOutcomes(
   }
 
   return rows.map((row) => {
-    const outcome = outcomeById.get(row.id) || '';
+    // A hand-written note wins over a closing comment: it was written deliberately,
+    // after the fact, to describe the resolution. A closing comment was written in the
+    // moment and may be a handoff, a question, or an automated notice.
+    const note = outcomeById.get(row.id) || '';
+    if (note) {
+      return {
+        ticketId: row.id,
+        summary: row.summary,
+        description: row.description || '',
+        source: 'logged' as const,
+        outcome: note,
+      };
+    }
+    const fromComments = outcomeFromComments(row.comments);
     return {
       ticketId: row.id,
       summary: row.summary,
       description: row.description || '',
-      source: outcome ? ('logged' as const) : ('intake-only' as const),
-      outcome,
+      source: fromComments ? ('comments' as const) : ('intake-only' as const),
+      outcome: fromComments,
     };
   });
 }

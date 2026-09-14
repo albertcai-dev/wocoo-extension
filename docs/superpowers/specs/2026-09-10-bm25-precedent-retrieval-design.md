@@ -1,7 +1,17 @@
 # BM25 precedent retrieval for the AI verdict card
 
-**Status:** design, not yet approved
+**Status:** DEFERRED 2026-09-14 — not being built yet
 **Date:** 2026-09-10
+
+> **Why deferred.** Of the three changes proposed here, only one had demonstrable value:
+> fetching Jira comments so a candidate carries what was actually done. That shipped on
+> its own as a ~30-line change to `searchPrecedent`, with no corpus module, no
+> `chrome.storage.local` cache of client text, and no privacy-page rewrite.
+>
+> The other two — BM25 ranking over 500 tickets, and dropping the work-type filter —
+> address retrieval quality, and retrieval quality could not be judged while every
+> candidate lacked an outcome. Revisit once the comments change has been in daily use
+> long enough to say whether "40 newest of this type" is finding the right tickets.
 **Supersedes the retrieval half of:** `2026-09-03-jira-precedent-retrieval.md`
 
 ## Problem

@@ -70,6 +70,26 @@ describe('matchWireIn', () => {
   test('returns null for an empty transaction list', () => {
     expect(matchWireIn([], 700, 'CAD')).toBeNull();
   });
+
+  // Recorded from account WK5790V32USD, wire 2026-09-11: Ledge files an incoming wire
+  // as txnType `DEP` with sub-type `WIRE`, and only the description says "Wire In".
+  test('matches the DEP row Ledge actually files an incoming wire as', () => {
+    const rows = [
+      txn({
+        effectiveDate: '2026-09-11',
+        txnType: 'DEP',
+        description: 'Wire In 4094.24 USD',
+        credit: '4094.24',
+        transactionCurrency: 'USD',
+      }),
+    ];
+    expect(matchWireIn(rows, 4094.24, 'USD')?.credit).toBe('4094.24');
+  });
+
+  test('ignores an outgoing wire even when its credit is in tolerance', () => {
+    const rows = [txn({ txnType: 'WTH', description: 'Wire Out 700.00 CAD' })];
+    expect(matchWireIn(rows, 700, 'CAD')).toBeNull();
+  });
 });
 
 describe('transactionWindow', () => {

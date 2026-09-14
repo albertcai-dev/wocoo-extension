@@ -73,9 +73,17 @@ export interface TransactionWindow {
   endDate: string;
 }
 
-/** Rows we accept as an incoming wire. Ledge's own type code is `WIREIN`; normalising
- *  away spaces means a `WIRE IN` rendering would still land. */
+/** Rows we accept as an incoming wire by type code. Normalising away spaces means a
+ *  `WIRE IN` rendering would still land. Kept because it costs nothing, but Ledge does
+ *  not actually file incoming wires under this code — see `WIRE_IN_DESCRIPTION_RE`. */
 const WIRE_IN_TYPES = new Set(['WIREIN']);
+
+/** The real wire marker on a Ledge row. An incoming wire arrives as txnType `DEP` with
+ *  sub-type `WIRE`, and the transaction query exposes no sub-type field, so the
+ *  description ("Wire In 4094.24 USD", "Client Wire In") is the only wire signal on the
+ *  payload. v1's DOM scrape matched the same text. `in` is anchored so a `Wire Out` row
+ *  cannot match. */
+const WIRE_IN_DESCRIPTION_RE = /(?:client\s+)?wire\s*in\b/i;
 
 /** Ledge's default From-date is only a couple of days back, so a wire from last month
  *  falls outside the window unless we widen it. Wires older than this fall back to a
@@ -106,8 +114,9 @@ function toleranceFor(expected: number): number {
 /**
  * Find the incoming-wire row matching an expected amount and currency.
  *
- * A row qualifies when its type is a wire-in, its currency matches, and its credit is
- * non-zero and within tolerance of `expected`. When several qualify, the closest wins.
+ * A row qualifies when its type code or its description marks it a wire-in, its
+ * currency matches, and its credit is non-zero and within tolerance of `expected`.
+ * When several qualify, the closest wins.
  */
 export function matchWireIn(
   nodes: LedgeTransaction[],
@@ -119,7 +128,8 @@ export function matchWireIn(
   let best: { diff: number; node: LedgeTransaction } | null = null;
 
   for (const node of nodes) {
-    if (!WIRE_IN_TYPES.has(normalizeType(node.txnType))) continue;
+    const typeMatches = WIRE_IN_TYPES.has(normalizeType(node.txnType));
+    if (!typeMatches && !WIRE_IN_DESCRIPTION_RE.test(node.description || '')) continue;
     const rowCurrency = (node.transactionCurrency || '').toUpperCase();
     if (wantCurrency && rowCurrency && rowCurrency !== wantCurrency) continue;
     const credit = parseMoney(node.credit);

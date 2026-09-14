@@ -248,7 +248,7 @@ function IntroCard() {
       Same check as v1, run against the new Ledge SPA. For every row with{' '}
       <code>wire_status = Pending posting</code>, this tool:
       <ol style={{ paddingLeft: '1.2em', margin: '8px 0 0' }}>
-        <li>Queries Ledge's GraphQL API for the custodian account's transactions → looks for a <code>WIREIN</code> matching column C.</li>
+        <li>Queries Ledge's GraphQL API for the custodian account's transactions → looks for a <code>Wire In</code> deposit matching column C.</li>
         <li>Or, if column H is a hyperlinked Atlassian ticket → checks status Done or a comment containing "complete".</li>
         <li>Flips column L to <code>Posted</code> on verification.</li>
         <li>Surfaces anything unclear as an anomaly for manual review (does not write to the sheet).</li>

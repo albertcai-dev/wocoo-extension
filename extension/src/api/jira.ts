@@ -875,6 +875,8 @@ export async function findExistingClone(
 
 // Minimal shape for the Home view ticket list — full WocooTicket is overkill for a list row.
 export interface TicketRow {
+  /** Present only when the caller asked for the `comment` field. Oldest first. */
+  comments?: string[];
   id: string;
   summary: string;
   /** Only populated when the caller passes `description` in `extraFields`. The Jira
@@ -944,6 +946,12 @@ export async function searchTickets(
       priority: ['Highest', 'High', 'Medium', 'Low', 'Lowest'].includes(priorityName) ? priorityName : 'Medium',
       tier,
       updated: f.updated || new Date().toISOString(),
+      // Jira returns the comment field as { comments: [...], total, maxResults }. Long
+      // threads come back truncated by the search endpoint, which is fine here: the
+      // resolution sits at the end and callers only keep the last couple anyway.
+      comments: f.comment
+        ? ((f.comment.comments || []) as Array<{ body: unknown }>).map((c) => adfToPlainText(c.body))
+        : undefined,
       // Falls back to `created` when a ticket has never transitioned categories.
       statusCategoryChangedAt: f.statuscategorychangedate || f.created || f.updated || new Date().toISOString(),
     };
@@ -957,6 +965,10 @@ export async function searchTickets(
  * Deliberately deterministic. Keyword JQL and LLM-authored JQL were both considered and
  * rejected: work type plus recency needs no query validation and no second round trip.
  * The accepted cost is missing precedent filed under a different work type.
+ *
+ * Asks for `comment` as well as `description` so a candidate can carry what was actually
+ * done. Without it the model only ever saw intake text — the client's original request —
+ * and had to infer resolutions, which it did confidently and without evidence.
  */
 export async function searchPrecedent(
   workType: string,
@@ -966,9 +978,14 @@ export async function searchPrecedent(
   const rows = await searchTickets(
     buildPrecedentJql(workType, excludeKey),
     PRECEDENT_MAX_RESULTS,
-    ['description'],
+    ['description', 'comment'],
   );
-  return rows.map((r) => ({ id: r.id, summary: r.summary, description: r.description || '' }));
+  return rows.map((r) => ({
+    id: r.id,
+    summary: r.summary,
+    description: r.description || '',
+    comments: r.comments || [],
+  }));
 }
 
 /**

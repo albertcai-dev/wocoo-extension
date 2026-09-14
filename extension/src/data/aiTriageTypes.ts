@@ -34,15 +34,19 @@ export interface PrecedentCandidate {
   ticketId: string;
   summary: string;
   description: string;
-  source: 'logged' | 'intake-only';
-  /** The resolution note when `source === 'logged'`, otherwise the empty string. */
+  /** Where `outcome` came from. `logged` is a hand-written resolution note from the
+   *  Ticket Log, `comments` is the ticket's own closing comments from Jira, and
+   *  `intake-only` means neither exists — the text is the original request, not a
+   *  record of what was done. */
+  source: 'logged' | 'comments' | 'intake-only';
+  /** What was done, from whichever source won. Empty when `intake-only`. */
   outcome: string;
 }
 
 export interface SimilarTicket {
   ticketId: string;
   whatHappened: string;
-  source: 'logged' | 'intake-only';
+  source: 'logged' | 'comments' | 'intake-only';
 }
 
 /** The model's answer, after parsing and validation. */

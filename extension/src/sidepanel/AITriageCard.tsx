@@ -163,20 +163,38 @@ function ConfidenceChip({ level }: { level: TriageVerdict['confidence'] }) {
   return <span style={{ fontSize: 'var(--mint-text-nano)', fontWeight: 600, color }}>{level} confidence</span>;
 }
 
-function SourceBadge({ source }: { source: 'logged' | 'intake-only' }) {
-  // intake-only means we only have the original request, never the outcome. Say so, so
-  // the request text is not read as a resolution.
-  const logged = source === 'logged';
+const SOURCE_BADGE: Record<'logged' | 'comments' | 'intake-only', { label: string; title: string; tone: string }> = {
+  logged: {
+    label: 'logged',
+    title: 'You logged a resolution note for this ticket',
+    tone: 'var(--mint-positive-fg-strong)',
+  },
+  comments: {
+    label: 'from comments',
+    title: "Outcome read from the ticket's own closing comments in Jira",
+    tone: 'var(--mint-highlight-fg-strong)',
+  },
+  'intake-only': {
+    label: 'intake only',
+    title: 'No recorded outcome — request text only',
+    tone: 'var(--mint-fg-soft)',
+  },
+};
+
+/** intake-only means we only have the original request, never the outcome. The badge
+ *  says so, so request text is not read as a resolution. */
+function SourceBadge({ source }: { source: 'logged' | 'comments' | 'intake-only' }) {
+  const badge = SOURCE_BADGE[source] ?? SOURCE_BADGE['intake-only'];
   return (
     <span
-      title={logged ? 'You logged a resolution note for this ticket' : 'No recorded outcome — request text only'}
+      title={badge.title}
       style={{
         marginLeft: 6,
         fontSize: 'var(--mint-text-nano)',
         fontWeight: 600,
-        color: logged ? 'var(--mint-positive-fg-strong)' : 'var(--mint-fg-soft)',
+        color: badge.tone,
       }}
-    >{logged ? 'logged' : 'intake only'}</span>
+    >{badge.label}</span>
   );
 }
 

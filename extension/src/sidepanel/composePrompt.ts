@@ -12,7 +12,7 @@ import type {
 
 const SYSTEM = [
   'You are a triage assistant for a Wealthsimple client-experience agent working WOCOO tickets.',
-  'You answer only from the prior resolved tickets and playbook excerpts you are given.',
+  'You answer only from the prior resolved tickets, their closing comments, and the playbook excerpts you are given.',
   'Never invent a work type that is not in the allowed list.',
   'Never cite a ticket key that does not appear in the PRECEDENT CANDIDATES block.',
   'When the history does not support a confident answer, say so and set confidence to "low".',
@@ -25,7 +25,7 @@ const OUTPUT_CONTRACT = `Reply with JSON of exactly this shape:
   "confidence": "high" | "medium" | "low",
   "rationale": "<two sentences at most>",
   "steps": ["<ordered action>", "..."],
-  "similar_tickets": [{ "ticket_id": "WOCOO-123", "what_happened": "<one line>", "source": "logged" | "intake-only" }],
+  "similar_tickets": [{ "ticket_id": "WOCOO-123", "what_happened": "<one line>", "source": "logged" | "comments" | "intake-only" }],
   "gotchas": ["<one line>", "..."]
 }`;
 
@@ -75,8 +75,15 @@ export function buildTriagePrompt(input: TriagePromptInput): Array<{ role: 'syst
     '',
     '## PRECEDENT CANDIDATES',
     'Past Done WOCOO tickets of the same work type. Rank these, keep the best 3-5, and',
-    'cite their keys verbatim. A candidate marked intake-only has no recorded outcome:',
-    'its text is the original request, not what was done.',
+    'cite their keys verbatim. Each carries a source tag saying how much you can trust',
+    'its outcome:',
+    '- marked logged: an agent wrote the resolution down deliberately afterwards. Most',
+    '  reliable; prefer these when they conflict with anything else.',
+    '- marked comments: the outcome is read from the ticket\'s own closing comments. It is',
+    '  evidence of what was done, but a closing comment can also be a handoff, a question',
+    '  or an automated notice — read it before relying on it.',
+    '- marked intake-only: no recorded outcome at all. Its text is the original request,',
+    '  not what was done. Do not present it as a resolution.',
     candidates,
     '',
     '## Output',

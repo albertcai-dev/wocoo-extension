@@ -88,7 +88,7 @@ async function processJob(job: VerifyJob): Promise<VerifyResult> {
     jobId: job.jobId,
     matched: false,
     scanned: nodes.length,
-    reason: `Wire not yet posted (no ${amountText} ${job.currency || ''} WIREIN in ${nodes.length} transactions from ${startDate}) — sheet stays Pending posting`,
+    reason: `Wire not yet posted (no ${amountText} ${job.currency || ''} Wire In row in ${nodes.length} transactions from ${startDate}) — sheet stays Pending posting`,
   };
 }
 

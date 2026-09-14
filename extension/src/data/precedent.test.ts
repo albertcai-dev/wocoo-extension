@@ -82,3 +82,55 @@ describe('joinPrecedentOutcomes', () => {
     expect(joinPrecedentOutcomes([], [logRow()])).toEqual([]);
   });
 });
+
+describe('joinPrecedentOutcomes with Jira comments', () => {
+  it('uses the closing comments when the log has no note for the ticket', () => {
+    const out = joinPrecedentOutcomes(
+      [{ id: 'WOCOO-1', summary: 's', description: 'd', comments: ['Waived the fee as a one-time courtesy.'] }],
+      [],
+    );
+    expect(out[0].source).toBe('comments');
+    expect(out[0].outcome).toBe('Waived the fee as a one-time courtesy.');
+  });
+
+  it('prefers a human resolution note over the closing comments', () => {
+    const out = joinPrecedentOutcomes(
+      [{ id: 'WOCOO-1', summary: 's', description: 'd', comments: ['Closing comment text'] }],
+      [{ ticketId: 'WOCOO-1', resolutionNote: 'Hand-written note' } as any],
+    );
+    expect(out[0].source).toBe('logged');
+    expect(out[0].outcome).toBe('Hand-written note');
+  });
+
+  it('keeps only the last two comments, oldest of the pair first', () => {
+    const out = joinPrecedentOutcomes(
+      [{ id: 'WOCOO-1', summary: 's', description: 'd', comments: ['one', 'two', 'three', 'four'] }],
+      [],
+    );
+    expect(out[0].outcome).toBe('three\nfour');
+  });
+
+  it('caps a long comment so one rambling thread cannot dominate the prompt', () => {
+    const out = joinPrecedentOutcomes(
+      [{ id: 'WOCOO-1', summary: 's', description: 'd', comments: ['x'.repeat(900)] }],
+      [],
+    );
+    expect(out[0].outcome.length).toBeLessThanOrEqual(603);
+    expect(out[0].outcome.endsWith('…')).toBe(true);
+  });
+
+  it('ignores blank and whitespace-only comments', () => {
+    const out = joinPrecedentOutcomes(
+      [{ id: 'WOCOO-1', summary: 's', description: 'd', comments: ['', '   ', 'real'] }],
+      [],
+    );
+    expect(out[0].outcome).toBe('real');
+    expect(out[0].source).toBe('comments');
+  });
+
+  it('stays intake-only when there is neither a note nor a comment', () => {
+    const out = joinPrecedentOutcomes([{ id: 'WOCOO-1', summary: 's', description: 'd', comments: [] }], []);
+    expect(out[0].source).toBe('intake-only');
+    expect(out[0].outcome).toBe('');
+  });
+});

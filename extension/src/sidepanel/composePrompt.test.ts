@@ -221,3 +221,40 @@ describe('parseTriageVerdict candidate-set validation', () => {
     expect(res.verdict.similarTickets).toEqual([]);
   });
 });
+
+describe('buildTriagePrompt with comment-sourced precedent', () => {
+  const base = {
+    ticketId: 'WOCOO-9',
+    workType: 'Credit Card: Other',
+    summary: 'Interest charged after payment',
+    description: 'Client paid before the due date.',
+    allowedWorkTypes: ['Credit Card: Other'],
+    recentRows: [],
+    playbookChunks: [],
+  };
+
+  it('offers comments as an allowed source in the output contract', () => {
+    const [, user] = buildTriagePrompt({ ...base, precedent: [] });
+    expect(user.content).toContain('"source": "logged" | "comments" | "intake-only"');
+  });
+
+  it('explains what a comments-sourced candidate is, so it is not read as intake text', () => {
+    const [, user] = buildTriagePrompt({ ...base, precedent: [] });
+    expect(user.content).toMatch(/marked comments/i);
+  });
+
+  it('renders the outcome of a comments-sourced candidate', () => {
+    const [, user] = buildTriagePrompt({
+      ...base,
+      precedent: [{
+        ticketId: 'WOCOO-8',
+        summary: 'Same issue',
+        description: 'req',
+        source: 'comments' as const,
+        outcome: 'Reversed the interest as a courtesy.',
+      }],
+    });
+    expect(user.content).toContain('- WOCOO-8 [comments]');
+    expect(user.content).toContain('outcome: Reversed the interest as a courtesy.');
+  });
+});
