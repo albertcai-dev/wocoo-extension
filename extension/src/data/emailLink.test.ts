@@ -346,3 +346,36 @@ describe('needsAttention / attentionKind / attentionCount', () => {
     ])).toBe(2);
   });
 });
+
+import { threadLabel } from './emailLink';
+
+describe('threadLabel', () => {
+  it('keeps the fixed labels for koho and i2c', () => {
+    expect(threadLabel(reply({ kind: 'koho' }))).toBe('Koho');
+    expect(threadLabel(reply({ kind: 'i2c' }))).toBe('i2c');
+  });
+
+  it('names a linked thread after the sender display name', () => {
+    expect(threadLabel(reply({ kind: 'email', from: '"Juan (DailyPay Support)" <support@dailypay.com>' })))
+      .toBe('Juan (DailyPay Support)');
+  });
+
+  it('falls back to the address local part when there is no display name', () => {
+    expect(threadLabel(reply({ kind: 'email', from: '<support@dailypay.com>' }))).toBe('support');
+  });
+
+  it('falls back to the subject when there is no sender at all', () => {
+    expect(threadLabel(reply({ kind: 'email', from: '', subject: 'Direct deposit setup' })))
+      .toBe('Direct deposit setup');
+  });
+
+  it('truncates a long subject', () => {
+    const long = 'x'.repeat(60);
+    expect(threadLabel(reply({ kind: 'email', from: '', subject: long }))).toHaveLength(41);
+  });
+
+  it('never falls back to a raw thread id', () => {
+    expect(threadLabel(reply({ kind: 'email', from: '', subject: '', threadId: '1a0055a25a5b3bc0' })))
+      .toBe('email');
+  });
+});

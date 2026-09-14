@@ -12,6 +12,10 @@ import {
 } from '../api/bridge';
 import { runReplyPollNow } from '../background/replyPollScheduler';
 import { getTicket } from '../api/jira';
+import {
+  attentionCount, attentionKind, isAwaiting, isNewReply,
+  needsAttention, normalizeRepliesMap, threadLabel,
+} from '../data/emailLink';
 
 type LoadState = { kind: 'loading' } | { kind: 'error'; message: string } | { kind: 'ready'; rows: TicketRow[] };
 
@@ -27,18 +31,10 @@ type SortDirection = 'newest' | 'oldest';
  *  the top of the list — replies always win over sort order so nothing gets buried.
  *  'newest' = fewest days first (recently transitioned tickets at top).
  *  'oldest' = most days first (stalest tickets at top). */
-/** A reply "counts" as attention-grabbing only when it isn't acknowledged yet and an
- *  actual inbound message was matched. Acked entries — and tracked-but-no-reply-yet
- *  rows — remain in the map so the deeplink pill on the ticket panel can render, but
- *  the home list shouldn't keep coloring those rows red. */
-function isUnacked(r: TicketReply | undefined): boolean {
-  return !!r && r.acked !== true && !!r.messageId;
-}
-
-function orderRows(rows: TicketRow[], replies: Record<string, TicketReply>, sort: SortDirection): TicketRow[] {
+function orderRows(rows: TicketRow[], replies: Record<string, TicketReply[]>, sort: SortDirection): TicketRow[] {
   const withKeys = rows.map((r) => ({
     r,
-    hasReply: isUnacked(replies[r.id]),
+    hasReply: needsAttention(replies[r.id]),
     ts: new Date(r.statusCategoryChangedAt).getTime() || 0,
   }));
   withKeys.sort((a, b) => {
@@ -52,7 +48,7 @@ function orderRows(rows: TicketRow[], replies: Record<string, TicketReply>, sort
 
 export function HomeView({ onOpenTicket, onOpenWiresPending, onOpenWiresPendingV2, header }: { onOpenTicket: (ticketKey: string) => void; onOpenWiresPending: () => void; onOpenWiresPendingV2: () => void; header: React.ReactNode }) {
   const [state, setState] = useState<LoadState>({ kind: 'loading' });
-  const [replies, setReplies] = useState<Record<string, TicketReply>>({});
+  const [replies, setReplies] = useState<Record<string, TicketReply[]>>({});
   const [refreshing, setRefreshing] = useState(false);
   // Persist sort preference across side-panel opens so the user doesn't have to
   // re-pick every session. Defaults to 'newest' on first load.
@@ -82,8 +78,7 @@ export function HomeView({ onOpenTicket, onOpenWiresPending, onOpenWiresPendingV
   useEffect(() => {
     const read = () => {
       chrome.storage.local.get(REPLIES_STORAGE_KEY).then((res) => {
-        const v = res[REPLIES_STORAGE_KEY] as Record<string, TicketReply> | undefined;
-        setReplies(v || {});
+        setReplies(normalizeRepliesMap(res[REPLIES_STORAGE_KEY]));
       });
     };
     read();
@@ -253,7 +248,7 @@ export function HomeView({ onOpenTicket, onOpenWiresPending, onOpenWiresPendingV
             {allAssigned.length === 0 ? (
               <EmptyRow text="No active tickets assigned to you." />
             ) : (
-              allAssigned.map((r) => <TicketListRow key={r.id} row={r} reply={replies[r.id]} onClick={() => onOpenTicket(r.id)} />)
+              allAssigned.map((r) => <TicketListRow key={r.id} row={r} entries={replies[r.id]} onClick={() => onOpenTicket(r.id)} />)
             )}
           </Section>
 
@@ -344,8 +339,16 @@ function EmptyRow({ text }: { text: string }) {
   );
 }
 
-function TicketListRow({ row, reply, onClick }: { row: TicketRow; reply?: TicketReply; onClick: () => void }) {
-  const hasReply = isUnacked(reply);
+function TicketListRow({ row, entries, onClick }: { row: TicketRow; entries?: TicketReply[]; onClick: () => void }) {
+  const hasReply = needsAttention(entries);
+  const kind = attentionKind(entries);
+  const count = attentionCount(entries);
+  // The flagged entry driving the summary line: a new reply if there is one, otherwise
+  // the thread waiting on us.
+  const lead = (entries || []).find(isNewReply) || (entries || []).find(isAwaiting);
+  const leadLabel = lead ? threadLabel(lead) : '';
+  const glyph = kind === 'awaiting' ? '📮' : '📬';
+  const suffix = count > 1 ? ` (+${count - 1} more)` : '';
   return (
     <button
       onClick={onClick}
@@ -367,7 +370,9 @@ function TicketListRow({ row, reply, onClick }: { row: TicketRow; reply?: Ticket
         <span style={{ fontSize: 'var(--mint-text-nano)', color: 'var(--mint-fg-soft)' }}>· {row.status}</span>
         {hasReply ? (
           <span
-            title={`New ${reply!.kind === 'koho' ? 'Koho' : 'i2c'} reply — click to open`}
+            title={kind === 'awaiting'
+              ? `You haven't replied to ${leadLabel} — click to open`
+              : `New reply from ${leadLabel} — click to open`}
             style={{
               display: 'inline-block',
               width: 8, height: 8, borderRadius: 9999,
@@ -384,7 +389,10 @@ function TicketListRow({ row, reply, onClick }: { row: TicketRow; reply?: Ticket
       </div>
       {hasReply ? (
         <div style={{ fontSize: 'var(--mint-text-nano)', color: 'var(--mint-negative-fg-strong)', fontWeight: 600 }}>
-          📬 New {reply!.kind === 'koho' ? 'Koho' : 'i2c'} reply — {reply!.snippet.slice(0, 80)}{reply!.snippet.length > 80 ? '…' : ''}
+          {glyph}{' '}
+          {kind === 'awaiting'
+            ? `Awaiting your reply — ${leadLabel}${suffix}`
+            : `New reply from ${leadLabel} — ${(lead?.snippet || '').slice(0, 80)}${(lead?.snippet || '').length > 80 ? '…' : ''}${suffix}`}
         </div>
       ) : (
         <div style={{ fontSize: 'var(--mint-text-nano)', color: 'var(--mint-fg-soft)' }}>

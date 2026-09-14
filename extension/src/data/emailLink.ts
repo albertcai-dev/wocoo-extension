@@ -194,3 +194,25 @@ export function attentionCount(entries: TicketReply[] | undefined): number {
   if (!entries) return 0;
   return entries.filter((r) => isNewReply(r) || isAwaiting(r)).length;
 }
+
+/** How a tracked thread is named in the UI. Koho and i2c keep their short fixed labels;
+ *  a linked thread is named after whoever the agent is actually talking to, falling back
+ *  to the subject and then to a generic word — never to a raw thread id. */
+export function threadLabel(r: TicketReply): string {
+  if (r.kind === 'koho') return 'Koho';
+  if (r.kind === 'i2c') return 'i2c';
+  const display = displayName(r.from);
+  if (display) return display;
+  if (r.subject) return r.subject.length > 40 ? r.subject.slice(0, 40) + '…' : r.subject;
+  return 'email';
+}
+
+function displayName(from: string): string {
+  const s = (from || '').trim();
+  const angled = s.indexOf('<');
+  const name = (angled > 0 ? s.slice(0, angled) : '').trim().replace(/^"|"$/g, '').trim();
+  if (name) return name;
+  // No display name — use the address's local part rather than the whole address.
+  const addr = extractEmailAddress(s);
+  return addr ? addr.split('@')[0] : '';
+}
