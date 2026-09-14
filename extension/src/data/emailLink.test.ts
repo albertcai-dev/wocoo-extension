@@ -58,3 +58,78 @@ describe('parseGmailLink', () => {
       .toBeNull();
   });
 });
+
+import { entryKey, normalizeRepliesMap } from './emailLink';
+import type { TicketReply } from '../api/bridge';
+
+function reply(over: Partial<TicketReply> = {}): TicketReply {
+  return {
+    wocooTicketId: 'WOCOO-26316',
+    kind: 'koho',
+    messageId: 'msg-1',
+    trackKey: 'client@example.com',
+    from: 'Client <client@example.com>',
+    snippet: 'hello',
+    receivedAt: '2026-09-01T10:00:00Z',
+    ...over,
+  } as TicketReply;
+}
+
+describe('entryKey', () => {
+  it('prefers the thread id, which is what linked email rows carry', () => {
+    expect(entryKey(reply({ kind: 'email', threadId: '1a0055a25a5b3bc0' })))
+      .toBe('email::1a0055a25a5b3bc0');
+  });
+
+  it('falls back to the track key for koho and i2c rows', () => {
+    expect(entryKey(reply({ kind: 'i2c', trackKey: 'PO-420974' }))).toBe('i2c::PO-420974');
+  });
+
+  it('falls back to the message id when there is no track key', () => {
+    expect(entryKey(reply({ trackKey: undefined, messageId: 'msg-9' }))).toBe('koho::msg-9');
+  });
+
+  it('distinguishes two kinds that share a track key', () => {
+    const a = entryKey(reply({ kind: 'koho', trackKey: 'x@y.com' }));
+    const b = entryKey(reply({ kind: 'i2c', trackKey: 'x@y.com' }));
+    expect(a).not.toBe(b);
+  });
+});
+
+describe('normalizeRepliesMap', () => {
+  it('wraps the old single-entry shape in an array', () => {
+    const old = { 'WOCOO-1': reply({ wocooTicketId: 'WOCOO-1' }) };
+    const out = normalizeRepliesMap(old);
+    expect(out['WOCOO-1']).toHaveLength(1);
+    expect(out['WOCOO-1'][0].messageId).toBe('msg-1');
+  });
+
+  it('passes the new list shape through untouched', () => {
+    const next = { 'WOCOO-1': [reply(), reply({ messageId: 'msg-2' })] };
+    expect(normalizeRepliesMap(next)['WOCOO-1']).toHaveLength(2);
+  });
+
+  it('handles a map holding both shapes at once', () => {
+    const mixed = { 'WOCOO-1': reply(), 'WOCOO-2': [reply({ wocooTicketId: 'WOCOO-2' })] };
+    const out = normalizeRepliesMap(mixed);
+    expect(out['WOCOO-1']).toHaveLength(1);
+    expect(out['WOCOO-2']).toHaveLength(1);
+  });
+
+  it('drops entries that are not objects rather than throwing', () => {
+    const junk = { 'WOCOO-1': null, 'WOCOO-2': 'nope', 'WOCOO-3': 7, 'WOCOO-4': [reply()] };
+    const out = normalizeRepliesMap(junk);
+    expect(Object.keys(out)).toEqual(['WOCOO-4']);
+  });
+
+  it('returns an empty map for null, undefined, and non-objects', () => {
+    expect(normalizeRepliesMap(null)).toEqual({});
+    expect(normalizeRepliesMap(undefined)).toEqual({});
+    expect(normalizeRepliesMap('x')).toEqual({});
+    expect(normalizeRepliesMap([])).toEqual({});
+  });
+
+  it('drops a ticket whose list contains only junk', () => {
+    expect(normalizeRepliesMap({ 'WOCOO-1': [null, 'x'] })).toEqual({});
+  });
+});

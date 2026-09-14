@@ -52,3 +52,33 @@ function safeDecode(s: string): string {
     return s.trim();
   }
 }
+
+import type { TicketReply } from '../api/bridge';
+
+/** Identity of one tracked thread inside a ticket's list. A ticket can now hold a Koho
+ *  thread, an i2c thread, and several linked email threads, so merge and dedup need a
+ *  key that is stable across polls. The thread id is the strongest handle; Koho and i2c
+ *  rows have none, so they fall back to the sheet's trackKey. */
+export function entryKey(r: TicketReply): string {
+  return `${r.kind}::${r.threadId || r.trackKey || r.messageId || ''}`;
+}
+
+function isReplyLike(v: unknown): v is TicketReply {
+  return !!v && typeof v === 'object' && !Array.isArray(v);
+}
+
+/** Read `ticket_replies` / `ticket_replies_archive` in either shape.
+ *
+ *  This is the entire migration. Storage written by an older build holds one object per
+ *  ticket; wrapping it here means the first read self-heals and no one-shot migration
+ *  job is needed. Every read site must go through this — a direct `map[ticketId]` read
+ *  will hand back an array to code expecting an object. */
+export function normalizeRepliesMap(raw: unknown): Record<string, TicketReply[]> {
+  const out: Record<string, TicketReply[]> = {};
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+  for (const [ticketId, value] of Object.entries(raw as Record<string, unknown>)) {
+    const list = (Array.isArray(value) ? value : [value]).filter(isReplyLike);
+    if (list.length) out[ticketId] = list;
+  }
+  return out;
+}
