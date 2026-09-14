@@ -193,3 +193,156 @@ describe('isAutomatedSender', () => {
     expect(isAutomatedSender('"Juan (DailyPay Support)" <support@dailypay.com>')).toBe(false);
   });
 });
+
+import {
+  attentionCount, attentionKind, isAwaiting, isNewReply,
+  mergeEntries, needsAttention, sortEntries,
+} from './emailLink';
+
+function sources(over: Partial<Parameters<typeof mergeEntries>[0]> = {}) {
+  return { polled: [], prior: [], archived: [], tracked: [], ...over };
+}
+
+describe('isNewReply / isAwaiting', () => {
+  it('counts an unacked entry with a matched message as a new reply', () => {
+    expect(isNewReply(reply({ acked: false, messageId: 'm1' }))).toBe(true);
+  });
+
+  it('does not count an acked entry', () => {
+    expect(isNewReply(reply({ acked: true, messageId: 'm1' }))).toBe(false);
+  });
+
+  it('does not count a tracked row that never matched a message', () => {
+    expect(isNewReply(reply({ acked: false, messageId: '' }))).toBe(false);
+  });
+
+  it('reads awaiting straight off the flag, treating undefined as unknown not false', () => {
+    expect(isAwaiting(reply({ awaitingMyReply: true }))).toBe(true);
+    expect(isAwaiting(reply({ awaitingMyReply: false }))).toBe(false);
+    expect(isAwaiting(reply({ awaitingMyReply: undefined }))).toBe(false);
+  });
+});
+
+describe('mergeEntries', () => {
+  it('keeps a polled entry as-is', () => {
+    const out = mergeEntries(sources({ polled: [reply({ acked: false })] }));
+    expect(out).toHaveLength(1);
+    expect(out[0].acked).toBe(false);
+  });
+
+  it('keeps every distinct thread on the same ticket', () => {
+    const out = mergeEntries(sources({
+      polled: [
+        reply({ kind: 'koho', trackKey: 'c@x.com' }),
+        reply({ kind: 'email', threadId: '1a0055a25a5b3bc0' }),
+        reply({ kind: 'email', threadId: '1a000dc53f41b82d' }),
+      ],
+    }));
+    expect(out).toHaveLength(3);
+  });
+
+  it('dedups a repeated thread within the polled list, newest receivedAt winning', () => {
+    const out = mergeEntries(sources({
+      polled: [
+        reply({ kind: 'email', threadId: 't1', receivedAt: '2026-09-01T00:00:00Z', snippet: 'old' }),
+        reply({ kind: 'email', threadId: 't1', receivedAt: '2026-09-05T00:00:00Z', snippet: 'new' }),
+      ],
+    }));
+    expect(out).toHaveLength(1);
+    expect(out[0].snippet).toBe('new');
+  });
+
+  it('carries forward a prior entry the poll no longer returned, forced to acked', () => {
+    const out = mergeEntries(sources({
+      prior: [reply({ kind: 'email', threadId: 't9', acked: false })],
+    }));
+    expect(out).toHaveLength(1);
+    expect(out[0].acked).toBe(true);
+  });
+
+  it('lets the poll win over prior and archive for the same thread', () => {
+    const out = mergeEntries(sources({
+      polled: [reply({ kind: 'email', threadId: 't1', acked: false, snippet: 'fresh' })],
+      prior: [reply({ kind: 'email', threadId: 't1', acked: true, snippet: 'stale' })],
+      archived: [reply({ kind: 'email', threadId: 't1', acked: true, snippet: 'ancient' })],
+    }));
+    expect(out).toHaveLength(1);
+    expect(out[0].snippet).toBe('fresh');
+    expect(out[0].acked).toBe(false);
+  });
+
+  it('recovers a thread only the archive still remembers', () => {
+    const out = mergeEntries(sources({ archived: [reply({ kind: 'email', threadId: 'gone' })] }));
+    expect(out).toHaveLength(1);
+    expect(out[0].acked).toBe(true);
+  });
+
+  it('gives a sheet-only tracked row an entry so it still earns a chip', () => {
+    const out = mergeEntries(sources({
+      tracked: [reply({ kind: 'i2c', trackKey: 'PO-420974', messageId: '', receivedAt: '' })],
+    }));
+    expect(out).toHaveLength(1);
+    expect(out[0].acked).toBe(true);
+    expect(isNewReply(out[0])).toBe(false);
+  });
+
+  it('returns an empty list when every source is empty', () => {
+    expect(mergeEntries(sources())).toEqual([]);
+  });
+});
+
+describe('sortEntries', () => {
+  it('puts new replies first, then awaiting, then muted', () => {
+    const out = sortEntries([
+      reply({ kind: 'email', threadId: 'muted', acked: true }),
+      reply({ kind: 'email', threadId: 'await', acked: true, awaitingMyReply: true }),
+      reply({ kind: 'email', threadId: 'fresh', acked: false, messageId: 'm1' }),
+    ]);
+    expect(out.map((e) => e.threadId)).toEqual(['fresh', 'await', 'muted']);
+  });
+
+  it('breaks ties on receivedAt, newest first', () => {
+    const out = sortEntries([
+      reply({ kind: 'email', threadId: 'older', acked: true, receivedAt: '2026-09-01T00:00:00Z' }),
+      reply({ kind: 'email', threadId: 'newer', acked: true, receivedAt: '2026-09-09T00:00:00Z' }),
+    ]);
+    expect(out.map((e) => e.threadId)).toEqual(['newer', 'older']);
+  });
+});
+
+describe('needsAttention / attentionKind / attentionCount', () => {
+  it('is true on a new reply', () => {
+    expect(needsAttention([reply({ acked: false, messageId: 'm1' })])).toBe(true);
+  });
+
+  it('is true on an awaiting thread even though it is acked', () => {
+    expect(needsAttention([reply({ acked: true, awaitingMyReply: true })])).toBe(true);
+  });
+
+  it('is false for muted entries, empty lists, and undefined', () => {
+    expect(needsAttention([reply({ acked: true })])).toBe(false);
+    expect(needsAttention([])).toBe(false);
+    expect(needsAttention(undefined)).toBe(false);
+  });
+
+  it('reports new-reply as the kind when both causes are present', () => {
+    expect(attentionKind([
+      reply({ kind: 'email', threadId: 'a', acked: true, awaitingMyReply: true }),
+      reply({ kind: 'email', threadId: 'b', acked: false, messageId: 'm1' }),
+    ])).toBe('new-reply');
+  });
+
+  it('reports awaiting when that is the only cause, and null when there is none', () => {
+    expect(attentionKind([reply({ acked: true, awaitingMyReply: true })])).toBe('awaiting');
+    expect(attentionKind([reply({ acked: true })])).toBeNull();
+    expect(attentionKind(undefined)).toBeNull();
+  });
+
+  it('counts every flagged entry once, even when one entry has both causes', () => {
+    expect(attentionCount([
+      reply({ kind: 'email', threadId: 'a', acked: false, messageId: 'm1', awaitingMyReply: true }),
+      reply({ kind: 'email', threadId: 'b', acked: true, awaitingMyReply: true }),
+      reply({ kind: 'email', threadId: 'c', acked: true }),
+    ])).toBe(2);
+  });
+});

@@ -114,3 +114,83 @@ export function isSelfSender(from: string, me: string): boolean {
 export function isAutomatedSender(from: string): boolean {
   return AUTOMATED_SENDER.test(from || '');
 }
+
+/** An entry is worth shouting about only when the poll actually matched an inbound
+ *  message and the agent has not dismissed it. A tracking row that has never matched
+ *  anything has a blank messageId and must stay quiet. */
+export function isNewReply(r: TicketReply): boolean {
+  return r.acked !== true && !!r.messageId;
+}
+
+/** The last message in the thread is not from the agent. Set by the poll, so an
+ *  `undefined` here means "not determined" — a row with no thread handle yet — and is
+ *  deliberately not treated as `false`-with-confidence anywhere user-visible. */
+export function isAwaiting(r: TicketReply): boolean {
+  return r.awaitingMyReply === true;
+}
+
+export interface MergeSources {
+  /** Fresh from `checkForReplies` — authoritative. */
+  polled: TicketReply[];
+  /** The previous live map for this ticket. */
+  prior: TicketReply[];
+  /** The append-only archive for this ticket. */
+  archived: TicketReply[];
+  /** Rows from `listTrackedTickets` — presence in the sheet, nothing more. */
+  tracked: TicketReply[];
+}
+
+/** Fold four sources into one list per ticket.
+ *
+ *  Precedence is polled > prior > archived > tracked. Rebuilding from the poll alone can
+ *  only ever *lose* an entry (the bridge filters acked rows, an ack races the write, a
+ *  deployment predates an action), so the weaker sources fill gaps and are forced to
+ *  `acked: true`: only `checkForReplies` detects a genuinely new reply, so a row known
+ *  only from storage or the sheet has nothing to alert about. */
+export function mergeEntries(sources: MergeSources): TicketReply[] {
+  const byKey = new Map<string, TicketReply>();
+
+  for (const r of sources.polled) {
+    const k = entryKey(r);
+    const cur = byKey.get(k);
+    if (!cur || (r.receivedAt || '') > (cur.receivedAt || '')) byKey.set(k, r);
+  }
+
+  for (const source of [sources.prior, sources.archived, sources.tracked]) {
+    for (const r of source) {
+      const k = entryKey(r);
+      if (!byKey.has(k)) byKey.set(k, { ...r, acked: true });
+    }
+  }
+
+  return sortEntries([...byKey.values()]);
+}
+
+/** Render order: what needs doing, then what is waiting on you, then history. */
+export function sortEntries(entries: TicketReply[]): TicketReply[] {
+  const rank = (r: TicketReply) => (isNewReply(r) ? 0 : isAwaiting(r) ? 1 : 2);
+  return [...entries].sort((a, b) => {
+    const d = rank(a) - rank(b);
+    if (d !== 0) return d;
+    return (b.receivedAt || '').localeCompare(a.receivedAt || '');
+  });
+}
+
+export function needsAttention(entries: TicketReply[] | undefined): boolean {
+  return !!entries && entries.some((r) => isNewReply(r) || isAwaiting(r));
+}
+
+/** Which glyph Home shows. A new reply outranks an awaiting thread — it is the newer
+ *  fact and the one the agent has not seen yet. */
+export function attentionKind(entries: TicketReply[] | undefined): 'new-reply' | 'awaiting' | null {
+  if (!entries || !entries.length) return null;
+  if (entries.some(isNewReply)) return 'new-reply';
+  if (entries.some(isAwaiting)) return 'awaiting';
+  return null;
+}
+
+/** Flagged threads, counted once each even when one thread is both new and awaiting. */
+export function attentionCount(entries: TicketReply[] | undefined): number {
+  if (!entries) return 0;
+  return entries.filter((r) => isNewReply(r) || isAwaiting(r)).length;
+}
