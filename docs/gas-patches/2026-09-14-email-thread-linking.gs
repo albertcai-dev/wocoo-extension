@@ -104,7 +104,17 @@ function handleSearchEmailThreads(params) {
     }
   }
 
-  var linked = emailLink_linkedThreadIndex_();
+  // The "already linked to WOCOO-x" warning is a nicety. Reading the sheet for it must
+  // never be able to fail the search — if getReplyTrackingSheet_() is named differently
+  // in this project, a throw here means no reply is ever posted and the extension just
+  // times out after 60s with no clue why.
+  var linked = {};
+  try {
+    linked = emailLink_linkedThreadIndex_();
+  } catch (e) {
+    Logger.log('linkedThreadIndex unavailable, continuing without it: ' + e);
+  }
+
   return {
     reply: 'emailThreadsSearched',
     threads: out.map(function (d) {
@@ -201,6 +211,53 @@ function handleUnlinkEmailThread(params) {
     }
   }
   return { reply: 'emailThreadUnlinked', threadId: threadId, deleted: false };
+}
+
+/**
+ * Run this from the Apps Script editor's Run dropdown BEFORE testing from the extension.
+ * It reports which assumed helper names actually exist and whether Gmail search works,
+ * so a missing helper shows up as a named error here instead of as an unexplained 60s
+ * timeout in the side panel.
+ *
+ * Deliberately no trailing underscore — a trailing underscore hides a function from the
+ * Run dropdown.
+ */
+function emailLink_selfTest() {
+  var report = [];
+
+  report.push('me = ' + (emailLink_me_() || '(unknown — Session returned nothing)'));
+
+  var helpers = ['getReplyTrackingSheet_', 'appendReplyTrackingRow_', 'setReplyTrackingRow_'];
+  for (var i = 0; i < helpers.length; i++) {
+    var name = helpers[i];
+    var exists = false;
+    try { exists = (typeof this[name] === 'function') || (eval('typeof ' + name) === 'function'); } catch (e) { exists = false; }
+    report.push(name + ' = ' + (exists ? 'OK' : 'MISSING — rename the calls in this patch'));
+  }
+
+  try {
+    var sheet = getReplyTrackingSheet_();
+    var header = sheet.getDataRange().getValues()[0];
+    report.push('sheet = ' + sheet.getParent().getId());
+    report.push('header = ' + header.join(' | '));
+    report.push('expected = wocooTicketId | kind | trackKey | createdAt | lastSeenMsgId | acknowledged');
+  } catch (e2) {
+    report.push('sheet read FAILED: ' + e2);
+  }
+
+  try {
+    var hits = GmailApp.search('subject:dailypay OR from:dailypay', 0, 5);
+    report.push('gmail search = ' + hits.length + ' threads');
+    for (var j = 0; j < hits.length; j++) {
+      report.push('  ' + hits[j].getId() + ' — ' + hits[j].getFirstMessageSubject());
+    }
+  } catch (e3) {
+    report.push('gmail search FAILED: ' + e3);
+  }
+
+  var out = report.join('\n');
+  Logger.log(out);
+  return out;
 }
 
 /**
