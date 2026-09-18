@@ -52,6 +52,7 @@ import { LinkEmailCard } from './LinkEmailCard';
 import { NotePrompt } from './NotePrompt';
 import type { TicketTransitionKind } from '../data/ticketLogTypes';
 import { clearPresetIdentityMirror, mirrorPresetIdentity, stagePresetIdentity } from '../data/presetIdentity';
+import { stageCardIssuanceSearch } from '../data/cardIssuanceStage';
 
 // Bridge: DOM-observer transition detections come in as chrome.runtime messages from
 // the service worker. Feed them into the local event bus so a single subscribe path
@@ -633,6 +634,10 @@ const VERIFY_ELIGIBLE_DD_URLS = [
   'https://8a26d867.wealthsimple-aws-mpc.app.preset.io/superset/dashboard/8324/',
 ];
 
+// Atlas's Card Issuance Manager. The identity is staged in storage rather than passed as
+// a query param — the tool reads its Identity ID from a form field, not the URL.
+const CARD_ISSUANCE_MANAGER_URL = 'https://atlas.wealthsimple.com/tools/card_issuance_manager';
+
 function ExternalToolsRow({ ticket }: { ticket: WocooTicket }) {
   const workType = (ticket.workType || '').toLowerCase();
   const isCreditCard = workType.includes('credit card');
@@ -885,6 +890,20 @@ function QuickActions({ ticket, onTicketUpdate, onStartTriage, onStartReverseFee
           title="Generate a refund authorization letter — pulls the client's name and mailing address from Atlas, fills the template, exports a PDF and attaches it to this ticket"
         >
           ✉ Refund Auth Letter
+        </ActionButton>
+      </div>
+      <div style={{ display: 'flex', gap: 'var(--mint-sp-2)' }}>
+        <ActionButton
+          variant="neutral"
+          onClick={() => {
+            if (!ticket.identityId) return;
+            void stageCardIssuanceSearch(ticket.identityId, ticket.id);
+            window.open(CARD_ISSUANCE_MANAGER_URL, '_blank', 'noopener,noreferrer');
+          }}
+          disabled={!ticket.identityId}
+          title="Open Atlas's Card Issuance Manager with this ticket's Identity ID filled in and searched"
+        >
+          🪪 Card Issuance Mgr
         </ActionButton>
       </div>
       {interestNote ? (

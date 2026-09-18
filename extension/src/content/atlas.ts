@@ -1,3 +1,7 @@
+export {}; // Treat as module → file-scoped declarations, no collision with other content scripts.
+
+import { CARD_ISSUANCE_STAGED_KEY, resolveCardIssuanceStage } from '../data/cardIssuanceStage';
+
 // Atlas auto-Submit content script.
 //
 // Atlas (`atlas.wealthsimple.com`) shows an access-reason dialog every time an associate
@@ -582,6 +586,139 @@
   const deadline = Date.now() + 30_000;
   const interval = window.setInterval(() => {
     if (Date.now() > deadline || detailsWrittenRan) {
+      window.clearInterval(interval);
+      return;
+    }
+    void tick();
+  }, 400);
+  void tick();
+})();
+
+// =============================================================================
+// Card Issuance Manager search — fills the tool's Identity ID field and searches.
+// Triggered when the side panel stages `pending_atlas_card_issuance` (see
+// data/cardIssuanceStage.ts) right before opening
+// https://atlas.wealthsimple.com/tools/card_issuance_manager.
+//
+// The page renders TWO cards with an identically-labelled "Identity ID" field —
+// "Card Issuance Management Tool" at the top and "Failed Client Profile Syncs"
+// below it. So everything here is scoped to the card that owns the heading we
+// match; a document-wide input lookup would be a coin flip between the two.
+// =============================================================================
+
+(function cardIssuanceSearch() {
+  if (!/card[_-]?issuance/i.test(location.pathname)) return;
+
+  const log = (msg: string, ...args: unknown[]) => console.log('[wocoo-atlas-cim]', msg, ...args);
+
+  const HEADING = /card\s+issuance\s+management\s+tool/i;
+  const IDENTITY_LABEL = /identity\s*id/i;
+
+  const isVisible = (el: HTMLElement) => {
+    if (!el) return false;
+    if (el.offsetParent === null && getComputedStyle(el).position !== 'fixed') return false;
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  };
+
+  const buttonsIn = (root: HTMLElement) => Array.from(root.querySelectorAll<HTMLButtonElement>('button'));
+  const searchButtonIn = (root: HTMLElement) =>
+    buttonsIn(root).find((b) => (b.textContent || '').trim().toLowerCase() === 'search') || null;
+
+  /** The card that owns the "Card Issuance Management Tool" heading — the nearest
+   *  ancestor holding both an input and that card's own Search button. */
+  function findToolCard(): HTMLElement | null {
+    const heading = Array.from(document.querySelectorAll<HTMLElement>('*')).find((el) => {
+      if (el.children.length > 0) return false;
+      return HEADING.test((el.textContent || '').replace(/\s+/g, ' ').trim());
+    });
+    if (!heading) return null;
+    let node: HTMLElement | null = heading.parentElement;
+    for (let i = 0; i < 12 && node && node !== document.body; i++) {
+      if (node.querySelector('input') && searchButtonIn(node)) return node;
+      node = node.parentElement;
+    }
+    return null;
+  }
+
+  /** The Identity ID input inside that card. Atlas is styled-components, so this goes
+   *  by accessible name / placeholder / label text and only then by position. */
+  function findIdentityInput(card: HTMLElement): HTMLInputElement | null {
+    const inputs = Array.from(card.querySelectorAll<HTMLInputElement>('input')).filter(
+      (i) => i.type !== 'checkbox' && i.type !== 'radio' && isVisible(i),
+    );
+    if (inputs.length === 0) return null;
+
+    const named = inputs.find((i) =>
+      IDENTITY_LABEL.test(i.getAttribute('aria-label') || '') ||
+      IDENTITY_LABEL.test(i.placeholder || '') ||
+      IDENTITY_LABEL.test(i.name || '') ||
+      IDENTITY_LABEL.test(i.id || ''),
+    );
+    if (named) return named;
+
+    // <label for="..."> or a <label> wrapping the input.
+    for (const label of Array.from(card.querySelectorAll<HTMLLabelElement>('label'))) {
+      if (!IDENTITY_LABEL.test((label.textContent || '').trim())) continue;
+      const forId = label.getAttribute('for');
+      const byFor = forId ? card.querySelector<HTMLInputElement>(`#${CSS.escape(forId)}`) : null;
+      if (byFor) return byFor;
+      const wrapped = label.querySelector('input');
+      if (wrapped) return wrapped as HTMLInputElement;
+    }
+
+    // Last resort: Identity ID is the card's first field.
+    return inputs[0];
+  }
+
+  /** React owns this input's value, so go through the native setter it patched over. */
+  function setReactValue(input: HTMLInputElement, value: string) {
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+    input.focus();
+    if (setter) setter.call(input, value);
+    else input.value = value;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
+  let filled = false;
+  let searched = false;
+  let identity: string | null = null;
+
+  async function tick() {
+    if (searched) return;
+
+    if (!identity) {
+      const res = await chrome.storage.local.get(CARD_ISSUANCE_STAGED_KEY);
+      const stage = resolveCardIssuanceStage({ stored: res[CARD_ISSUANCE_STAGED_KEY], now: Date.now() });
+      if (!stage) return; // nothing staged (or it expired) → leave the page alone
+      identity = stage.identityId;
+      log('staged identity', identity, 'from', stage.ticketKey || 'no ticket');
+    }
+
+    const card = findToolCard();
+    if (!card) return;
+
+    if (!filled) {
+      const input = findIdentityInput(card);
+      if (!input) return;
+      setReactValue(input, identity);
+      filled = true;
+      log('filled Identity ID');
+      return; // give React a tick to re-render and enable Search
+    }
+
+    const search = searchButtonIn(card);
+    if (!search || search.disabled) return;
+    searched = true;
+    search.click();
+    log('clicked Search');
+    try { await chrome.storage.local.remove(CARD_ISSUANCE_STAGED_KEY); } catch { /* fine */ }
+  }
+
+  const deadline = Date.now() + 20_000;
+  const interval = window.setInterval(() => {
+    if (Date.now() > deadline || searched) {
       window.clearInterval(interval);
       return;
     }
