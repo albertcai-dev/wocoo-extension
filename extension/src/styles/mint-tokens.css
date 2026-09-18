@@ -47,6 +47,22 @@
   --mint-highlight-fg-strong: #3a479c;
   --mint-highlight-fg-graphic: #4b5cc3;
 
+  /* quick-action spectrum (ROYGBIV across the 9 workflow buttons, reading order).
+     Mint ships four semantic hues, which is not enough to walk a 3x3 grid from red to
+     violet, so this ramp fills the gaps at Mint's own tone — roughly 50% lightness,
+     50-75% saturation. Steps 1, 5 and 8 ARE the Mint tokens; step 3 is Mint's warning
+     darkened from #b2691c, which sits at 4.26:1 against white and misses AA. Every step
+     clears 4.5:1 against white, because all nine buttons carry white labels. */
+  --mint-spectrum-1: #c13c3c;  /* red        — Mint negative */
+  --mint-spectrum-2: #b5501f;  /* red-orange */
+  --mint-spectrum-3: #a85f14;  /* orange     — Mint warning, darkened for AA */
+  --mint-spectrum-4: #8a6d13;  /* gold       — a true yellow cannot carry white text */
+  --mint-spectrum-5: #148256;  /* green      — Mint positive */
+  --mint-spectrum-6: #107078;  /* teal */
+  --mint-spectrum-7: #1f5fa8;  /* blue */
+  --mint-spectrum-8: #4b5cc3;  /* indigo     — Mint highlight */
+  --mint-spectrum-9: #6d3ad1;  /* violet */
+
   /* neutral semantic (for cancelled badge etc.) */
   --mint-neutral-bg-soft: rgba(20, 17, 12, 0.06);
 

@@ -824,7 +824,7 @@ function QuickActions({ ticket, onTicketUpdate, onStartTriage, onStartReverseFee
       </div>
       <div style={{ display: 'flex', gap: 'var(--mint-sp-2)' }}>
         <ActionButton
-          variant="positive"
+          variant="red"
           onClick={() => {
             if (!ticket.identityId) return;
             const id = ticket.identityId;
@@ -845,23 +845,23 @@ function QuickActions({ ticket, onTicketUpdate, onStartTriage, onStartReverseFee
           📊 Verify Eligible DD
         </ActionButton>
         <ActionButton
-          variant="special"
+          variant="redorange"
           onClick={onOpenCreateReimb}
           disabled={!ticket.identityId}
           title="Create a new REIMB ticket from this WOCOO ticket"
         >
           💸 Create REIMB Ticket
         </ActionButton>
-        <ActionButton variant="neutral" onClick={onStartWalletTriage} disabled={!ticket.identityId} title="Start Wallet Triage workflow (Apple Pay / Google Pay / etc.)">
+        <ActionButton variant="orange" onClick={onStartWalletTriage} disabled={!ticket.identityId} title="Start Wallet Triage workflow (Apple Pay / Google Pay / etc.)">
           💳 Wallet Triage
         </ActionButton>
       </div>
       <div style={{ display: 'flex', gap: 'var(--mint-sp-2)' }}>
-        <ActionButton variant="warning" onClick={onStartVisaCompanionRpin} disabled={!ticket.identityId} title="Visa Companion RPIN diagnostic — open Preset dashboard 7666, then optionally create an i2c ticket to add RPIN">
+        <ActionButton variant="gold" onClick={onStartVisaCompanionRpin} disabled={!ticket.identityId} title="Visa Companion RPIN diagnostic — open Preset dashboard 7666, then optionally create an i2c ticket to add RPIN">
           🛫 Visa Companion
         </ActionButton>
         <ActionButton
-          variant="special"
+          variant="green"
           onClick={() => { void runInterestTool({ identityId: ticket.identityId, ticketId: ticket.id }); }}
           disabled={interestBusy}
           title="Open the Interest Validation tool (localhost:8501) — starts it locally via Start App.command if it isn't already running"
@@ -869,7 +869,7 @@ function QuickActions({ ticket, onTicketUpdate, onStartTriage, onStartReverseFee
           {interestBusy ? '… Starting tool' : '🔎 Investigate Interest'}
         </ActionButton>
         <ActionButton
-          variant="highlight"
+          variant="teal"
           onClick={onStartRefundAuthLetter}
           title="Generate a refund authorization letter — pulls the client's name and mailing address from Atlas, fills the template, exports a PDF and attaches it to this ticket"
         >
@@ -896,7 +896,7 @@ function QuickActions({ ticket, onTicketUpdate, onStartTriage, onStartReverseFee
           adjacent to the Investigate Interest button that produces it. */}
       <div style={{ display: 'flex', gap: 'var(--mint-sp-2)' }}>
         <ActionButton
-          variant="warning"
+          variant="blue"
           onClick={onStartReverseFee}
           // Interest tickets (by workType OR by content) don't need a ticket-provided
           // clientEmail — the workflow fetches it from Atlas on entry.
@@ -909,11 +909,11 @@ function QuickActions({ ticket, onTicketUpdate, onStartTriage, onStartReverseFee
         >
           ↗ Reverse Fee
         </ActionButton>
-        <ActionButton variant="neutral" onClick={onStartCustomCcStatement} title="Start Custom CC Statement workflow (corrected statement from the client's statement PDF)">
+        <ActionButton variant="indigo" onClick={onStartCustomCcStatement} title="Start Custom CC Statement workflow (corrected statement from the client's statement PDF)">
           🧾 Custom CC Statement
         </ActionButton>
         <ActionButton
-          variant="neutral"
+          variant="violet"
           onClick={() => {
             if (!ticket.identityId) return;
             void stageCardIssuanceSearch(ticket.identityId, ticket.id);
@@ -1091,7 +1091,16 @@ function CopyButton({ value }: { value: string }) {
   );
 }
 
-type ActionVariant = 'positive' | 'neutral' | 'ghost' | 'highlight' | 'warning' | 'special';
+// The nine quick-action workflow buttons carry a ROYGBIV ramp in reading order instead
+// of a semantic colour — there is no meaningful severity ordering between "Reverse Fee"
+// and "Wallet Triage", and a stable per-button hue is what makes the grid scannable.
+// Hues come from --mint-spectrum-1..9; see the note in styles/mint-tokens.css.
+type SpectrumVariant = 'red' | 'redorange' | 'orange' | 'gold' | 'green' | 'teal' | 'blue' | 'indigo' | 'violet';
+type ActionVariant = 'positive' | 'neutral' | 'ghost' | 'highlight' | 'warning' | 'special' | SpectrumVariant;
+
+const SPECTRUM_STEP: Record<SpectrumVariant, number> = {
+  red: 1, redorange: 2, orange: 3, gold: 4, green: 5, teal: 6, blue: 7, indigo: 8, violet: 9,
+};
 
 function ActionButton({ variant, children, onClick, title, disabled }: { variant: ActionVariant; children: React.ReactNode; onClick: () => void; title?: string; disabled?: boolean }) {
   const base: React.CSSProperties = {
@@ -1112,6 +1121,12 @@ function ActionButton({ variant, children, onClick, title, disabled }: { variant
     highlight: { background: 'var(--mint-highlight-fg-graphic)', color: '#ffffff' },
     warning:   { background: 'var(--mint-warning-fg-graphic)',   color: '#ffffff' },
     special:   { background: '#7c3aed',                          color: '#ffffff' }, // violet — Mint has no purple token
+    ...(Object.fromEntries(
+      Object.entries(SPECTRUM_STEP).map(([name, step]) => [
+        name,
+        { background: `var(--mint-spectrum-${step})`, color: '#ffffff' },
+      ]),
+    ) as Record<SpectrumVariant, React.CSSProperties>),
   };
   return <button onClick={onClick} title={title} disabled={disabled} style={{ ...base, ...variantStyle[variant] }}>{children}</button>;
 }
