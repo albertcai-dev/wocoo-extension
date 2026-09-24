@@ -24,10 +24,16 @@ const OUTPUT_CONTRACT = `Reply with JSON of exactly this shape:
   "work_type": "<one of the allowed work types>",
   "confidence": "high" | "medium" | "low",
   "rationale": "<two sentences at most>",
-  "steps": ["<ordered action>", "..."],
+  "steps": ["<one short imperative line>", "..."],
   "similar_tickets": [{ "ticket_id": "WOCOO-123", "what_happened": "<one line>", "source": "logged" | "comments" | "intake-only" }],
   "gotchas": ["<one line>", "..."]
-}`;
+}
+
+Write at most 5 steps, one line each and under 15 words. Use the imperative: "Check
+the August 25 timestamp in Atlas", not "You will need to check...". Do not restate the
+ticket, explain why a step matters, or describe what you already said in the rationale.
+Keep amounts, dates, ticket keys and tool names — brevity comes from dropping narration,
+never from dropping specifics. Merge steps that happen in the same tool in one sitting.`;
 
 function renderRow(r: RecentLogRow): string {
   const moved = r.movedToBoard ? ` -> ${r.movedToBoard}` : '';

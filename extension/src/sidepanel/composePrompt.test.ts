@@ -258,3 +258,31 @@ describe('buildTriagePrompt with comment-sourced precedent', () => {
     expect(user.content).toContain('outcome: Reversed the interest as a courtesy.');
   });
 });
+
+describe('step length constraints', () => {
+  const input = {
+    ticketId: 'WOCOO-9',
+    workType: 'Credit Card: Other',
+    summary: 's',
+    description: 'd',
+    allowedWorkTypes: ['Credit Card: Other'],
+    recentRows: [],
+    playbookChunks: [],
+    precedent: [],
+  };
+
+  it('caps the number of steps', () => {
+    const [, user] = buildTriagePrompt(input);
+    expect(user.content).toMatch(/at most 5 steps/i);
+  });
+
+  it('asks for one short imperative line per step', () => {
+    const [, user] = buildTriagePrompt(input);
+    expect(user.content).toMatch(/one line each|under 15 words/i);
+  });
+
+  it('still demands concrete values survive the shortening', () => {
+    const [, user] = buildTriagePrompt(input);
+    expect(user.content).toMatch(/keep amounts, dates, ticket keys and tool names/i);
+  });
+});
