@@ -10,7 +10,7 @@ export const WALLET_TRIAGE_DASHBOARD_URL =
 // Internal reference doc that agents consult alongside the Preset dashboard
 // when triaging wallet-provisioning issues.
 export const WALLET_TRIAGE_DOC_URL =
-  'https://docs.google.com/document/d/18G1-lYpfxS-FHDVTYwKyypmnXF_0evFO2pFTJRRIbXU/edit?tab=t.0#heading=h.oqcm6k38vnmt';
+  'https://docs.google.com/document/d/1fy-FYy6oCEL34c_VzEVdb1Pa12jtqnbv9q5YncnZJEg/edit?tab=t.0';
 
 // ===== Decision tree outcomes (Step 2 of the workflow) =====
 
