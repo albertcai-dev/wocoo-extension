@@ -585,13 +585,22 @@ function TicketViewInner({ ticket, onTicketUpdate, onStartTriage, onStartReverse
         </>
       ) : null}
 
-      {/* MESSAGING CARDS — copy-paste i2c template (Credit Card) or send Koho email
-          (Prepaid Card or Cash — WS Cash is on Koho's platform too). */}
+      {/* MESSAGING CARDS — copy-paste i2c template (Credit Card), or on Prepaid Card /
+          Cash both the Koho email and the i2c template, Koho first. WS Cash is on Koho's
+          platform too, but those clients may hold a credit card, so i2c stays reachable.
+          `!isCc` on showKoho keeps the old precedence: the Prepaid/Cash test is a bare
+          includes('cash'), which a work type like "Credit Card: Cash Advance" matches. */}
       {/eligibility\s*confirmation/i.test(ticket.workType || '') ? null : (() => {
         const wt = (ticket.workType || '').toLowerCase();
-        if (wt.includes('credit card')) return <I2cCard ticket={ticket} />;
-        if (wt.includes('prepaid card') || wt.includes('cash')) return <KohoCard ticket={ticket} />;
-        return null;
+        const isCc = wt.includes('credit card');
+        const showKoho = !isCc && (wt.includes('prepaid card') || wt.includes('cash'));
+        const showI2c = isCc || showKoho;
+        return (
+          <>
+            {showKoho ? <KohoCard ticket={ticket} /> : null}
+            {showI2c ? <I2cCard ticket={ticket} /> : null}
+          </>
+        );
       })()}
 
       {/* TRANSCRIPT PARSER */}
