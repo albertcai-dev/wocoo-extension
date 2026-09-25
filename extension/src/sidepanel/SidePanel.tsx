@@ -632,6 +632,14 @@ function ExternalToolsRow({ ticket }: { ticket: WocooTicket }) {
   // button so the agent can look up the account's interest charges.
   const isInterestIssue = workType.includes('interest');
 
+  // Koho and i2c are no longer mutually exclusive: Prepaid/Cash tickets get both, since
+  // the client may hold a credit card too. The credit-card guards on showKoho preserve
+  // the old ternary's precedence — `isPrepaidOrCash` is a bare `includes('cash')`, so a
+  // work type like "Credit Card: Cash Advance" matches both predicates and must not
+  // start showing Koho.
+  const showKoho = isPrepaidOrCash && !isCreditCard && !isInterestIssue;
+  const showI2c = isCreditCard || isInterestIssue || showKoho;
+
   const openAtlas = () => {
     if (!ticket.identityId) return;
     window.open(ATLAS_URL(ticket.identityId, ticket.id), '_blank', 'noopener,noreferrer');
@@ -713,10 +721,11 @@ function ExternalToolsRow({ ticket }: { ticket: WocooTicket }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--mint-sp-2)' }}>
       <div style={{ display: 'flex', gap: 'var(--mint-sp-2)' }}>
         <ActionButton variant="positive" onClick={openAtlas} disabled={!ticket.identityId}>↗ Atlas</ActionButton>
-        {isCreditCard || isInterestIssue ? (
-          <ActionButton variant="warning" onClick={openI2c} disabled={!ticket.clientEmail}>↗ i2c</ActionButton>
-        ) : isPrepaidOrCash ? (
+        {showKoho ? (
           <ActionButton variant="warning" onClick={openKoho} disabled={!ticket.clientEmail}>↗ Koho</ActionButton>
+        ) : null}
+        {showI2c ? (
+          <ActionButton variant="warning" onClick={openI2c} disabled={!ticket.clientEmail}>↗ i2c</ActionButton>
         ) : null}
       </div>
       <div style={{ display: 'flex' }}>
