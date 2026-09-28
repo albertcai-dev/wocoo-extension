@@ -21,7 +21,6 @@ import { WalletTriageWorkflow } from './WalletTriageWorkflow';
 import { WalletTriageCard } from './WalletTriageCard';
 import { OverpaymentTriageCard } from './OverpaymentTriageCard';
 import { ReverseFeeCard } from './ReverseFeeCard';
-import { VisaCompanionCard } from './VisaCompanionCard';
 import type { MoveDestination } from '../data/moveConfig';
 import { CredRouteCard } from './CredRouteCard';
 import { AITriageCard } from './AITriageCard';
@@ -524,9 +523,6 @@ function TicketViewInner({ ticket, onTicketUpdate, onStartTriage, onStartReverse
 
       {/* WALLET PROVISIONING DETECTION — shows when ticket looks like a wallet-add issue */}
       <WalletTriageCard ticket={ticket} onStart={onStartWalletTriage} />
-
-      {/* VISA COMPANION — one-click canned reply + Move to Done */}
-      <VisaCompanionCard ticket={ticket} onTicketUpdate={onTicketUpdate} />
 
       {/* QUICK ACTIONS */}
       <QuickActions

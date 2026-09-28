@@ -5,11 +5,6 @@
 //   2a. RPIN n/a → open an i2c JSM ticket with the "please add an RPIN" template
 //       pre-filled. Reuses the existing i2cservicedesk.ts content script + storage key.
 //   2b. RPIN present → placeholder for future logic.
-//
-// Not to be confused with `VisaCompanionCard` — that's a canned-reply card for the
-// separate case where a client got an ERROR trying to register for Visa Airport
-// Companion. This workflow is the diagnostic path for the "can't enroll → check RPIN"
-// scenario.
 
 import { useEffect, useState } from 'react';
 import type { WocooTicket } from '../data/mockTicket';
