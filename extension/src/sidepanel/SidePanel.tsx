@@ -19,6 +19,7 @@ import { MoveModal } from './MoveModal';
 import { CreateReimbModal } from './CreateReimbModal';
 import { WalletTriageWorkflow } from './WalletTriageWorkflow';
 import { WalletTriageCard } from './WalletTriageCard';
+import { VisaCompanionCard } from './VisaCompanionCard';
 import { OverpaymentTriageCard } from './OverpaymentTriageCard';
 import { ReverseFeeCard } from './ReverseFeeCard';
 import type { MoveDestination } from '../data/moveConfig';
@@ -523,6 +524,9 @@ function TicketViewInner({ ticket, onTicketUpdate, onStartTriage, onStartReverse
 
       {/* WALLET PROVISIONING DETECTION — shows when ticket looks like a wallet-add issue */}
       <WalletTriageCard ticket={ticket} onStart={onStartWalletTriage} />
+
+      {/* VISA COMPANION DETECTION — Airport Companion / DragonPass access tickets */}
+      <VisaCompanionCard ticket={ticket} onStart={onStartVisaCompanionRpin} />
 
       {/* QUICK ACTIONS */}
       <QuickActions
