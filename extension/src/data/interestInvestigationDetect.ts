@@ -39,7 +39,8 @@ const INVESTIGATE_SIGNALS = [
 // interest mention reads as "please look at this", even without an explicit ask verb.
 const CONTEXT_SIGNALS = [
   'cash advance',
-  'fully paid', 'paid in full', 'paid off', 'statement balance',
+  'fully paid', 'paid in full', 'paid off', 'statement balance', 'full balance',
+  'due date', 'after payment', 'paid on time', 'paid before', 'before the due',
   'did not see', "didn't see", 'do not see', "don't see",
   'no cash advance', 'not expecting', 'was not expecting', "wasn't expecting",
   'shouldn\'t have', 'should not have', 'unexpected',
