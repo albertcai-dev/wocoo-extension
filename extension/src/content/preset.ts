@@ -54,16 +54,50 @@ function isVisible(el: HTMLElement): boolean {
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
+// ----- locate the identity filter control -----
+
+const IDENTITY_FILTER_LABEL = /^(Identity\s+Canonical\s+ID|identity_canonical_id|identity_id)\s*\*?$/i;
+
+/** The Ant Select belonging to the identity filter. Dashboards can carry other filters
+ *  (Digital Wallet Investigation has `card_type` right below `identity_id`), so every
+ *  lookup below is scoped to this control rather than the whole page. Matches the label
+ *  text exactly — a prefix match also hits wrapper divs whose text merely *starts* with
+ *  the label, and those contain every filter on the bar. */
+function findIdentitySelect(): HTMLElement | null {
+  const labels = Array.from(document.querySelectorAll<HTMLElement>('label, div, span'))
+    .filter((l) => IDENTITY_FILTER_LABEL.test((l.textContent || '').trim()));
+  for (const l of labels) {
+    // The nearest ancestor holding a select is this filter's own item container.
+    for (let el: HTMLElement | null = l.parentElement; el && el !== document.body; el = el.parentElement) {
+      const select = el.querySelector<HTMLElement>('.ant-select');
+      if (select) return select;
+    }
+  }
+  return null;
+}
+
+/** Root to scope chip/input lookups to. Falls back to the whole page only when the
+ *  dashboard has a single select, so an unlabelled one-filter dashboard still works but
+ *  a multi-filter one never types into the wrong box. */
+function filterScope(): ParentNode | null {
+  const select = findIdentitySelect();
+  if (select) return select;
+  const selects = Array.from(document.querySelectorAll<HTMLElement>('.ant-select')).filter(isVisible);
+  return selects.length === 1 ? selects[0] : null;
+}
+
 // ----- step 1: clear existing identity chip -----
 
 function findIdentityChips(): HTMLElement[] {
+  const scope = filterScope();
+  if (!scope) return [];
   // Regular chips — visible identities, textContent starts with `identity-` / `identity_`.
-  const regular = Array.from(document.querySelectorAll<HTMLElement>('.ant-select-selection-item'))
+  const regular = Array.from(scope.querySelectorAll<HTMLElement>('.ant-select-selection-item'))
     .filter((c) => /^identity[-_]/i.test((c.textContent || '').trim()));
   // Overflow chips — Ant renders `+ N ...` as `.ant-select-selection-overflow-item-rest`
   // when the chip strip is too narrow to show every selected value. Its text doesn't
   // contain the identity string but it still represents identities we need to clear.
-  const overflow = Array.from(document.querySelectorAll<HTMLElement>('.ant-select-selection-overflow-item-rest'))
+  const overflow = Array.from(scope.querySelectorAll<HTMLElement>('.ant-select-selection-overflow-item-rest'))
     .filter(isVisible);
   return [...regular, ...overflow];
 }
@@ -123,11 +157,7 @@ async function clearIdentityChips(): Promise<boolean> {
     // Ant Select sometimes requires the listener-bound combobox to be focused before
     // chip-remove clicks land.
     const input = findFilterInput();
-    if (input) {
-      input.click();
-      input.focus();
-      await sleep(200);
-    }
+    if (input) await openFilterSelect(input);
 
     // Strategy 1: "Deselect all" — single click that nukes every selected value at once.
     const deselectAll = Array.from(document.querySelectorAll<HTMLElement>('a, button, span, div'))
@@ -177,21 +207,23 @@ async function clearIdentityChips(): Promise<boolean> {
 // ----- step 2: type identity into filter input -----
 
 function findFilterInput(): HTMLInputElement | null {
-  // The Identity Canonical ID filter panel has an Ant Select with a search input. We
-  // look for an input whose nearest preceding "Identity Canonical ID" label exists.
-  const labels = Array.from(document.querySelectorAll<HTMLElement>('label, div, span'));
-  for (const l of labels) {
-    const t = (l.textContent || '').trim();
-    if (!/^(Identity\s+Canonical\s+ID|identity_canonical_id|identity_id)\b/i.test(t)) continue;
-    // Walk forward through siblings + ancestors looking for the search input
-    const ancestor = l.closest('[class*="FilterControl"], [class*="filter"], form, div');
-    const input = (ancestor || l.parentElement)?.querySelector<HTMLInputElement>('input.ant-select-selection-search-input, input[type="search"], input[type="text"]');
-    if (input && isVisible(input)) return input;
-  }
-  // Fallback: any visible Ant Select search input on the page
-  const any = Array.from(document.querySelectorAll<HTMLInputElement>('input.ant-select-selection-search-input'))
-    .find((i) => isVisible(i));
-  return any || null;
+  // No visibility check: once a multi-select holds a chip, Ant shrinks its search input
+  // to zero width until focused. Requiring a visible input is what used to skip the
+  // identity filter and fall through to the next (empty, full-width) select on the page.
+  return filterScope()?.querySelector<HTMLInputElement>(
+    'input.ant-select-selection-search-input, input[type="search"], input[type="text"]',
+  ) ?? null;
+}
+
+/** Open the select's dropdown and focus its search input. Ant opens on mousedown of the
+ *  selector box; clicking the (possibly zero-width) input alone doesn't always do it. */
+async function openFilterSelect(input: HTMLInputElement) {
+  const selector = input.closest<HTMLElement>('.ant-select-selector') ?? input;
+  selector.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 }));
+  input.click();
+  await sleep(150);
+  input.focus();
+  await sleep(50);
 }
 
 function fireEnter(target: EventTarget) {
@@ -220,11 +252,7 @@ async function typeIdentity(identity: string): Promise<boolean> {
 
   log('using filter input:', input.tagName, 'class=', input.className, 'id=', input.id || '(none)');
 
-  // Open the dropdown / focus the field
-  input.click();
-  await sleep(150);
-  input.focus();
-  await sleep(50);
+  await openFilterSelect(input);
 
   // Clear any leftover search text via setValue only — don't fire deleteContentBackward,
   // since Ant Select interprets backspace-on-empty as "remove the last chip" and could
@@ -347,9 +375,9 @@ async function tick() {
     case 'init': {
       const chips = findIdentityChips();
       if (chips.length === 0) {
-        // No chip — wait for the dashboard to render the filter UI before advancing.
-        const haveFilterUi = !!document.querySelector('.ant-select-selection-item, input.ant-select-selection-search-input, input[type="search"]');
-        if (haveFilterUi) {
+        // No chip — wait for the identity filter itself to render before advancing. Any
+        // select on the page isn't enough: another filter can paint first.
+        if (filterScope()) {
           await sleep(250);
           chainStep = 'cleared';
           log('step → cleared (no chip to remove)');
@@ -382,8 +410,15 @@ async function tick() {
       // skip typing entirely. Retyping the same identity can deselect an existing chip
       // because the dropdown highlights the matching option and Enter toggles selection.
       if (findIdentityChips().length > 0) {
-        log('chip already present — skipping typeIdentity');
-        chainStep = 'typed';
+        if (hasMatchingChip(id)) {
+          log('chip already present — skipping typeIdentity');
+          chainStep = 'typed';
+        } else {
+          // A different identity came back after clearing (e.g. the dashboard's saved
+          // default re-hydrating). Clear again rather than applying the wrong client.
+          log('stale identity chip reappeared — back to init');
+          chainStep = 'init';
+        }
         break;
       }
       const typed = await typeIdentity(id);
