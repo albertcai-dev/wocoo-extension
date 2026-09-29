@@ -7,14 +7,26 @@
 //   • Future steps are soft-gray collapsed stubs with "Not started"
 //   • Progress is shown as 8 discrete dots in the sticky header
 //
+// >$10k fraud gate (ported from wocoo-triage-v3 TriageWorkflow, same rule):
+//   • amount > $10,000 → Step 3 creates a FRAUD ticket (linked "relates to" the WOCOO
+//     ticket) instead of a REIMB, skips the admin debit, and Step 5 posts the fraud
+//     comment + moves the ticket to Back Office rather than Done
+//   • the gate is satisfied — normal REIMB path, with an amber banner — when a FRAUD
+//     ticket is already linked (any status; a prior pass raised it), when the link check
+//     failed and the operator confirms one exists, or when the operator bypasses fraud
+//   • a FRAUD ticket created in THIS session never satisfies the gate: that pass must
+//     finish the escalation, not fall through to a reimbursement
+//
 // Scope cuts (v1, per session):
 //   • No "Decline & comment" path when amount < $1,000 (warn only)
 //   • No write to Moves/Errors sheet (v3 has this; extension parity-later)
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { WocooTicket } from '../data/mockTicket';
 import {
   createReimbTicket,
+  createFraudTicket,
+  getLinkedIssueKeys,
   postComment,
   transitionTicket,
   REIMB_APPROVERS,
@@ -25,6 +37,15 @@ import { fetchAtlasAccountIdHeadless } from '../data/atlasAccountLookup';
 import { stagePresetIdentity as stageIdentityForPreset } from '../data/presetIdentity';
 
 const TRANSITION_TO_DONE_ID = '251';
+
+// Overpayments over this amount are escalated to Fraud Operation instead of reimbursed.
+const FRAUD_AMOUNT_THRESHOLD = 10000;
+const FRAUD_PROJECT_KEY = 'FRAUD';
+const FRAUD_ISSUE_TYPE_ID = '10002'; // Task
+// customfield_10414 "Fraud Detection Method" option label; resolved to an ID via createmeta.
+const FRAUD_DETECTION_METHOD_LABEL = 'Credit Card';
+const FRAUD_LINK_PHRASE = 'relates to'; // FRAUD {phrase} WOCOO
+const FRAUD_BACK_OFFICE_TRANSITION_ID = '121'; // WOCOO "Request reviewed" -> Back Office
 
 // ============================================================
 // types + constants
@@ -49,6 +70,20 @@ const STEP_SUBTITLES: Record<StepNum, string> = {
   5: 'Review, then post and close in one click',
   6: '',
 };
+
+const FRAUD_STEP_TITLES: Record<StepNum, string> = {
+  ...STEP_TITLES,
+  3: 'Create FRAUD ticket',
+  5: 'Post comment & Move to Back Office',
+};
+
+const FRAUD_STEP_SUBTITLES: Record<StepNum, string> = {
+  ...STEP_SUBTITLES,
+  3: 'Over $10,000 — escalate to Fraud Operation',
+  5: 'Review, then post and move in one click',
+};
+
+type LinkCheck = 'idle' | 'checking' | 'done' | 'failed';
 
 interface WorkflowState {
   step: StepNum;
@@ -80,6 +115,17 @@ interface WorkflowState {
   commentText: string;
   commentPosted: boolean;
   transitionedToDone: boolean;
+  // >$10k fraud gate
+  linkCheck: LinkCheck;
+  linkCheckError: string | null;
+  linkedFraudKeys: string[];
+  fraudBypass: 'exists' | 'skipped' | null;
+  confirmBypass: boolean;
+  detectionMethod: string;
+  fraudKey: string | null;
+  fraudUrl: string | null;
+  manualFraudOpen: boolean;
+  manualFraudKey: string;
   // async / errors
   busy: boolean;
   error: string | null;
@@ -119,6 +165,16 @@ function initialState(ticket: WocooTicket): WorkflowState {
     commentText: '',
     commentPosted: false,
     transitionedToDone: false,
+    linkCheck: 'idle',
+    linkCheckError: null,
+    linkedFraudKeys: [],
+    fraudBypass: null,
+    confirmBypass: false,
+    detectionMethod: FRAUD_DETECTION_METHOD_LABEL,
+    fraudKey: null,
+    fraudUrl: null,
+    manualFraudOpen: false,
+    manualFraudKey: '',
     busy: false,
     error: null,
   };
@@ -140,12 +196,42 @@ export function OverpaymentTriage({ ticket, onClose, onTicketUpdate }: { ticket:
   const accountIdValid = /^[CHWN][0-9A-Z]{7,}$/i.test(effectiveAccountId);
   const meetsMinimum = !!state.amount && state.amount >= 1000;
   const fmtAmt = state.amount != null ? `$${state.amount.toFixed(2)}` : '—';
+  const overFraudThreshold = !!state.amount && state.amount > FRAUD_AMOUNT_THRESHOLD;
+  const priorFraudKey = state.linkedFraudKeys[0] || null;
+  const fraudAlreadyExists = state.linkedFraudKeys.length > 0 || !!state.fraudBypass;
+  // Deliberately ignores state.fraudKey — see the header note.
+  const isFraudPath = overFraudThreshold && !fraudAlreadyExists;
+  const fraudSummary = `Suspected fraud — credit card overpayment of ${fmtAmt} (${ticket.id})`;
 
   // Re-init if ticket changes (rare)
-  useEffect(() => { setState(initialState(ticket)); }, [ticket.id]);
+  const ticketIdRef = useRef(ticket.id);
+  useEffect(() => { ticketIdRef.current = ticket.id; setState(initialState(ticket)); }, [ticket.id]);
 
   const setS = (patch: Partial<WorkflowState>) => setState((s) => ({ ...s, ...patch }));
   const advanceTo = (target: StepNum) => setS({ step: target, error: null });
+
+  // Is a FRAUD ticket already linked to this WOCOO ticket? Only asked once the amount
+  // is over the threshold (including after a manual override pushes it over), since
+  // that's the only case where the answer changes the route.
+  async function checkFraudLinks() {
+    const forTicket = ticket.id;
+    setS({ linkCheck: 'checking', linkCheckError: null });
+    try {
+      const keys = await getLinkedIssueKeys(forTicket, FRAUD_PROJECT_KEY);
+      if (ticketIdRef.current !== forTicket) return;
+      setS({ linkedFraudKeys: keys, linkCheck: 'done' });
+    } catch (e) {
+      if (ticketIdRef.current !== forTicket) return;
+      // "Checked, nothing linked" and "could not check" must stay distinguishable:
+      // only the first may route an operator into the escalation path unprompted.
+      setS({ linkedFraudKeys: [], linkCheck: 'failed', linkCheckError: e instanceof Error ? e.message : String(e) });
+    }
+  }
+
+  useEffect(() => {
+    if (state.linkCheck !== 'idle' || !overFraudThreshold) return;
+    void checkFraudLinks();
+  }, [state.linkCheck, overFraudThreshold, ticket.id]);
 
   // ---- step actions ----
 
@@ -217,24 +303,80 @@ export function OverpaymentTriage({ ticket, onClose, onTicketUpdate }: { ticket:
     }
   }
 
+  function finishFraud(key: string, url: string, linkError?: string) {
+    setS({
+      busy: false,
+      fraudKey: key,
+      fraudUrl: url,
+      commentText: buildFraudCommentText(ticket, key),
+      manualFraudOpen: false,
+      manualFraudKey: '',
+      step: 5,
+      error: linkError ? `${key} created, but the link to ${ticket.id} failed: ${linkError} — link it by hand in Jira.` : null,
+    });
+  }
+
+  async function doCreateFraud() {
+    if (!state.detectionMethod.trim()) { setS({ error: 'Fraud Detection Method is required — set the option label before creating.' }); return; }
+    if (!ticket.identityId) { setS({ error: 'Identity ID is required for a FRAUD ticket.' }); return; }
+    if (!state.amount || state.amount <= 0) { setS({ error: 'Amount is not set.' }); return; }
+    setS({ busy: true, error: null });
+    const description =
+      `Hi team, have a large overpayment transfer request I would like some investigation into to see if there's any suspicious activity, client made a payment of ${fmtAmt}.\n\n` +
+      `Identity: ${ticket.identityId}\n` +
+      `Amount: ${fmtAmt}\n` +
+      `Cash account: ${effectiveAccountId || 'not provided'}\n` +
+      `User tier: ${effectiveTier || 'Premium'}\n` +
+      `Source ticket: https://wealthsimple.atlassian.net/browse/${ticket.id}`;
+    try {
+      const result = await createFraudTicket({
+        wocooTicketId: ticket.id,
+        identityId: ticket.identityId,
+        summary: fraudSummary,
+        description,
+        detectionMethod: state.detectionMethod.trim(),
+        issueTypeId: FRAUD_ISSUE_TYPE_ID,
+        linkPhrase: FRAUD_LINK_PHRASE,
+      });
+      finishFraud(result.key, result.url, result.linkError);
+    } catch (e: any) {
+      setS({
+        busy: false,
+        manualFraudOpen: true,
+        error: 'FRAUD create failed: ' + (e?.message || String(e)) + ' — if it was created anyway, paste the key below to continue.',
+      });
+    }
+  }
+
+  function applyManualFraudKey() {
+    const k = state.manualFraudKey.trim().toUpperCase();
+    if (!/^FRAUD-\d+$/.test(k)) { setS({ error: 'Enter a valid FRAUD key like FRAUD-12345' }); return; }
+    finishFraud(k, `https://wealthsimple.atlassian.net/browse/${k}`);
+  }
+
   async function doPostComment() {
-    if (!state.reimbKey || !state.reimbUrl || !state.amount) return;
+    const linkKey = isFraudPath ? state.fraudKey : state.reimbKey;
+    const linkUrl = isFraudPath ? state.fraudUrl : state.reimbUrl;
+    if (!linkKey || !linkUrl || !state.amount) return;
+    const transitionId = isFraudPath ? FRAUD_BACK_OFFICE_TRANSITION_ID : TRANSITION_TO_DONE_ID;
+    const destination = isFraudPath ? 'Back Office' : 'Done';
     setS({ busy: true, error: null });
     try {
-      const segments = buildCommentSegments(ticket, state.reimbKey, state.reimbUrl, state.amount, state.commentText);
+      const segments = buildCommentSegments(ticket, linkKey, linkUrl, state.amount, state.commentText);
       await postComment(ticket.id, segments);
       // Chain the transition like the decline path. Comment is already posted at
       // this point — if the transition fails, surface a soft warning rather than
-      // rolling back, so the agent can finish the move-to-Done manually.
+      // rolling back, so the agent can finish the move manually.
       try {
-        await transitionTicket(ticket.id, TRANSITION_TO_DONE_ID);
-        onTicketUpdate({ ...ticket, status: 'Done' });
+        // Back Office isn't terminal, so keep it out of the ticket log.
+        await transitionTicket(ticket.id, transitionId, { skipLog: isFraudPath });
+        onTicketUpdate({ ...ticket, status: destination });
         setS({ busy: false, commentPosted: true, transitionedToDone: true, step: 6 });
       } catch (transitionErr: any) {
         setS({
           busy: false,
           commentPosted: true,
-          error: 'Comment posted, but Move-to-Done failed: ' + (transitionErr?.message || String(transitionErr)),
+          error: `Comment posted, but Move-to-${destination} failed: ` + (transitionErr?.message || String(transitionErr)),
         });
       }
     } catch (e: any) {
@@ -268,18 +410,23 @@ export function OverpaymentTriage({ ticket, onClose, onTicketUpdate }: { ticket:
   // render
   // ============================================================
 
+  const titles = isFraudPath ? FRAUD_STEP_TITLES : STEP_TITLES;
+  const subtitles = isFraudPath ? FRAUD_STEP_SUBTITLES : STEP_SUBTITLES;
+
   function renderStep(n: StepNum) {
     if (n === 6) return null;
+    // No reimbursement on the fraud path, so no admin debit either.
+    if (n === 4 && isFraudPath) return null;
     const isCompleted = n < state.step;
     const isActive = n === state.step;
 
     if (isCompleted) {
-      return <ExpandedCard key={n} n={n} completed>{renderStepBody(n)}</ExpandedCard>;
+      return <ExpandedCard key={n} n={n} title={titles[n]} subtitle={subtitles[n]} completed>{renderStepBody(n)}</ExpandedCard>;
     }
     if (isActive) {
-      return <ExpandedCard key={n} n={n}>{renderStepBody(n)}</ExpandedCard>;
+      return <ExpandedCard key={n} n={n} title={titles[n]} subtitle={subtitles[n]}>{renderStepBody(n)}</ExpandedCard>;
     }
-    return <FutureStub key={n} n={n} />;
+    return <FutureStub key={n} n={n} title={titles[n]} />;
   }
 
   function renderStepBody(n: StepNum) {
@@ -336,7 +483,43 @@ export function OverpaymentTriage({ ticket, onClose, onTicketUpdate }: { ticket:
           onVerify={() => advanceTo(3)}
         />
       );
-      case 3: return (
+      case 3: return isFraudPath ? (
+        <FraudStepBody
+          ticket={ticket}
+          fmtAmt={fmtAmt}
+          effectiveTier={effectiveTier}
+          fraudSummary={fraudSummary}
+          detectionMethod={state.detectionMethod}
+          setDetectionMethod={(v) => setS({ detectionMethod: v })}
+          linkCheck={state.linkCheck}
+          linkCheckError={state.linkCheckError}
+          onRetryCheck={() => { void checkFraudLinks(); }}
+          onConfirmExists={() => setS({ fraudBypass: 'exists', error: null })}
+          confirmBypass={state.confirmBypass}
+          setConfirmBypass={(v) => setS({ confirmBypass: v })}
+          onBypass={() => setS({ confirmBypass: false, fraudBypass: 'skipped', error: null })}
+          manualFraudOpen={state.manualFraudOpen}
+          manualFraudKey={state.manualFraudKey}
+          setManualFraudKey={(v) => setS({ manualFraudKey: v })}
+          applyManualFraudKey={applyManualFraudKey}
+          busy={state.busy}
+          fraudKey={state.fraudKey}
+          fraudUrl={state.fraudUrl}
+          showActionButton={onCurrentStep}
+          onCreate={doCreateFraud}
+        />
+      ) : (
+        <>
+        {overFraudThreshold && fraudAlreadyExists ? (
+          <FraudSatisfiedBanner
+            fmtAmt={fmtAmt}
+            bypass={state.fraudBypass}
+            linkedFraudKeys={state.linkedFraudKeys}
+            priorFraudKey={priorFraudKey}
+            // Once the REIMB exists, flipping back into the escalation would strand it.
+            onUndo={state.fraudBypass && !state.reimbKey ? () => setS({ fraudBypass: null, confirmBypass: false }) : null}
+          />
+        ) : null}
         <Step4Body
           ticket={ticket}
           fmtAmt={fmtAmt}
@@ -370,6 +553,7 @@ export function OverpaymentTriage({ ticket, onClose, onTicketUpdate }: { ticket:
           showActionButton={onCurrentStep}
           onCreate={doCreateReimb}
         />
+        </>
       );
       case 4: return (
         <Step5Body
@@ -392,7 +576,8 @@ export function OverpaymentTriage({ ticket, onClose, onTicketUpdate }: { ticket:
           busy={state.busy}
           alreadyPosted={state.commentPosted}
           showActionButton={onCurrentStep}
-          reimbKey={state.reimbKey}
+          reimbKey={isFraudPath ? state.fraudKey : state.reimbKey}
+          destination={isFraudPath ? 'Back Office' : 'Done'}
           onPost={doPostComment}
         />
       );
@@ -401,13 +586,20 @@ export function OverpaymentTriage({ ticket, onClose, onTicketUpdate }: { ticket:
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', background: 'var(--mint-bg-page)' }}>
-      <Header step={state.step} ticketId={ticket.id} onClose={onClose} />
+      <Header step={state.step} ticketId={ticket.id} onClose={onClose} skipped={isFraudPath ? [4] : []} />
       <div style={{ padding: 'var(--mint-sp-3)', display: 'flex', flexDirection: 'column', gap: 'var(--mint-sp-2)' }}>
         {state.error ? (
           <div role="alert" style={errorBanner}>⚠ {state.error}</div>
         ) : null}
         {([1, 2, 3, 4, 5] as StepNum[]).map(renderStep)}
-        {state.step === 6 ? (
+        {state.step === 6 && isFraudPath ? (
+          <FraudSuccessPanel
+            fraudKey={state.fraudKey}
+            fraudUrl={state.fraudUrl}
+            ticketId={ticket.id}
+            onCloseToTicket={onClose}
+          />
+        ) : state.step === 6 ? (
           <SuccessPanel
             reimbKey={state.reimbKey}
             reimbUrl={state.reimbUrl}
@@ -426,7 +618,7 @@ export function OverpaymentTriage({ ticket, onClose, onTicketUpdate }: { ticket:
 // shared visual primitives
 // ============================================================
 
-function Header({ step, ticketId, onClose }: { step: StepNum; ticketId: string; onClose: () => void }) {
+function Header({ step, ticketId, onClose, skipped }: { step: StepNum; ticketId: string; onClose: () => void; skipped: StepNum[] }) {
   return (
     <header style={{ position: 'sticky', top: 0, zIndex: 50, background: 'var(--mint-bg-card)', borderBottom: 'var(--mint-card-stroke)', padding: 'var(--mint-sp-3) var(--mint-sp-3) var(--mint-sp-2)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
@@ -436,17 +628,20 @@ function Header({ step, ticketId, onClose }: { step: StepNum; ticketId: string; 
       </div>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
         <h2 style={{ margin: 0, fontSize: 'var(--mint-text-h-md)', fontWeight: 700, color: 'var(--mint-fg-strong)' }}>Overpayment triage</h2>
-        <ProgressDots step={step} />
+        <ProgressDots step={step} skipped={skipped} />
       </div>
     </header>
   );
 }
 
-function ProgressDots({ step }: { step: StepNum }) {
-  // green ✓ for done, dark filled for current, outlined gray for future
+function ProgressDots({ step, skipped }: { step: StepNum; skipped: StepNum[] }) {
+  // green ✓ for done, dark filled for current, outlined gray for future, dash for skipped
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-      {[1, 2, 3, 4, 5, 6].map((n) => {
+      {([1, 2, 3, 4, 5, 6] as StepNum[]).map((n) => {
+        if (skipped.includes(n)) {
+          return <span key={n} title="Not needed on this path" style={{ width: 10, height: 2, borderRadius: 1, background: 'var(--mint-outline-strong)' }} />;
+        }
         const done = n < step;
         const active = n === step;
         if (done) {
@@ -463,7 +658,7 @@ function ProgressDots({ step }: { step: StepNum }) {
   );
 }
 
-function FutureStub({ n }: { n: StepNum }) {
+function FutureStub({ n, title }: { n: StepNum; title: string }) {
   return (
     <div style={{
       display: 'flex', alignItems: 'center', gap: 'var(--mint-sp-2)',
@@ -475,14 +670,14 @@ function FutureStub({ n }: { n: StepNum }) {
     }}>
       <span style={stepNumberCircleStyle(false)}>{n}</span>
       <div style={{ display: 'flex', flexDirection: 'column' }}>
-        <span style={{ fontSize: 'var(--mint-text-body)', fontWeight: 600, color: 'var(--mint-fg-strong)' }}>{STEP_TITLES[n]}</span>
+        <span style={{ fontSize: 'var(--mint-text-body)', fontWeight: 600, color: 'var(--mint-fg-strong)' }}>{title}</span>
         <span style={{ fontSize: 'var(--mint-text-micro)', color: 'var(--mint-fg-soft)' }}>Not started</span>
       </div>
     </div>
   );
 }
 
-function ExpandedCard({ n, children, completed }: { n: StepNum; children: React.ReactNode; completed?: boolean }) {
+function ExpandedCard({ n, title, subtitle, children, completed }: { n: StepNum; title: string; subtitle: string; children: React.ReactNode; completed?: boolean }) {
   return (
     <section style={{
       background: completed ? 'var(--mint-positive-bg-soft)' : 'var(--mint-bg-card)',
@@ -498,8 +693,8 @@ function ExpandedCard({ n, children, completed }: { n: StepNum; children: React.
           <span style={stepNumberCircleStyle(true)}>{n}</span>
         )}
         <div style={{ display: 'flex', flexDirection: 'column' }}>
-          <span style={{ fontSize: 'var(--mint-text-body)', fontWeight: 700, color: completed ? 'var(--mint-positive-fg-strong)' : 'var(--mint-fg-strong)' }}>{STEP_TITLES[n]}</span>
-          {!completed ? <span style={{ fontSize: 'var(--mint-text-micro)', color: 'var(--mint-fg-soft)' }}>{STEP_SUBTITLES[n]}</span> : null}
+          <span style={{ fontSize: 'var(--mint-text-body)', fontWeight: 700, color: completed ? 'var(--mint-positive-fg-strong)' : 'var(--mint-fg-strong)' }}>{title}</span>
+          {!completed ? <span style={{ fontSize: 'var(--mint-text-micro)', color: 'var(--mint-fg-soft)' }}>{subtitle}</span> : null}
         </div>
       </div>
       {children}
@@ -1116,6 +1311,154 @@ function Step4Body(props: {
 }
 
 // ============================================================
+// Step 3 (fraud path) — Create FRAUD ticket
+// ============================================================
+
+function FraudStepBody(props: {
+  ticket: WocooTicket;
+  fmtAmt: string;
+  effectiveTier: WocooTicket['tier'];
+  fraudSummary: string;
+  detectionMethod: string;
+  setDetectionMethod: (v: string) => void;
+  linkCheck: LinkCheck;
+  linkCheckError: string | null;
+  onRetryCheck: () => void;
+  onConfirmExists: () => void;
+  confirmBypass: boolean;
+  setConfirmBypass: (v: boolean) => void;
+  onBypass: () => void;
+  manualFraudOpen: boolean;
+  manualFraudKey: string;
+  setManualFraudKey: (v: string) => void;
+  applyManualFraudKey: () => void;
+  busy: boolean;
+  fraudKey: string | null;
+  fraudUrl: string | null;
+  showActionButton: boolean;
+  onCreate: () => void;
+}) {
+  const canCreate = !props.busy && !!props.detectionMethod.trim() && !!props.ticket.identityId;
+  const showActions = props.showActionButton && !props.fraudKey && props.linkCheck !== 'checking';
+  const linkBtn: React.CSSProperties = { background: 'none', border: 'none', padding: 0, color: 'var(--mint-warning-fg-strong)', fontSize: 'var(--mint-text-micro)', fontWeight: 700, textDecoration: 'underline', cursor: 'pointer' };
+  return (
+    <>
+      <div style={{ padding: 'var(--mint-sp-2) var(--mint-sp-3)', background: 'var(--mint-negative-bg-soft)', color: 'var(--mint-negative-fg-strong)', borderRadius: 'var(--mint-radius-button)', fontSize: 'var(--mint-text-micro)', fontWeight: 600, marginBottom: 'var(--mint-sp-3)' }}>
+        Amount is over ${FRAUD_AMOUNT_THRESHOLD.toLocaleString()}.00 — routing to Fraud Operation instead of REIMB. No reimbursement, no admin debit.
+      </div>
+      <div style={{ background: 'var(--mint-bg-subtle)', border: 'var(--mint-card-stroke)', borderRadius: 'var(--mint-radius-card)', padding: 'var(--mint-sp-3)' }}>
+        <div style={{ fontSize: 'var(--mint-text-nano)', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--mint-fg-soft)', fontWeight: 700, marginBottom: 6 }}>Summary</div>
+        <div style={{ fontSize: 'var(--mint-text-meta)', color: 'var(--mint-fg-strong)', lineHeight: 1.5, marginBottom: 'var(--mint-sp-2)' }}>{props.fraudSummary}</div>
+        <Divider />
+        <FieldRowStack>
+          <FieldRow label="Project">{FRAUD_PROJECT_KEY} · Task</FieldRow>
+          <FieldRow label="Identity" mono>{truncate(props.ticket.identityId, 18) || <Missing />}</FieldRow>
+          <FieldRow label="Amount"><span style={{ color: 'var(--mint-negative-fg-strong)', fontWeight: 700 }}>{props.fmtAmt}</span></FieldRow>
+          <FieldRow label="Tier"><TierPill tier={props.effectiveTier || 'Premium'} /></FieldRow>
+          <FieldRow label="Link">{FRAUD_PROJECT_KEY} {FRAUD_LINK_PHRASE} {props.ticket.id}</FieldRow>
+        </FieldRowStack>
+        <div style={{ marginTop: 'var(--mint-sp-2)' }}>
+          <div style={{ fontSize: 'var(--mint-text-nano)', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--mint-fg-soft)', fontWeight: 700, marginBottom: 4 }}>Fraud Detection Method *</div>
+          <input
+            type="text"
+            value={props.detectionMethod}
+            onChange={(e) => props.setDetectionMethod(e.target.value)}
+            disabled={!!props.fraudKey}
+            placeholder="exact option label from Fraud Ops"
+            style={{ ...inlineInput, width: '100%', fontFamily: 'var(--mint-font-family)', borderColor: props.detectionMethod.trim() ? undefined : 'var(--mint-negative-fg-graphic)' }}
+          />
+        </div>
+      </div>
+
+      {props.linkCheck === 'checking' ? (
+        <div style={{ ...reviewNote, marginTop: 'var(--mint-sp-2)' }}>Checking {props.ticket.id} for an existing FRAUD link…</div>
+      ) : null}
+      {props.linkCheck === 'failed' && !props.fraudKey ? (
+        <div style={{ marginTop: 'var(--mint-sp-2)', padding: 'var(--mint-sp-2) var(--mint-sp-3)', background: 'var(--mint-warning-bg-soft)', borderRadius: 'var(--mint-radius-button)', fontSize: 'var(--mint-text-micro)', color: 'var(--mint-warning-fg-strong)' }}>
+          ⚠ Couldn't check whether a FRAUD ticket already exists: {props.linkCheckError}.{' '}
+          <button onClick={props.onRetryCheck} style={linkBtn}>Retry</button>
+          {' · '}
+          <button onClick={props.onConfirmExists} style={{ ...linkBtn, fontWeight: 600 }}>one already exists, go to REIMB</button>
+        </div>
+      ) : null}
+
+      {props.fraudKey ? (
+        <div style={{ marginTop: 'var(--mint-sp-2)', fontSize: 'var(--mint-text-micro)', color: 'var(--mint-positive-fg-strong)' }}>
+          ✓ Created <a href={props.fraudUrl!} target="_blank" rel="noreferrer" style={{ color: 'var(--mint-positive-fg-strong)', fontWeight: 700 }}>{props.fraudKey}</a> · linked {FRAUD_LINK_PHRASE} {props.ticket.id}
+        </div>
+      ) : null}
+
+      {showActions ? (
+        <div style={{ marginTop: 'var(--mint-sp-3)', display: 'flex', flexDirection: 'column', gap: 'var(--mint-sp-2)' }}>
+          <button onClick={props.onCreate} disabled={!canCreate} style={{ ...primaryButton, background: 'var(--mint-negative-fg-graphic)', width: '100%', opacity: canCreate ? 1 : 0.6, cursor: canCreate ? 'pointer' : 'not-allowed' }}>
+            {props.busy ? 'Creating…' : '✓ Create FRAUD ticket'}
+          </button>
+          {!props.confirmBypass ? (
+            <button onClick={() => props.setConfirmBypass(true)} disabled={props.busy} title="No fraud review needed — skip straight to the REIMB path" style={{ ...secondaryButton, width: '100%', color: 'var(--mint-warning-fg-strong)', borderColor: 'var(--mint-warning-fg-graphic)' }}>
+              ⏭ Bypass fraud
+            </button>
+          ) : (
+            <div style={{ padding: 'var(--mint-sp-2) var(--mint-sp-3)', background: 'var(--mint-warning-bg-soft)', borderRadius: 'var(--mint-radius-button)' }}>
+              <div style={{ fontSize: 'var(--mint-text-micro)', fontWeight: 700, color: 'var(--mint-warning-fg-strong)', marginBottom: 6 }}>
+                ⚠ Skip the fraud escalation for {props.fmtAmt}? No FRAUD ticket is raised — this continues on the normal reimbursement path.
+              </div>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button onClick={props.onBypass} style={{ ...smallPrimaryButton, background: 'var(--mint-warning-fg-graphic)' }}>Yes, skip fraud</button>
+                <button onClick={() => props.setConfirmBypass(false)} style={{ ...smallPrimaryButton, background: 'var(--mint-bg-card)', color: 'var(--mint-fg-soft)', border: 'var(--mint-card-stroke)' }}>Cancel</button>
+              </div>
+            </div>
+          )}
+        </div>
+      ) : null}
+
+      {!props.fraudKey && props.manualFraudOpen ? (
+        <InlineEditCard label="Manual fallback: if the FRAUD ticket was created anyway, paste its key">
+          <input
+            type="text"
+            value={props.manualFraudKey}
+            onChange={(e) => props.setManualFraudKey(e.target.value.toUpperCase())}
+            onKeyDown={(e) => { if (e.key === 'Enter') props.applyManualFraudKey(); }}
+            placeholder="FRAUD-12345"
+            style={inlineInput}
+          />
+          <button onClick={props.applyManualFraudKey} style={smallPrimaryButton}>Continue</button>
+        </InlineEditCard>
+      ) : null}
+    </>
+  );
+}
+
+/** Shown above the REIMB step when the amount is over the fraud threshold but the gate
+ *  is already satisfied, so a >$10k reimbursement never looks like the gate broke. */
+function FraudSatisfiedBanner({ fmtAmt, bypass, linkedFraudKeys, priorFraudKey, onUndo }: {
+  fmtAmt: string;
+  bypass: 'exists' | 'skipped' | null;
+  linkedFraudKeys: string[];
+  priorFraudKey: string | null;
+  onUndo: (() => void) | null;
+}) {
+  const threshold = `$${FRAUD_AMOUNT_THRESHOLD.toLocaleString()}.00`;
+  return (
+    <div style={{ marginBottom: 'var(--mint-sp-3)', padding: 'var(--mint-sp-2) var(--mint-sp-3)', background: 'var(--mint-warning-bg-soft)', borderRadius: 'var(--mint-radius-button)', fontSize: 'var(--mint-text-micro)', color: 'var(--mint-warning-fg-strong)', fontWeight: 600, lineHeight: 1.5 }}>
+      {bypass === 'skipped' && !linkedFraudKeys.length ? (
+        <>⚠ {fmtAmt} is over {threshold}, but the fraud escalation was skipped by the operator — no FRAUD ticket was raised, continuing on the normal reimbursement path.</>
+      ) : (
+        <>
+          ⚠ {fmtAmt} is over {threshold}, but{' '}
+          {priorFraudKey
+            ? <a href={`https://wealthsimple.atlassian.net/browse/${priorFraudKey}`} target="_blank" rel="noreferrer" style={{ color: 'var(--mint-warning-fg-strong)', fontWeight: 700 }}>{priorFraudKey}</a>
+            : 'a FRAUD ticket'}
+          {' '}was already raised{linkedFraudKeys.length ? ' and is linked to this ticket' : ' (link check failed — you confirmed it exists)'} — continuing on the normal reimbursement path.
+        </>
+      )}
+      {onUndo ? (
+        <button onClick={onUndo} style={{ marginLeft: 8, background: 'none', border: 'none', padding: 0, color: 'var(--mint-warning-fg-strong)', fontSize: 'var(--mint-text-micro)', fontWeight: 600, textDecoration: 'underline', cursor: 'pointer' }}>undo</button>
+      ) : null}
+    </div>
+  );
+}
+
+// ============================================================
 // Step 5 — Admin debit
 // ============================================================
 
@@ -1188,6 +1531,7 @@ function Step6Body(props: {
   alreadyPosted: boolean;
   showActionButton: boolean;
   reimbKey: string | null;
+  destination: 'Done' | 'Back Office';
   onPost: () => void;
 }) {
   // Render the comment text with @mention and [REIMB-key] inline-styled segments for preview
@@ -1211,11 +1555,11 @@ function Step6Body(props: {
             {props.commentEditing ? '✓ Done editing' : '✏ Edit'}
           </button>
           <button onClick={props.onPost} disabled={props.busy} style={{ ...primaryButton, flex: 1, opacity: props.busy ? 0.6 : 1, cursor: props.busy ? 'wait' : 'pointer' }}>
-            {props.busy ? 'Posting & moving…' : 'Review, approve & move to Done'}
+            {props.busy ? 'Posting & moving…' : `Review, approve & move to ${props.destination}`}
           </button>
         </div>
       ) : props.alreadyPosted ? (
-        <div style={{ marginTop: 'var(--mint-sp-2)', fontSize: 'var(--mint-text-micro)', color: 'var(--mint-positive-fg-strong)' }}>✓ Posted and moved to Done.</div>
+        <div style={{ marginTop: 'var(--mint-sp-2)', fontSize: 'var(--mint-text-micro)', color: 'var(--mint-positive-fg-strong)' }}>✓ Posted and moved to {props.destination}.</div>
       ) : null}
     </>
   );
@@ -1250,6 +1594,20 @@ function CommentPreview({ text, reporter, reimbKey }: { text: string; reporter: 
 // ============================================================
 // Step 6 — Success
 // ============================================================
+
+function FraudSuccessPanel({ fraudKey, fraudUrl, ticketId, onCloseToTicket }: { fraudKey: string | null; fraudUrl: string | null; ticketId: string; onCloseToTicket: () => void }) {
+  return (
+    <section style={{ background: 'var(--mint-positive-bg-soft)', border: '1px solid var(--mint-positive-fg-graphic)', borderRadius: 'var(--mint-radius-card)', padding: 'var(--mint-sp-4)', textAlign: 'center' }}>
+      <div style={{ width: 48, height: 48, margin: '0 auto var(--mint-sp-2)', borderRadius: 9999, background: 'var(--mint-positive-fg-graphic)', color: '#fff', fontSize: 24, fontWeight: 800, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>✓</div>
+      <h3 style={{ margin: 0, fontSize: 'var(--mint-text-h-md)', color: 'var(--mint-fg-strong)', fontWeight: 700 }}>Escalated to Fraud</h3>
+      <p style={{ margin: 'var(--mint-sp-2) 0 var(--mint-sp-3)', fontSize: 'var(--mint-text-meta)', color: 'var(--mint-fg-subdued-title)', lineHeight: 1.6 }}>
+        {fraudKey ? <a href={fraudUrl!} target="_blank" rel="noreferrer" style={{ color: 'var(--mint-fg-strong)', fontWeight: 600 }}>{fraudKey}</a> : '—'}
+        {` · linked ${FRAUD_LINK_PHRASE} ${ticketId} · Comment Posted · Moved to Back Office`}
+      </p>
+      <button onClick={onCloseToTicket} style={{ ...primaryButton, width: '100%' }}>Close & return to ticket</button>
+    </section>
+  );
+}
 
 function SuccessPanel({ reimbKey, reimbUrl, ticketId, fmtAmt, onCloseToTicket, onReload }: { reimbKey: string | null; reimbUrl: string | null; ticketId: string; fmtAmt: string; onCloseToTicket: () => void; onReload: () => void }) {
   return (
@@ -1297,6 +1655,12 @@ function buildCommentText(ticket: WocooTicket, reimbKey: string, amount: number)
   return `Hi ${mention}, a reimbursement ticket has been created ${reimbKey}. ` +
     `You can let the client know to expect the overpayment amount of $${amount.toFixed(2)} ` +
     `back in their chequing account within the next 2-3 business days.`;
+}
+
+function buildFraudCommentText(ticket: WocooTicket, fraudKey: string): string {
+  const mention = ticket.reporter ? `@${ticket.reporter}` : 'team';
+  return `Hi ${mention}, a fraud ticket has been created as the overpayment is above $10k, ` +
+    `will proceed with the request once fraud approves ${fraudKey}`;
 }
 
 function buildCommentSegments(ticket: WocooTicket, reimbKey: string, reimbUrl: string, amount: number, customText?: string) {

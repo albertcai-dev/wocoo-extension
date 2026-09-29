@@ -77,7 +77,7 @@ export interface CreateMetaField {
   allowedValues?: CreateMetaAllowedValue[];
 }
 
-const CREATEMETA_CACHE_KEY = 'jira_createmeta_cache';
+const CREATEMETA_CACHE_KEY = 'jira_createmeta_cache_v2';
 const CREATEMETA_TTL_MS = 24 * 60 * 60 * 1000; // 24h
 
 type CreateMetaCache = Record<string, { fetchedAt: number; fields: CreateMetaField[] }>;
@@ -100,9 +100,14 @@ export async function fetchCreateMetaFields(projectKey: string, issueTypeId: str
     const resp = await jiraFetch(`/rest/api/3/issue/createmeta/${encodeURIComponent(projectKey)}/issuetypes/${encodeURIComponent(issueTypeId)}?startAt=${startAt}&maxResults=100`);
     if (!resp.ok) throw new Error(`Failed to fetch createmeta for ${projectKey}/${issueTypeId} (HTTP ${resp.status})`);
     const data = await resp.json();
-    const fields = (data.fields || []) as CreateMetaField[];
+    const fields = (data.fields || data.values || []) as CreateMetaField[];
     allFields = allFields.concat(fields);
-    if (data.isLast !== false || fields.length === 0) break;
+    if (fields.length === 0 || data.isLast === true) break;
+    // The endpoint pages at 50 whatever maxResults says, and not every response carries
+    // isLast — FRAUD Task has 100+ fields, so trusting the first page loses
+    // customfield_10414. Keep going while `total` says there's more.
+    const more = data.isLast === false || (typeof data.total === 'number' && allFields.length < data.total);
+    if (!more) break;
     startAt += fields.length;
   }
 
@@ -614,9 +619,9 @@ export function adfField(value: string): MoveField {
  * can log a row. The transition ID → kind mapping is intentionally minimal:
  * ID '251' -> 'Done'; anything else -> 'Cancelled' by default. If more transitions
  * are ever wired through this function that are NOT terminal (e.g. re-open), the
- * caller must guard the emit itself; today all callers use terminal transitions.
+ * caller must pass `skipLog` — the overpayment FRAUD path's move to Back Office does.
  */
-export async function transitionTicket(ticketKey: string, transitionId: string): Promise<void> {
+export async function transitionTicket(ticketKey: string, transitionId: string, opts: { skipLog?: boolean } = {}): Promise<void> {
   const token = await getValidAccessToken();
   const cloudId = await getCloudId();
   const url = `https://api.atlassian.com/ex/jira/${cloudId}/rest/api/3/issue/${encodeURIComponent(ticketKey)}/transitions`;
@@ -641,7 +646,7 @@ export async function transitionTicket(ticketKey: string, transitionId: string):
   // Clone/Move flow transitions its own CRED/DBO/EOC clone to Done — that's not a
   // resolution the log should capture) don't create noise rows. The source WOCOO
   // ticket's Move is logged separately via emitMoveTransition from MoveModal.
-  if (ticketKey.startsWith('WOCOO-')) {
+  if (ticketKey.startsWith('WOCOO-') && !opts.skipLog) {
     try {
       const { emitTicketTransition } = await import('../sidepanel/ticketLogEvents');
       const kind = transitionId === '251' ? 'Done' : 'Cancelled';
@@ -871,6 +876,112 @@ export async function findExistingClone(
   } catch {
     return null;
   }
+}
+
+// ============ FRAUD escalation (overpayments over $10k) ============
+// Port of the v3 Magic site's createFraud / getIssueLinks bridge actions
+// (wocoo-gas-bridge CreateFraud.gs + IssueLinks.gs). v3 needs the bridge because
+// MCPLocker blocks FRAUD writes and returns no link data; the extension talks to Jira
+// under the operator's own OAuth grant, so both run here directly.
+
+/**
+ * Keys of every issue linked to `ticketKey` (either direction) whose key is in
+ * `projectKey`. Throws on failure — callers must be able to tell "checked, nothing
+ * linked" (empty array) apart from "could not check".
+ */
+export async function getLinkedIssueKeys(ticketKey: string, projectKey: string): Promise<string[]> {
+  const resp = await jiraFetch(`/rest/api/3/issue/${encodeURIComponent(ticketKey)}?fields=issuelinks`);
+  if (!resp.ok) {
+    const txt = await resp.text();
+    throw new Error(`Issue link lookup failed (HTTP ${resp.status}): ${txt}`);
+  }
+  const data = await resp.json();
+  const links: any[] = data?.fields?.issuelinks ?? [];
+  const prefix = projectKey.toUpperCase() + '-';
+  const keys = new Set<string>();
+  for (const link of links) {
+    const key = String((link?.outwardIssue ?? link?.inwardIssue)?.key ?? '').toUpperCase();
+    if (key.startsWith(prefix)) keys.add(key);
+  }
+  return [...keys];
+}
+
+/** Resolve a link type by its outward phrase ("relates to") or its name ("Relates"). */
+async function resolveLinkTypeName(phrase: string): Promise<string> {
+  const resp = await jiraFetch('/rest/api/3/issueLinkType', { method: 'GET' });
+  if (!resp.ok) {
+    const txt = await resp.text();
+    throw new Error(`Failed to list issue link types (HTTP ${resp.status}): ${txt}`);
+  }
+  const data = await resp.json().catch(() => ({} as any));
+  const types: Array<{ name?: string; outward?: string }> = Array.isArray((data as any).issueLinkTypes) ? (data as any).issueLinkTypes : [];
+  const wanted = phrase.trim().toLowerCase();
+  const match = types.find((t) => (t.outward || '').toLowerCase() === wanted || (t.name || '').toLowerCase() === wanted);
+  if (!match?.name) throw new Error(`No Jira link type matches "${phrase}".`);
+  return match.name;
+}
+
+/** Plain text → ADF, one paragraph per line (blank lines kept as empty paragraphs). */
+function textToAdf(text: string): AdfDoc {
+  return {
+    type: 'doc',
+    version: 1,
+    content: text.split('\n').map((line) => (line
+      ? { type: 'paragraph', content: [{ type: 'text', text: line }] }
+      : { type: 'paragraph', content: [] })),
+  };
+}
+
+export interface CreateFraudArgs {
+  wocooTicketId: string;
+  identityId: string;
+  summary: string;
+  description: string;
+  /** Option label on customfield_10414 "Fraud Detection Method" — resolved via createmeta. */
+  detectionMethod: string;
+  issueTypeId?: string;  // default 10002 Task
+  linkPhrase?: string;   // default "relates to" — FRAUD <phrase> WOCOO
+}
+
+/**
+ * Create a FRAUD ticket and link it to the source WOCOO ticket. The link runs after the
+ * create; a link failure comes back as `linkError` next to the key rather than throwing,
+ * because the ticket exists at that point and the caller must not offer to create another.
+ */
+export async function createFraudTicket(args: CreateFraudArgs): Promise<{ key: string; url: string; linkError?: string }> {
+  const issueTypeId = args.issueTypeId ?? '10002';
+  const detectionId = await resolveOptionId('FRAUD', issueTypeId, 'customfield_10414', args.detectionMethod);
+  const payload = {
+    fields: {
+      project: { key: 'FRAUD' },
+      issuetype: { id: issueTypeId },
+      summary: args.summary,
+      description: textToAdf(args.description),
+      customfield_10163: textToAdf(args.identityId), // Suspicious User Slugs
+      customfield_10421: textToAdf(args.identityId), // Suspicious Identity Slug
+      customfield_10414: { id: detectionId },        // Fraud Detection Method
+      customfield_11458: args.identityId,            // User Identity ID
+    },
+  };
+  const resp = await jiraFetch('/rest/api/3/issue', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!resp.ok) {
+    const txt = await resp.text();
+    throw new Error(`FRAUD creation failed (HTTP ${resp.status}): ${txt}`);
+  }
+  const data = await resp.json();
+  if (!data.key) throw new Error('Jira returned no ticket key from FRAUD creation.');
+  const key: string = data.key;
+  let linkError: string | undefined;
+  try {
+    await linkIssues(key, args.wocooTicketId, await resolveLinkTypeName(args.linkPhrase ?? 'relates to'));
+  } catch (e: any) {
+    linkError = e?.message || String(e);
+  }
+  return { key, url: `https://wealthsimple.atlassian.net/browse/${key}`, linkError };
 }
 
 // Minimal shape for the Home view ticket list — full WocooTicket is overkill for a list row.
