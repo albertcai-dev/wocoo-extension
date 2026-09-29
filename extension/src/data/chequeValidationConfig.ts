@@ -34,9 +34,7 @@ export const MCV_READY_WEBHOOK_VARS = {
  *  cc list from Albert's post. If a name needs disambiguation, write the full handle. */
 export const MCV_CC_NAMES = [
   'Estelle',
-  'Muaiz Khan',
   'Jonathan Fawcett',
-  'Vanessa',
   'Nick Kiss',
   'Eugene',
   'Paula Bastos',
@@ -47,7 +45,9 @@ export const MCV_CC_NAMES = [
   'Luke Gazmin',
   'Albert',
   'Ishan',
+  'esther liao',
   'Amanda Burke',
+  'Ben Ma',
 ];
 
 /** "2026-06-15" → "June 15th, 2026" */
