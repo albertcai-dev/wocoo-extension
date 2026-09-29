@@ -608,7 +608,7 @@ function TicketViewInner({ ticket, onTicketUpdate, onStartTriage, onStartReverse
 
       {/* FOOTER */}
       <footer style={{ fontSize: 'var(--mint-text-nano)', color: 'var(--mint-fg-inactive)', textAlign: 'center', marginTop: 'var(--mint-sp-2)' }}>
-        WOCOO Triager · v0.1 · live data
+        Sidekick · v0.1 · live data
       </footer>
     </div>
   );

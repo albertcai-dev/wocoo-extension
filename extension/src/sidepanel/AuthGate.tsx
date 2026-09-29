@@ -25,7 +25,7 @@ export function AuthGate({ onSignedIn }: { onSignedIn: () => void }) {
     <div style={{ padding: 'var(--mint-sp-4)', display: 'flex', flexDirection: 'column', gap: 'var(--mint-sp-3)', maxWidth: 480, margin: '0 auto', paddingTop: 'var(--mint-sp-6)' }}>
       <h1 style={{ margin: 0, fontSize: 'var(--mint-text-h-md)', fontWeight: 600 }}>Connect to Jira</h1>
       <p style={{ margin: 0, color: 'var(--mint-fg-subdued-title)', fontSize: 'var(--mint-text-meta)', lineHeight: 1.6 }}>
-        WOCOO Triager uses your Atlassian account to load WOCOO tickets and (later) take actions on your behalf.
+        Sidekick uses your Atlassian account to load WOCOO tickets and (later) take actions on your behalf.
         Sign in once; your token stays on this device.
       </p>
       {error ? (

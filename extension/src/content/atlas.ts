@@ -75,7 +75,7 @@ import { CARD_ISSUANCE_STAGED_KEY, resolveCardIssuanceStage } from '../data/card
     // Give the form a beat to settle (some forms react to focus/blur on submit-eligible state).
     setTimeout(() => {
       submitBtn.click();
-      console.debug('[WOCOO Triager] auto-submitted Atlas reason for', ticketId);
+      console.debug('[Sidekick] auto-submitted Atlas reason for', ticketId);
     }, 250);
     return true;
   }

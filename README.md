@@ -1,8 +1,8 @@
-# WOCOO Triager Chrome Extension
+# WOCOO Sidekick Chrome Extension
 
 Ticket-in-context Chrome extension for the WOCOO triage board (CXA — Credit Card, Banking, Account Info). Sticky sidepanel + 13 shipped workflows on top of Jira / Atlas / i2c / Ledge / Preset / Slack.
 
-**PRD:** [WOCOO Triager Extension](https://docs.google.com/document/d/1WFs_H1904OqiyQHBLNVpcDo1-VGWLaNv4OZ2NCNXhu8/edit) · **Long-form vision:** `PRD.md`
+**PRD:** [WOCOO Sidekick Extension](https://docs.google.com/document/d/1WFs_H1904OqiyQHBLNVpcDo1-VGWLaNv4OZ2NCNXhu8/edit) · **Long-form vision:** `PRD.md`
 
 ## What it does
 
@@ -24,7 +24,7 @@ Ticket-in-context Chrome extension for the WOCOO triage board (CXA — Credit Ca
 
 ## Install
 
-Setting this up for the first time as a non-developer? Follow the [WOCOO Triager — Install Guide](https://app.notion.com/p/3d741167bd9681829df7ccc3cdd7a8c1) in Notion instead; it covers the access requests and first-run consent screens this section skips.
+Setting this up for the first time as a non-developer? Follow the [WOCOO Sidekick — Install Guide](https://app.notion.com/p/3d741167bd9681829df7ccc3cdd7a8c1) in Notion instead; it covers the access requests and first-run consent screens this section skips.
 
 ```bash
 git clone git@github.com:albertcai-dev/wocoo-extension.git
@@ -40,7 +40,7 @@ Then in Chrome:
 2. Enable **Developer mode** (top-right)
 3. Click **Load unpacked** → select `extension/dist/`
 4. Confirm the extension ID reads `djejbgmocodkljfgikchppnabmickenk`. It is pinned by the manifest's `key` field, so any other value means Chrome loaded the wrong folder or a stale build — rebuild and load `extension/dist/` again (see **Gotchas** below)
-5. Open the sidepanel via the WOCOO Triager toolbar icon → complete Atlassian OAuth flow → enter i2c credentials in Settings
+5. Open the sidepanel via the Sidekick toolbar icon → complete Atlassian OAuth flow → enter i2c credentials in Settings
 
 ## Development
 
@@ -97,7 +97,7 @@ wocoo-extension/
 
 ## Gotchas
 
-- **Extension ID is pinned to `djejbgmocodkljfgikchppnabmickenk`.** The `key` field in `manifest.json` holds the public half of a dedicated keypair, and Chrome derives the ID from that rather than from the unpacked folder's path. This is what makes the build shareable: every teammate who loads `dist/` gets the same ID, so the one Atlassian OAuth callback URL (`https://djejbgmocodkljfgikchppnabmickenk.chromiumapp.org/`) matches for all of them, and `native-host/install.sh` can hardcode the ID. Never change or remove `key` — doing so changes the ID and breaks sign-in for the whole team. The matching private key is only needed if we ever sign a CRX ourselves; it lives in Albert's personal 1Password vault (`Employee > WOCOO Triager — Extension signing key`), so ask him rather than searching for it in a shared vault.
+- **Extension ID is pinned to `djejbgmocodkljfgikchppnabmickenk`.** The `key` field in `manifest.json` holds the public half of a dedicated keypair, and Chrome derives the ID from that rather than from the unpacked folder's path. This is what makes the build shareable: every teammate who loads `dist/` gets the same ID, so the one Atlassian OAuth callback URL (`https://djejbgmocodkljfgikchppnabmickenk.chromiumapp.org/`) matches for all of them, and `native-host/install.sh` can hardcode the ID. Never change or remove `key` — doing so changes the ID and breaks sign-in for the whole team. The matching private key is only needed if we ever sign a CRX ourselves; it lives in Albert's personal 1Password vault (`Employee > WOCOO Sidekick — Extension signing key`), so ask him rather than searching for it in a shared vault.
   - Publishing to the Chrome Web Store would override this: the store issues its own key and ID. If we go that route, take the store's public key from the developer dashboard, replace `key` with it, and re-register the callback URL once more.
 - **Sign into Okta first.** The Atlassian OAuth flow, Atlas identity lookups, and every other Wealthsimple-domain content script rely on Okta cookies in your normal browser session. If you haven't authenticated Okta on `wealthsimple.atlassian.net` in a normal tab, the extension's browser flows will fall over on a login page.
 - **`.env` is git-ignored.** Real Atlassian OAuth CLIENT_ID + CLIENT_SECRET live in Albert's personal 1Password vault (`Employee > WOCOO Triager > Atlassian OAuth 3LO`), so ask him rather than searching a shared vault. Copy to `extension/.env` before your first build; the extension throws at load time if either is missing.
@@ -106,5 +106,5 @@ wocoo-extension/
 
 ## Related
 
-- [WOCOO Triager PRD](https://docs.google.com/document/d/1WFs_H1904OqiyQHBLNVpcDo1-VGWLaNv4OZ2NCNXhu8/edit) — canonical PRD
+- [WOCOO Sidekick PRD](https://docs.google.com/document/d/1WFs_H1904OqiyQHBLNVpcDo1-VGWLaNv4OZ2NCNXhu8/edit) — canonical PRD
 - v3 Magic site (predecessor, still runs the Apps Script bridge project): `magic.w10e.com/albert.cai/wocoo-triage-v3`
