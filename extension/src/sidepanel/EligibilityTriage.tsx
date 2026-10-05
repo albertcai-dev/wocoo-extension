@@ -12,7 +12,7 @@ import { fetchAtlasClientEmailHeadless } from '../data/atlasAccountLookup';
 import { ATLAS_PHONE_SEARCH_ENABLED, searchAtlasByPhone } from '../data/atlasPhoneSearch';
 import { renderEligibilityDraft } from '../data/eligibilityDraft';
 import { toLogRow } from '../data/eligibilityLog';
-import { parseEligibilityEmail } from '../data/eligibilityParse';
+import { isEligibilityRequest, parseEligibilityEmail } from '../data/eligibilityParse';
 import { isDraftable } from '../data/eligibilityResolve';
 import { resolveBatch, type ResolveDeps } from '../data/eligibilityRun';
 import {
@@ -76,18 +76,22 @@ export function EligibilityTriage({ onClose }: { onClose: () => void }) {
     setBusy('Reading creditcardoperations@ inbox…'); setError('');
     try {
       const { requests, drafted, excludedDomains, skippedUnknownSender, skippedUnknownSenderCapped } = await listEligibilityRequestsViaBridge();
-      const fresh: RunRow[] = requests.map((raw) => ({
+      // Insurer emails that aren't eligibility requests are left out (counted for the banner).
+      const eligible = requests.filter(isEligibilityRequest);
+      const eligibleDrafted = drafted.filter(isEligibilityRequest);
+      const skippedNotEligibility = (requests.length - eligible.length) + (drafted.length - eligibleDrafted.length);
+      const fresh: RunRow[] = eligible.map((raw) => ({
         req: parseEligibilityEmail(raw, excludedDomains),
         res: null, selected: false, draftId: '', draftBody: '', sent: 'no' as const, sendError: '', logged: false, sentLogged: false,
       }));
       // I1: drafts from an earlier run (panel state lost) come back so they can still be sent.
       const seen = new Set(fresh.map((r) => r.req.messageId));
-      const earlier = drafted
+      const earlier = eligibleDrafted
         .filter((d) => !seen.has(d.messageId))
         .map(({ draftId, ...raw }) => earlierDraftRow(parseEligibilityEmail(raw, excludedDomains), draftId));
       const rows = [...fresh, ...earlier];
       save({
-        stage: 'fetched', rows, skippedUnknownSender, skippedUnknownSenderCapped,
+        stage: 'fetched', rows, skippedUnknownSender, skippedUnknownSenderCapped, skippedNotEligibility,
         sql: buildEligibilitySql(fresh.map((r) => r.req)) ?? '',
       });
     } catch (e) {
@@ -215,6 +219,11 @@ export function EligibilityTriage({ onClose }: { onClose: () => void }) {
       {run.skippedUnknownSender > 0 ? (
         <div style={{ color: 'var(--mint-fg-soft)' }}>
           {run.skippedUnknownSender}{run.skippedUnknownSenderCapped ? '+' : ''} unread email(s) from senders not on the Insurers tab were skipped. Check the inbox.
+        </div>
+      ) : null}
+      {(run.skippedNotEligibility ?? 0) > 0 ? (
+        <div style={{ color: 'var(--mint-fg-soft)' }}>
+          {run.skippedNotEligibility} insurer email(s) weren't eligibility requests and were skipped.
         </div>
       ) : null}
 

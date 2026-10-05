@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  canRunStep3, defaultSelected, earlierDraftRow, earlierRunResolution, mergeResolutions, nextLogStatus, rowsToResolve,
+  canRunStep3, defaultSelected, EMPTY_RUN, earlierDraftRow, earlierRunResolution, mergeResolutions, nextLogStatus, rowsToResolve,
   unloggedCount, unsentDraftCount, unsentLoggedCount, type RunRow,
 } from './eligibilityRunState';
 import type { EligibilityRequest, Resolution } from './eligibilityTypes';
@@ -115,5 +115,11 @@ describe('rowsToResolve / mergeResolutions', () => {
     expect(out[1]).toBe(earlier);
     expect(out[2]).toMatchObject({ res: { requestId: 'c' }, draftBody: 'body', selected: true, logged: false });
     expect(out[3]).toMatchObject({ res: { requestId: 'd', status: 'no_match' }, draftBody: '', selected: false, logged: false });
+  });
+});
+
+describe('EMPTY_RUN', () => {
+  it('starts with no skipped non-eligibility emails', () => {
+    expect(EMPTY_RUN.skippedNotEligibility).toBe(0);
   });
 });

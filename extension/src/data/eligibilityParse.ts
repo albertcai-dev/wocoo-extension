@@ -14,7 +14,10 @@ const LAST4_PATTERNS: RegExp[] = [
   /\d{4,6}[*xX•]{3,}(\d{4})\b/g,
   /[*xX•]{4,}\s?(\d{4})\b/g,
 ];
-const SUBJECT_NAME_RE = /^[A-Za-zÀ-ÿ’'.-]+(?:\s+[A-Za-zÀ-ÿ’'.-]+){1,3}$/;
+const SUBJECT_NAME_RE = /^[A-Za-zÀ-ÿ’'.,-]+(?:\s+[A-Za-zÀ-ÿ’'.,-]+){1,3}$/;
+/** Outlook embedded-image CIDs look like `image001.jpg@01d54a7.ecf`. */
+const IMAGE_CID_RE = /^[^@]+\.(?:jpe?g|png|gif|bmp|tiff?|webp)@/i;
+const TLD_RE = /^[a-z]{2,24}$/i;
 const CLAIM_RE = /claim\s*(?:#|no\.?|number)?\s*[:\-]?\s*([A-Z0-9-]{5,})/i;
 
 export function normalizeName(s: string): string {
@@ -30,9 +33,21 @@ export function normalizeName(s: string): string {
 
 export function splitName(raw: string): PersonName | null {
   const clean = raw.replace(/\s+/g, ' ').trim();
-  const parts = clean.split(' ').filter(Boolean);
+  // Exactly one comma: "Last, First [Middle]" (the last name may be several words, e.g. "Lin Tai, Hung").
+  const sides = clean.split(',');
+  const oneComma = sides.length === 2;
+  if (oneComma) {
+    const [last, first] = sides.map((x) => x.trim());
+    if (last && first) return { first, last, raw: clean };
+  }
+  const parts = (oneComma ? clean.replace(',', ' ') : clean).split(' ').filter(Boolean);
   if (parts.length < 2) return null;
   return { first: parts.slice(0, -1).join(' '), last: parts[parts.length - 1], raw: clean };
+}
+
+/** An insurer email is an eligibility request when its subject or body mentions eligibility. */
+export function isEligibilityRequest(raw: RawEligibilityEmail): boolean {
+  return /eligib/i.test(raw.subject || '') || /eligib/i.test(raw.plainBody || '');
 }
 
 /** Drop quoted reply history: everything from quote markers, plus `>` lines. */
@@ -103,7 +118,7 @@ function findLast4s(text: string): string[] {
 function subjectName(subject: string): string | null {
   const segments = subject.split(/\s[-–—]\s/).map((s) => s.trim()).filter(Boolean);
   const last = segments[segments.length - 1];
-  return last && SUBJECT_NAME_RE.test(last) && !/claim|request|visa|wealthsimple/i.test(last) ? last : null;
+  return last && SUBJECT_NAME_RE.test(last) && last.split(',').length <= 2 && !/claim|request|visa|wealthsimple/i.test(last) ? last : null;
 }
 
 function senderName(from: string): string {
@@ -123,6 +138,7 @@ export function parseEligibilityEmail(raw: RawEligibilityEmail, excludedDomains:
   const emails: string[] = [];
   for (const e of ordered.map((x) => x.toLowerCase())) {
     const domain = e.split('@')[1] ?? '';
+    if (IMAGE_CID_RE.test(e) || !TLD_RE.test(domain.split('.').pop() ?? '')) continue;
     if (e === sender || excluded.has(domain) || emails.includes(e)) continue;
     emails.push(e);
   }

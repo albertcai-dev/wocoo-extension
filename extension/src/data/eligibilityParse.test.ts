@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeName, parseEligibilityEmail, splitName } from './eligibilityParse';
+import { isEligibilityRequest, normalizeName, parseEligibilityEmail, splitName } from './eligibilityParse';
 import type { RawEligibilityEmail } from './eligibilityTypes';
 
 function raw(over: Partial<RawEligibilityEmail>): RawEligibilityEmail {
@@ -51,6 +51,34 @@ describe('splitName', () => {
   });
   it('returns null for a single token', () => {
     expect(splitName('Priya')).toBeNull();
+  });
+  it('reads a single comma as "Last, First"', () => {
+    expect(splitName('Keiwan, Isaac')).toEqual({ first: 'Isaac', last: 'Keiwan', raw: 'Keiwan, Isaac' });
+  });
+  it('keeps a multi-word last name before the comma', () => {
+    expect(splitName('Lin Tai, Hung')).toEqual({ first: 'Hung', last: 'Lin Tai', raw: 'Lin Tai, Hung' });
+  });
+  it('keeps middle names after the comma in first', () => {
+    expect(splitName('Smith, Mary Ann')).toEqual({ first: 'Mary Ann', last: 'Smith', raw: 'Smith, Mary Ann' });
+  });
+  it('falls back to the comma-stripped string when a side is empty', () => {
+    expect(splitName('Mary Smith,')).toEqual({ first: 'Mary', last: 'Smith', raw: 'Mary Smith,' });
+    expect(splitName(', Priya')).toBeNull();
+  });
+  it('does not treat two commas as Last, First', () => {
+    expect(splitName('Smith, Mary, Ann')).toEqual({ first: 'Smith, Mary,', last: 'Ann', raw: 'Smith, Mary, Ann' });
+  });
+});
+
+describe('isEligibilityRequest', () => {
+  it('matches on the subject alone', () => {
+    expect(isEligibilityRequest(raw({ subject: 'Eligibility Confirmation Request', plainBody: 'Hello' }))).toBe(true);
+  });
+  it('matches on the body alone', () => {
+    expect(isEligibilityRequest(raw({ subject: 'Claim 123456', plainBody: 'Please confirm eligibility for this card.' }))).toBe(true);
+  });
+  it('is false when neither mentions eligibility', () => {
+    expect(isEligibilityRequest(raw({ subject: 'Claim 123456 - Update', plainBody: 'Please call us back.' }))).toBe(false);
   });
 });
 
@@ -162,6 +190,23 @@ wrote:
     expect(r.last4).toBe('1763');
     expect(r.warnings).toEqual([]);
     expect(r.emails).toEqual(['priya.r1985@example.com']);
+  });
+
+  it('drops Outlook inline-image pseudo-addresses', () => {
+    const r = parseEligibilityEmail(raw({ plainBody: 'Email: lin531613@example.com\nimage001.jpg@01d54a7.ecf' }), EXCLUDED);
+    expect(r.emails).toEqual(['lin531613@example.com']);
+  });
+
+  it('drops candidates whose TLD is not 2-24 letters', () => {
+    const r = parseEligibilityEmail(raw({ plainBody: 'Email: a.b@example.com\nx@host.c2m' }), EXCLUDED);
+    expect(r.emails).toEqual(['a.b@example.com']);
+  });
+
+  it('reads a "Last, First" name from the subject', () => {
+    const r = parseEligibilityEmail(
+      raw({ subject: 'Eligibility Confirmation Request – EM Claim 4148480 - Marmer, Steven', plainBody: 'Hello' }), EXCLUDED,
+    );
+    expect(r.cardholderName).toEqual({ first: 'Steven', last: 'Marmer', raw: 'Marmer, Steven' });
   });
 
   it('accepts cardholder name with curly apostrophe from subject line', () => {

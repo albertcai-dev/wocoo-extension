@@ -4,8 +4,10 @@ import type {
   CardFact, Candidate, EligibilityFlag, EligibilityRequest, MatchMethod, Resolution, WarehouseRow,
 } from './eligibilityTypes';
 
-/** Products whose replies need no manual coverage note. Anything else is flagged vi_1pct. */
-export const REVIEW_FREE_PRODUCTS = ['ws_visa_infinite_privilege', 'ws_visa_infinite_plus'] as const;
+/** Products whose replies need no manual coverage note. Any other non-empty product id is flagged vi_1pct. */
+export const REVIEW_FREE_PRODUCTS = [
+  'ws_visa_infinite_privilege', 'ws_visa_infinite_plus', 'ws_visa_infinite_basic', 'ws_visa_infinite_core',
+] as const;
 
 /** Flags that are acceptable for drafting. Others (parse_warning, unknown_product, etc.) block drafting. */
 const TICKABLE_FLAGS: readonly EligibilityFlag[] = ['delinquent', 'vi_1pct'];

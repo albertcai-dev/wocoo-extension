@@ -29,11 +29,13 @@ export interface RunState {
   skippedUnknownSender: number;
   /** The unknown-sender scan hit its cap, so the count is a lower bound ("200+"). */
   skippedUnknownSenderCapped?: boolean;
+  /** Insurer emails dropped because neither subject nor body mentions eligibility. */
+  skippedNotEligibility: number;
   /** Last generated warehouse SQL, for the Copy SQL fallback. */
   sql: string;
 }
 
-export const EMPTY_RUN: RunState = { stage: 'idle', rows: [], skippedUnknownSender: 0, sql: '' };
+export const EMPTY_RUN: RunState = { stage: 'idle', rows: [], skippedUnknownSender: 0, skippedNotEligibility: 0, sql: '' };
 
 export function defaultSelected(res: Resolution): boolean {
   return res.status === 'matched';

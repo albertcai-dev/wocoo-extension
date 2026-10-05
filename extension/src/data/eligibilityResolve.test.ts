@@ -72,7 +72,7 @@ describe('resolveFromWarehouse', () => {
   it('flags delinquency, 1% products and parse warnings without dropping the match', () => {
     const r = resolveFromWarehouse(
       req({ warnings: ['Multiple last-4 values found: 1763, 9921'] }),
-      [row({ isDelinquent: true, cardProduct: 'ws_visa_infinite_basic' })],
+      [row({ isDelinquent: true, cardProduct: 'ws_visa_infinite_mystery' })],
     )!;
     expect(r.status).toBe('needs_review');
     expect(r.flags.sort()).toEqual(['delinquent', 'parse_warning', 'vi_1pct']);
@@ -82,11 +82,23 @@ describe('resolveFromWarehouse', () => {
   it('allows drafting when only tickable flags (delinquent, vi_1pct) are present', () => {
     const r = resolveFromWarehouse(
       req(),
-      [row({ isDelinquent: true, cardProduct: 'ws_visa_infinite_basic' })],
+      [row({ isDelinquent: true, cardProduct: 'ws_visa_infinite_mystery' })],
     )!;
     expect(r.status).toBe('needs_review');
     expect(r.flags.sort()).toEqual(['delinquent', 'vi_1pct']);
     expect(isDraftable(r)).toBe(true);
+  });
+
+  it.each(['ws_visa_infinite_basic', 'ws_visa_infinite_core'])('treats %s as review-free', (cardProduct) => {
+    const r = resolveFromWarehouse(req(), [row({ cardProduct })])!;
+    expect(r.status).toBe('matched');
+    expect(r.flags).toEqual([]);
+  });
+
+  it('still flags vi_1pct for an unexpected product id', () => {
+    const r = resolveFromWarehouse(req(), [row({ cardProduct: 'ws_visa_infinite_mystery' })])!;
+    expect(r.status).toBe('needs_review');
+    expect(r.flags).toEqual(['vi_1pct']);
   });
 
   it('deduplicates cards when same identity appears under both email and name rules', () => {
