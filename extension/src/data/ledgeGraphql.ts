@@ -1,9 +1,8 @@
-// Direct Ledge GraphQL access for Wires Pending Posting v2.
+// Direct Ledge GraphQL access for Wires Pending Posting.
 //
-// The new Ledge SPA (ledge-spa.cac1.pro1.production.w10e.com) is an Apollo client that
-// reads its data from a separate GraphQL host. There is no Vaadin grid to scrape any
-// more — `accountTransactions` hands back the rows as JSON, so v2 asks for them
-// directly instead of driving the page like `content/ledge.ts` does for old Ledge.
+// The Ledge SPA (ledge-spa.cac1.pro1.production.w10e.com) is an Apollo client that
+// reads its data from a separate GraphQL host. `accountTransactions` hands back the
+// rows as JSON, so we ask for them directly instead of driving the page.
 //
 // The query document below was recorded from the SPA's own network traffic and then
 // trimmed to the fields the wire match needs.
@@ -81,7 +80,7 @@ const WIRE_IN_TYPES = new Set(['WIREIN']);
 /** The real wire marker on a Ledge row. An incoming wire arrives as txnType `DEP` with
  *  sub-type `WIRE`, and the transaction query exposes no sub-type field, so the
  *  description ("Wire In 4094.24 USD", "Client Wire In") is the only wire signal on the
- *  payload. v1's DOM scrape matched the same text. `in` is anchored so a `Wire Out` row
+ *  payload. The old Ledge DOM scrape matched the same text. `in` is anchored so a `Wire Out` row
  *  cannot match. */
 const WIRE_IN_DESCRIPTION_RE = /(?:client\s+)?wire\s*in\b/i;
 
@@ -106,7 +105,7 @@ function parseMoney(v: string | number | null | undefined): number | null {
 }
 
 /** Some senders (notably RBC Client Services) deduct a fee on the way in, so the Ledge
- *  credit can sit a little under the sheet's amount. Same rule v1 used. */
+ *  credit can sit a little under the sheet's amount. Same rule the old Ledge scrape used. */
 function toleranceFor(expected: number): number {
   return Math.max(100, Math.abs(expected) * 0.005);
 }

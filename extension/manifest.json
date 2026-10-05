@@ -46,11 +46,6 @@
       "run_at": "document_idle"
     },
     {
-      "matches": ["https://ledge.wealthsimple.com/*"],
-      "js": ["src/content/ledge.ts"],
-      "run_at": "document_idle"
-    },
-    {
       "matches": ["https://ledge-spa.cac1.pro1.production.w10e.com/*"],
       "js": ["src/content/ledgeSpa.ts"],
       "run_at": "document_idle"
@@ -88,7 +83,6 @@
     "https://wealthsimplecs.mycardplace.com/*",
     "https://*.preset.io/*",
     "https://admin.koho.ca/*",
-    "https://ledge.wealthsimple.com/*",
     "https://ledge-spa.cac1.pro1.production.w10e.com/*",
     "https://ledge.cac1.pro1.production.w10e.com/*",
     "https://app.slack.com/*",

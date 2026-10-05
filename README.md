@@ -19,7 +19,7 @@ Ticket-in-context Chrome extension for the WOCOO triage board (CXA — Credit Ca
   - `wealthsimple.atlassian.net` via Okta
   - `atlas.wealthsimple.com`
   - `wealthsimplecs.mycardplace.com` (i2c) — credentials entered once via the extension's Settings view
-  - `ledge.wealthsimple.com`, `*.preset.io`, `app.slack.com` (as needed per workflow)
+  - `ledge-spa.cac1.pro1.production.w10e.com` + `ledge.cac1.pro1.production.w10e.com`, `*.preset.io`, `app.slack.com` (as needed per workflow)
   - Google account (for the Apps Script bridge)
 
 ## Install

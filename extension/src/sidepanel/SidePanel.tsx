@@ -38,7 +38,6 @@ import { detectL3Escalation } from '../data/l3EscalationDetect';
 import { detectInterestInvestigation } from '../data/interestInvestigationDetect';
 import { HomeView } from './HomeView';
 import { WiresPendingPosting } from './WiresPendingPosting';
-import { WiresPendingPostingV2 } from './WiresPendingPostingV2';
 import { SettingsView } from './SettingsView';
 import { I2cCard, KohoCard } from './MessagingCards';
 import { fetchAtlasAccountIdHeadless, fetchAtlasClientEmailHeadless } from '../data/atlasAccountLookup';
@@ -80,7 +79,6 @@ export function SidePanel() {
   const [homeMode, setHomeMode] = useState(false);
   const [settingsMode, setSettingsMode] = useState(false);
   const [wiresPendingActive, setWiresPendingActive] = useState(false);
-  const [wiresPendingV2Active, setWiresPendingV2Active] = useState(false);
   const [ticket, setTicket] = useState<WocooTicket | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -142,7 +140,6 @@ export function SidePanel() {
     setHomeMode(false);
     setSettingsMode(false);
     setWiresPendingActive(false);
-    setWiresPendingV2Active(false);
   }, [ticketKey]);
 
   if (authState === 'checking') return <CenteredText>Checking sign-in…</CenteredText>;
@@ -158,16 +155,12 @@ export function SidePanel() {
     return <WiresPendingPosting onClose={() => setWiresPendingActive(false)} />;
   }
 
-  if (wiresPendingV2Active) {
-    return <WiresPendingPostingV2 onClose={() => setWiresPendingV2Active(false)} />;
-  }
 
   if (homeMode) {
     return (
       <HomeView
         onOpenTicket={onOpenTicket}
         onOpenWiresPending={() => setWiresPendingActive(true)}
-        onOpenWiresPendingV2={() => setWiresPendingV2Active(true)}
         header={<HomeHeader onOpenSettings={onOpenSettings} />}
       />
     );
@@ -179,7 +172,6 @@ export function SidePanel() {
       <HomeView
         onOpenTicket={onOpenTicket}
         onOpenWiresPending={() => setWiresPendingActive(true)}
-        onOpenWiresPendingV2={() => setWiresPendingV2Active(true)}
         header={<HomeHeader onOpenSettings={onOpenSettings} />}
       />
     );

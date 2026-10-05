@@ -25,8 +25,6 @@ export const COL = {
 export const PENDING_POSTING_STATUS = 'Pending posting';
 export const POSTED_STATUS = 'Posted';
 
-export const LEDGE_URL = 'https://ledge.wealthsimple.com/account-inquiry';
-
 // One row's worth of data the orchestrator pulls from the sheet for verification.
 export interface WireRow {
   /** 1-indexed spreadsheet row number (header is row 1, so the first data row is 2). */
