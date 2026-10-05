@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { canRunStep3, defaultSelected, nextLogStatus, unloggedCount, unsentLoggedCount, type RunRow } from './eligibilityRunState';
+import {
+  canRunStep3, defaultSelected, earlierDraftRow, earlierRunResolution, mergeResolutions, nextLogStatus, rowsToResolve,
+  unloggedCount, unsentDraftCount, unsentLoggedCount, type RunRow,
+} from './eligibilityRunState';
 import type { EligibilityRequest, Resolution } from './eligibilityTypes';
 
 const base: Resolution = {
@@ -57,5 +60,60 @@ describe('canRunStep3 / unloggedCount', () => {
 describe('unsentLoggedCount', () => {
   it('counts sent-ok rows whose READ_EMAIL log is outstanding', () => {
     expect(unsentLoggedCount([row({ sent: 'ok' }), row({ sent: 'ok', sentLogged: true }), row({ sent: 'failed' })])).toBe(1);
+  });
+});
+
+describe('unsentLoggedCount for earlier-run rows', () => {
+  it('counts a sent earlier-run row that has no Resolution', () => {
+    expect(unsentLoggedCount([row({ res: null, draftId: 'd1', sent: 'ok', earlier: true })])).toBe(1);
+  });
+});
+
+describe('unsentDraftCount', () => {
+  it('counts drafts that are not sent yet', () => {
+    expect(unsentDraftCount([
+      row({ draftId: 'd1' }), row({ draftId: 'd2', sent: 'failed' }), row({ draftId: 'd3', sent: 'ok' }), row({}),
+    ])).toBe(2);
+  });
+});
+
+const reqFor = (messageId: string) => ({ messageId } as EligibilityRequest);
+
+describe('earlierDraftRow / earlierRunResolution', () => {
+  it('builds an already-logged, unsent, unresolved row that step 3 ignores', () => {
+    const r = earlierDraftRow(reqFor('m9'), 'd9');
+    expect(r).toMatchObject({ res: null, draftId: 'd9', draftBody: '', sent: 'no', logged: true, sentLogged: false, earlier: true });
+    expect(canRunStep3([r], false)).toBe(false);
+    expect(unsentDraftCount([r])).toBe(1);
+  });
+  it('builds the minimal READ_EMAIL resolution', () => {
+    expect(earlierRunResolution('m9')).toEqual({
+      requestId: 'm9', status: 'matched', method: null, clientEmail: null, identityId: null,
+      cards: [], flags: [], candidates: [], note: 'Sent from an earlier Sidekick run.',
+    });
+  });
+});
+
+describe('rowsToResolve / mergeResolutions', () => {
+  const drafted = row({ req: reqFor('a'), draftId: 'd1', draftBody: 'old', logged: true, sent: 'ok', sentLogged: true });
+  const earlier = earlierDraftRow(reqFor('b'), 'd2');
+  const fresh = row({ req: reqFor('c'), res: null });
+  const fresh2 = row({ req: reqFor('d'), res: null });
+
+  it('only offers rows without a draft to Resolve', () => {
+    expect(rowsToResolve([drafted, earlier, fresh, fresh2])).toEqual([fresh, fresh2]);
+  });
+
+  it('maps results by requestId and leaves drafted rows untouched', () => {
+    const results: Resolution[] = [
+      { ...noMatch, requestId: 'd' },
+      { ...base, requestId: 'c' },
+      { ...base, requestId: 'a' }, // must be ignored: row a already has a draft
+    ];
+    const out = mergeResolutions([drafted, earlier, fresh, fresh2], results, (_r, res) => (res.status === 'matched' ? 'body' : ''));
+    expect(out[0]).toBe(drafted);
+    expect(out[1]).toBe(earlier);
+    expect(out[2]).toMatchObject({ res: { requestId: 'c' }, draftBody: 'body', selected: true, logged: false });
+    expect(out[3]).toMatchObject({ res: { requestId: 'd', status: 'no_match' }, draftBody: '', selected: false, logged: false });
   });
 });

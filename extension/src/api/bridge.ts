@@ -933,27 +933,40 @@ function requireEligibilityBridgeUrl(): void {
   }
 }
 
+function toRawEligibilityEmail(o: Record<string, unknown>): RawEligibilityEmail {
+  return {
+    threadId: String(o.threadId ?? ''),
+    messageId: String(o.messageId ?? ''),
+    from: String(o.from ?? ''),
+    fromEmail: String(o.fromEmail ?? '').toLowerCase(),
+    subject: String(o.subject ?? ''),
+    date: String(o.date ?? ''),
+    messageCount: Number(o.messageCount ?? 1),
+    plainBody: String(o.plainBody ?? ''),
+  };
+}
+
 export async function listEligibilityRequestsViaBridge(): Promise<{
   requests: RawEligibilityEmail[];
+  /** Threads Sidekick drafted a reply on earlier that haven't been sent yet. */
+  drafted: (RawEligibilityEmail & { draftId: string })[];
   excludedDomains: string[];
   skippedUnknownSender: number;
+  /** The unknown-sender scan hit its cap, so the count is a lower bound. */
+  skippedUnknownSenderCapped: boolean;
 }> {
   requireEligibilityBridgeUrl();
   const res = await callBridge('listEligibilityRequests', {}, 'eligibilityRequestsListed', 120_000, true, ELIGIBILITY_BRIDGE_URL);
   const raw = Array.isArray(res.requests) ? (res.requests as Record<string, unknown>[]) : [];
+  const rawDrafted = Array.isArray(res.drafted) ? (res.drafted as Record<string, unknown>[]) : [];
   return {
-    requests: raw.map((o) => ({
-      threadId: String(o.threadId ?? ''),
-      messageId: String(o.messageId ?? ''),
-      from: String(o.from ?? ''),
-      fromEmail: String(o.fromEmail ?? '').toLowerCase(),
-      subject: String(o.subject ?? ''),
-      date: String(o.date ?? ''),
-      messageCount: Number(o.messageCount ?? 1),
-      plainBody: String(o.plainBody ?? ''),
-    })),
+    requests: raw.map(toRawEligibilityEmail),
+    drafted: rawDrafted
+      .map((o) => ({ ...toRawEligibilityEmail(o), draftId: String(o.draftId ?? '') }))
+      .filter((d) => d.draftId && d.messageId),
     excludedDomains: Array.isArray(res.excludedDomains) ? (res.excludedDomains as unknown[]).map(String) : [],
     skippedUnknownSender: Number(res.skippedUnknownSender ?? 0),
+    skippedUnknownSenderCapped: res.skippedUnknownSenderCapped === true,
   };
 }
 
@@ -967,11 +980,17 @@ export async function createEligibilityDraftViaBridge(messageId: string, body: s
 
 export async function sendEligibilityDraftsViaBridge(
   draftIds: string[],
-): Promise<{ draftId: string; ok: boolean; error?: string }[]> {
+): Promise<{ draftId: string; ok: boolean; error?: string; warning?: string; alreadySent?: boolean }[]> {
   requireEligibilityBridgeUrl();
   const res = await callBridge('sendEligibilityDrafts', { draftIds: draftIds.join(',') }, 'eligibilityDraftsSent', 300_000, true, ELIGIBILITY_BRIDGE_URL);
   const raw = Array.isArray(res.results) ? (res.results as Record<string, unknown>[]) : [];
-  return raw.map((r) => ({ draftId: String(r.draftId ?? ''), ok: r.ok === true, error: r.error ? String(r.error) : undefined }));
+  return raw.map((r) => ({
+    draftId: String(r.draftId ?? ''),
+    ok: r.ok === true,
+    error: r.error ? String(r.error) : undefined,
+    warning: r.warning ? String(r.warning) : undefined,
+    alreadySent: r.alreadySent === true ? true : undefined,
+  }));
 }
 
 export async function logEligibilityResultViaBridge(row: EligibilityLogRow): Promise<void> {

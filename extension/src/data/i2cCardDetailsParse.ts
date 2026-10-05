@@ -12,12 +12,18 @@ export function readLabelValue(leaves: string[], label: string): string | null {
   return next;
 }
 
-export function readProgramForLast4(headers: string[], rows: string[][], last4: string): string | null {
-  const col = headers.findIndex((h) => norm(h) === 'program');
+/** The `columnName` cell of the row whose masked card number ends in `last4`. */
+export function readColumnForLast4(headers: string[], rows: string[][], last4: string, columnName: string): string | null {
+  const want = norm(columnName);
+  const col = headers.findIndex((h) => norm(h) === want);
   if (col < 0) return null;
   const row = rows.find((r) => r.some((cell) => new RegExp(`[*x•]{3,}${last4}\\b`, 'i').test(cell)));
   const v = row?.[col]?.replace(/\s+/g, ' ').trim();
   return v ? v : null;
+}
+
+export function readProgramForLast4(headers: string[], rows: string[][], last4: string): string | null {
+  return readColumnForLast4(headers, rows, last4, 'Program');
 }
 
 export function parseI2cDelinquency(s: string | undefined): boolean | null {

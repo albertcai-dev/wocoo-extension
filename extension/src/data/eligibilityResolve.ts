@@ -89,6 +89,8 @@ export function resolveFromWarehouse(req: EligibilityRequest, rows: WarehouseRow
   return null;
 }
 
+const I2C_DATE_RE = /^\d{2}\/\d{2}\/\d{4}$/;
+
 export function resolveFromI2c(
   req: EligibilityRequest,
   args: {
@@ -105,7 +107,8 @@ export function resolveFromI2c(
   const cards: CardFact[] = open.map((c) => ({
     last4: c.last4,
     product: args.mapProgram(c.program) ?? '',
-    creationDate: c.creationDate ?? '',
+    // M4: only a real MM/DD/YYYY date counts; anything else reads as incomplete details.
+    creationDate: I2C_DATE_RE.test((c.creationDate ?? '').trim()) ? (c.creationDate ?? '').trim() : '',
     delinquent: args.parseDelinquency(c.delinquencyStatus),
   }));
   const how = args.method === 'i2c_email' ? 'i2c: listed email + last 4.' : 'Atlas phone + name → i2c last 4.';

@@ -131,6 +131,19 @@ describe('resolveFromI2c', () => {
     expect(r.flags.sort()).toEqual(['i2c_details_incomplete', 'unknown_product']);
     expect(isDraftable(r)).toBe(false);
   });
+
+  it('treats a creation date that is not MM/DD/YYYY as incomplete details', () => {
+    for (const creationDate of ['N/A', '2026-07-07', '7/7/2026', '07/07/2026 extra']) {
+      const r = resolveFromI2c(req(), {
+        email: 'x@example.com', method: 'i2c_email', identityId: null, ...deps,
+        cards: [{ last4: '1763', status: 'ACTIVE', closed: false, program: 'Wealthsimple Visa Infinite VIP 01 Physical',
+          delinquencyStatus: 'Current / Not Delinquent', creationDate }],
+      })!;
+      expect(r.cards[0].creationDate).toBe('');
+      expect(r.flags).toEqual(['i2c_details_incomplete']);
+      expect(isDraftable(r)).toBe(false);
+    }
+  });
 });
 
 describe('noMatch', () => {

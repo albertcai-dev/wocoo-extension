@@ -15,7 +15,10 @@ import { toLogRow } from '../data/eligibilityLog';
 import { parseEligibilityEmail } from '../data/eligibilityParse';
 import { isDraftable } from '../data/eligibilityResolve';
 import { resolveBatch, type ResolveDeps } from '../data/eligibilityRun';
-import { canRunStep3, defaultSelected, EMPTY_RUN, nextLogStatus, RUN_STATE_KEY, unsentLoggedCount, type RunState } from '../data/eligibilityRunState';
+import {
+  canRunStep3, earlierDraftRow, earlierRunResolution, EMPTY_RUN, mergeResolutions, nextLogStatus, rowsToResolve, RUN_STATE_KEY,
+  unsentDraftCount, unsentLoggedCount, type RunRow, type RunState,
+} from '../data/eligibilityRunState';
 import { buildEligibilitySql } from '../data/eligibilitySql';
 import { fetchI2cCardDetailsHeadless } from '../data/i2cCardLookup';
 import { parsePastedResults, PRESET_DIRECT_ENABLED, PresetAuthError, runPresetSql } from '../data/presetSql';
@@ -62,44 +65,60 @@ export function EligibilityTriage({ onClose }: { onClose: () => void }) {
     void chrome.storage.session.set({ [RUN_STATE_KEY]: next });
   };
 
+  /** I1: losing the in-panel view of unsent drafts needs an explicit OK. */
+  function confirmDiscardUnsent(): boolean {
+    const n = unsentDraftCount(run.rows);
+    return n === 0 || window.confirm(`${n} draft${n === 1 ? '' : 's'} in this run haven't been sent. Continue?`);
+  }
+
   async function onFetch() {
+    if (!confirmDiscardUnsent()) return;
     setBusy('Reading creditcardoperations@ inbox…'); setError('');
     try {
-      const { requests, excludedDomains, skippedUnknownSender } = await listEligibilityRequestsViaBridge();
-      const rows = requests.map((raw) => ({
+      const { requests, drafted, excludedDomains, skippedUnknownSender, skippedUnknownSenderCapped } = await listEligibilityRequestsViaBridge();
+      const fresh: RunRow[] = requests.map((raw) => ({
         req: parseEligibilityEmail(raw, excludedDomains),
         res: null, selected: false, draftId: '', draftBody: '', sent: 'no' as const, sendError: '', logged: false, sentLogged: false,
       }));
-      save({ stage: 'fetched', rows, skippedUnknownSender, sql: buildEligibilitySql(rows.map((r) => r.req)) ?? '' });
+      // I1: drafts from an earlier run (panel state lost) come back so they can still be sent.
+      const seen = new Set(fresh.map((r) => r.req.messageId));
+      const earlier = drafted
+        .filter((d) => !seen.has(d.messageId))
+        .map(({ draftId, ...raw }) => earlierDraftRow(parseEligibilityEmail(raw, excludedDomains), draftId));
+      const rows = [...fresh, ...earlier];
+      save({
+        stage: 'fetched', rows, skippedUnknownSender, skippedUnknownSenderCapped,
+        sql: buildEligibilitySql(fresh.map((r) => r.req)) ?? '',
+      });
     } catch (e) {
       setError((e as Error).message);
     } finally { setBusy(''); }
   }
 
-  async function onResolve(pastedRows?: Record<string, unknown>[]) {
+  async function onResolve(pastedText?: string) {
     setBusy('Matching clients…'); setError('');
-    const runSql = pastedRows
-      ? async () => pastedRows
-      : PRESET_DIRECT_ENABLED
-        ? (sql: string) => runPresetSql(sql)
-        : async () => { throw new Error('Direct Preset is off — use Copy SQL and paste the results.'); };
     try {
-      const results = await resolveBatch(run.rows.map((r) => r.req), {
+      // M1: parse inside the try so a bad paste surfaces as an error.
+      const pastedRows = pastedText !== undefined ? parsePastedResults(pastedText) : undefined;
+      const runSql = pastedRows
+        ? async () => pastedRows
+        : PRESET_DIRECT_ENABLED
+          ? (sql: string) => runPresetSql(sql)
+          : async () => { throw new Error('Direct Preset is off — use Copy SQL and paste the results.'); };
+      // I5: drafted/sent rows (incl. earlier-run rows) are never re-resolved.
+      const results = await resolveBatch(rowsToResolve(run.rows).map((r) => r.req), {
         runSql,
         ...liveDeps((id, stage) => setProgress((p) => ({ ...p, [id]: stage }))),
       });
-      const rows = run.rows.map((r, i) => {
-        const res = results[i];
-        const draftBody = isDraftable(res)
+      const rows = mergeResolutions(run.rows, results, (r, res) =>
+        isDraftable(res)
           ? renderEligibilityDraft({
               clientEmail: res.clientEmail,
               emailWasProvided: !!res.clientEmail && r.req.emails.includes(res.clientEmail),
               cards: res.cards,
               requestedLast4: r.req.last4 ?? '',
             })
-          : '';
-        return { ...r, res, draftBody, selected: defaultSelected(res) && !!draftBody, logged: false };
-      });
+          : '');
       setPasteMode(false);
       save({ ...run, stage: 'resolved', rows });
     } catch (e) {
@@ -147,15 +166,17 @@ export function EligibilityTriage({ onClose }: { onClose: () => void }) {
         const byId = new Map(results.map((x) => [x.draftId, x]));
         rows = run.rows.map((r) => {
           const x = byId.get(r.draftId);
-          return x ? { ...r, sent: x.ok ? ('ok' as const) : ('failed' as const), sendError: x.error ?? '' } : r;
+          if (!x) return r;
+          const sendNote = !x.ok ? '' : x.alreadySent ? 'Already sent earlier — not sent again.' : x.warning ?? '';
+          return { ...r, sent: x.ok ? ('ok' as const) : ('failed' as const), sendError: x.ok ? '' : x.error ?? '', sendNote };
         });
         // Persist sent status BEFORE any logging so a log failure can't lose it.
         save({ ...run, stage: 'sent', rows });
       }
       for (let i = 0; i < rows.length; i++) {
         const r = rows[i];
-        if (r.sent === 'ok' && r.res && !r.sentLogged) {
-          await logEligibilityResultViaBridge(toLogRow(r.req, r.res, 'READ_EMAIL', r.draftId));
+        if (r.sent === 'ok' && !r.sentLogged) {
+          await logEligibilityResultViaBridge(toLogRow(r.req, r.res ?? earlierRunResolution(r.req.messageId), 'READ_EMAIL', r.draftId));
           rows = [...rows];
           rows[i] = { ...r, sentLogged: true };
           save({ ...run, stage: 'sent', rows });
@@ -173,27 +194,27 @@ export function EligibilityTriage({ onClose }: { onClose: () => void }) {
   return (
     <div style={{ padding: 'var(--mint-sp-3)', display: 'flex', flexDirection: 'column', gap: 'var(--mint-sp-3)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <button onClick={onClose}>← Back</button>
+        <button disabled={!!busy} onClick={onClose}>← Back</button>
         <h2 style={{ margin: 0, fontSize: 'var(--mint-text-h-sm)' }}>Insurance Eligibility Confirmation Triage</h2>
       </div>
 
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
         <button disabled={!!busy} onClick={onFetch}>1. Fetch requests</button>
-        <button disabled={!!busy || run.stage === 'idle' || !run.rows.length} onClick={() => onResolve()}>2. Resolve</button>
+        <button disabled={!!busy || run.stage === 'idle' || !rowsToResolve(run.rows).length} onClick={() => onResolve()}>2. Resolve</button>
         <button disabled={!canRunStep3(run.rows, !!busy)} onClick={onCreateDrafts}>3. Create drafts & log ({draftCount})</button>
         {confirmSend ? (
           <button disabled={!!busy} onClick={onSendAll} style={{ fontWeight: 700 }}>Confirm send {sendable}</button>
         ) : (
           <button disabled={!!busy || !(sendable || pendingSentLogs)} onClick={() => (sendable ? setConfirmSend(true) : void onSendAll())}>4. {sendable || !pendingSentLogs ? `Send all drafts (${sendable})` : `Retry logging (${pendingSentLogs})`}</button>
         )}
-        {run.stage !== 'idle' ? <button disabled={!!busy} onClick={() => save(EMPTY_RUN)}>Clear</button> : null}
+        {run.stage !== 'idle' ? <button disabled={!!busy} onClick={() => { if (confirmDiscardUnsent()) save(EMPTY_RUN); }}>Clear</button> : null}
       </div>
 
       {busy ? <div style={{ color: 'var(--mint-fg-soft)' }}>{busy}</div> : null}
       {error ? <div style={{ color: 'var(--mint-fg-danger, #b00020)' }}>{error}</div> : null}
       {run.skippedUnknownSender > 0 ? (
         <div style={{ color: 'var(--mint-fg-soft)' }}>
-          {run.skippedUnknownSender} unread email(s) from senders not on the Insurers tab were skipped. Check the inbox.
+          {run.skippedUnknownSender}{run.skippedUnknownSenderCapped ? '+' : ''} unread email(s) from senders not on the Insurers tab were skipped. Check the inbox.
         </div>
       ) : null}
 
@@ -204,13 +225,13 @@ export function EligibilityTriage({ onClose }: { onClose: () => void }) {
             Run it in Preset SQL Lab (Pantheon), copy the result table, paste below.
           </div>
           <textarea rows={6} value={pasted} onChange={(e) => setPasted(e.target.value)} />
-          <button disabled={!pasted.trim()} onClick={() => onResolve(parsePastedResults(pasted))}>Use pasted results</button>
+          <button disabled={!!busy || !pasted.trim()} onClick={() => onResolve(pasted)}>Use pasted results</button>
         </div>
       ) : null}
 
       {run.rows.map((r, i) => {
         const res = r.res;
-        const icon = !res ? '•' : r.sent === 'ok' ? '📤' : res.status === 'matched' ? '✅' : res.status === 'needs_review' ? '⚠️' : '❌';
+        const icon = r.sent === 'ok' ? '📤' : r.earlier ? '📝' : !res ? '•' : res.status === 'matched' ? '✅' : res.status === 'needs_review' ? '⚠️' : '❌';
         return (
           <div key={r.req.messageId} style={{ border: 'var(--mint-card-stroke)', borderRadius: 'var(--mint-radius-card)', padding: 'var(--mint-sp-2)' }}>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -223,6 +244,9 @@ export function EligibilityTriage({ onClose }: { onClose: () => void }) {
               Emails: {r.req.emails.join(', ') || '—'} · Phone: {r.req.phone ?? '—'}
               {progress[r.req.messageId] ? ` · ${progress[r.req.messageId]}` : ''}
             </div>
+            {r.earlier && r.sent !== 'ok' ? (
+              <div style={{ fontSize: 'var(--mint-text-nano)', fontWeight: 600 }}>Drafted earlier — not yet sent</div>
+            ) : null}
             {res ? (
               <div style={{ fontSize: 'var(--mint-text-nano)' }}>
                 {res.method ? `Matched: ${res.method}` : 'Not matched'} — {res.note}
@@ -236,7 +260,7 @@ export function EligibilityTriage({ onClose }: { onClose: () => void }) {
                   <input
                     type="checkbox"
                     checked={r.selected}
-                    disabled={!!r.draftId}
+                    disabled={!!busy || !!r.draftId}
                     onChange={(e) => {
                       const rows = [...run.rows];
                       rows[i] = { ...r, selected: e.target.checked };
@@ -249,6 +273,7 @@ export function EligibilityTriage({ onClose }: { onClose: () => void }) {
               </>
             ) : null}
             {r.sent === 'failed' ? <div style={{ color: 'var(--mint-fg-danger, #b00020)' }}>Send failed: {r.sendError}</div> : null}
+            {r.sent === 'ok' && r.sendNote ? <div style={{ fontSize: 'var(--mint-text-nano)', color: 'var(--mint-fg-soft)' }}>{r.sendNote}</div> : null}
           </div>
         );
       })}

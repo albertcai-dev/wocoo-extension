@@ -17,12 +17,18 @@ export interface RunRow {
   logged: boolean;
   /** READ_EMAIL has been written after a successful send. */
   sentLogged: boolean;
+  /** Re-listed from Gmail: Sidekick drafted it in an earlier run and it hasn't been sent. Never re-resolved. */
+  earlier?: boolean;
+  /** Informational note on a successful send (already sent earlier / tidy-up warning). */
+  sendNote?: string;
 }
 
 export interface RunState {
   stage: 'idle' | 'fetched' | 'resolved' | 'drafted' | 'sent';
   rows: RunRow[];
   skippedUnknownSender: number;
+  /** The unknown-sender scan hit its cap, so the count is a lower bound ("200+"). */
+  skippedUnknownSenderCapped?: boolean;
   /** Last generated warehouse SQL, for the Copy SQL fallback. */
   sql: string;
 }
@@ -45,9 +51,52 @@ export function unloggedCount(rows: RunRow[]): number {
   return rows.filter((r) => r.res && !r.logged).length;
 }
 
-/** Rows that were sent but whose READ_EMAIL log hasn't been written. */
+/** Rows that were sent but whose READ_EMAIL log hasn't been written (incl. earlier-run rows with no Resolution). */
 export function unsentLoggedCount(rows: RunRow[]): number {
-  return rows.filter((r) => r.sent === 'ok' && r.res && !r.sentLogged).length;
+  return rows.filter((r) => r.sent === 'ok' && !r.sentLogged).length;
+}
+
+/** Drafts in this run that exist in Gmail but haven't been sent — losing the panel view of them needs a confirm. */
+export function unsentDraftCount(rows: RunRow[]): number {
+  return rows.filter((r) => r.draftId && r.sent !== 'ok').length;
+}
+
+/** A row for a thread Sidekick drafted in an earlier run: already logged as DRAFTED, waiting to be sent. */
+export function earlierDraftRow(req: EligibilityRequest, draftId: string): RunRow {
+  return {
+    req, res: null, selected: false, draftId, draftBody: '', sent: 'no', sendError: '', logged: true, sentLogged: false,
+    earlier: true,
+  };
+}
+
+/** Minimal Resolution used to log READ_EMAIL for an earlier-run row that was never resolved in this run. */
+export function earlierRunResolution(requestId: string): Resolution {
+  return {
+    requestId, status: 'matched', method: null, clientEmail: null, identityId: null,
+    cards: [], flags: [], candidates: [], note: 'Sent from an earlier Sidekick run.',
+  };
+}
+
+/** Rows Resolve may (re-)resolve: anything already drafted is left alone. */
+export function rowsToResolve(rows: RunRow[]): RunRow[] {
+  return rows.filter((r) => !r.draftId);
+}
+
+/**
+ * Applies fresh resolutions by requestId. Rows with a draftId, or with no result, come back unchanged.
+ * `draftBodyFor` renders the reply ('' when the resolution isn't draftable).
+ */
+export function mergeResolutions(
+  rows: RunRow[], results: Resolution[], draftBodyFor: (row: RunRow, res: Resolution) => string,
+): RunRow[] {
+  const byId = new Map(results.map((x) => [x.requestId, x]));
+  return rows.map((r) => {
+    if (r.draftId) return r;
+    const res = byId.get(r.req.messageId);
+    if (!res) return r;
+    const draftBody = draftBodyFor(r, res);
+    return { ...r, res, draftBody, selected: defaultSelected(res) && !!draftBody, logged: false };
+  });
 }
 
 /** Step 3 (create drafts & log) is available while there are drafts to create or rows to log. */

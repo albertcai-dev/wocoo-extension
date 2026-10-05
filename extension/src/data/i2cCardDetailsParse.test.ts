@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseI2cDelinquency, readLabelValue, readProgramForLast4 } from './i2cCardDetailsParse';
+import { parseI2cDelinquency, readColumnForLast4, readLabelValue, readProgramForLast4 } from './i2cCardDetailsParse';
 import { mapI2cProgram } from './eligibilityProducts';
 
 const LEAVES = [
@@ -32,6 +32,24 @@ describe('readProgramForLast4', () => {
     const rows = [['412650******6990', '527024663778', 'Wealthsimple Visa Infinite VIP 01 Physical', 'Credit - Primary']];
     expect(readProgramForLast4(headers, rows, '6990')).toBe('Wealthsimple Visa Infinite VIP 01 Physical');
     expect(readProgramForLast4(headers, rows, '1111')).toBeNull();
+  });
+});
+
+describe('readColumnForLast4', () => {
+  const headers = ['Account Number', 'Account Ref. Num', 'Program', 'Account Type'];
+  const rows = [
+    ['412650******0162', '527024000001', 'Wealthsimple Visa Infinite VIP 01 Physical', 'Credit - Primary'],
+    ['412650******6990', '527024663778', 'Wealthsimple Visa Infinite VIP 01 Physical', 'Credit - Primary'],
+  ];
+  it('reads the named column of the row containing the last 4', () => {
+    expect(readColumnForLast4(headers, rows, '6990', 'Account Ref. Num')).toBe('527024663778');
+    expect(readColumnForLast4(headers, rows, '0162', 'account ref. num:')).toBe('527024000001');
+  });
+  it('returns null when the column is missing', () => {
+    expect(readColumnForLast4(headers, rows, '6990', 'Card Reference Number')).toBeNull();
+  });
+  it('returns null when no row has the last 4', () => {
+    expect(readColumnForLast4(headers, rows, '1111', 'Account Ref. Num')).toBeNull();
   });
 });
 

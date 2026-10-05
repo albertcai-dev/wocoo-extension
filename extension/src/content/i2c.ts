@@ -4,7 +4,7 @@
 // The login form is a server-rendered JSP, so the inputs exist by document_idle. We
 // retry a few times anyway in case the form is replaced after first paint.
 
-import { readLabelValue, readProgramForLast4 } from '../data/i2cCardDetailsParse';
+import { readColumnForLast4, readLabelValue, readProgramForLast4 } from '../data/i2cCardDetailsParse';
 
 export {}; // Module-scoped so helpers don't collide with other content scripts at the TS layer.
 
@@ -1308,15 +1308,21 @@ function enrichCards(cards: ScrapedCard[]): ScrapedCard[] {
     break;
   }
   const leaves = leafTextsForDetails();
-  const open = cards.filter((c) => !c.closed);
   const delinquencyStatus = readLabelValue(leaves, 'Delinquency Status:') ?? undefined;
   const creationDate = readLabelValue(leaves, 'Card Creation Date:') ?? undefined;
-  return cards.map((c) => ({
-    ...c,
-    program: readProgramForLast4(headers, rows, c.last4) ?? undefined,
-    // The Card Details panel describes one card; only trust it when there is exactly one open card.
-    ...(open.length === 1 && !c.closed ? { delinquencyStatus, creationDate } : {}),
-  }));
+  // The Card Details panel describes ONE card — often the closed one after a reissue.
+  // Attach its facts only to the card it provably describes: its Card Reference Number
+  // equals that card's Account Ref. Num, or (no ref readable) the page has a single card.
+  const panelRef = readLabelValue(leaves, 'Card Reference Number:')?.replace(/\s+/g, '') || null;
+  return cards.map((c) => {
+    const cardRef = readColumnForLast4(headers, rows, c.last4, 'Account Ref. Num')?.replace(/\s+/g, '') || null;
+    const describesThisCard = panelRef !== null ? panelRef === cardRef : cards.length === 1;
+    return {
+      ...c,
+      program: readProgramForLast4(headers, rows, c.last4) ?? undefined,
+      ...(!c.closed && describesThisCard ? { delinquencyStatus, creationDate } : {}),
+    };
+  });
 }
 
 async function tryCardDetailsScrape(): Promise<boolean> {
