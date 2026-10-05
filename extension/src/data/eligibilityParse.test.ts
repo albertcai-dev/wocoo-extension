@@ -39,6 +39,10 @@ describe('normalizeName', () => {
     expect(normalizeName('Jean-François')).toBe('jean-francois');
     expect(normalizeName('Dr. Ana')).toBe('dr ana');
   });
+
+  it('converts curly apostrophes to straight ones', () => {
+    expect(normalizeName('Zoë O’Neil')).toBe("zoe o'neil");
+  });
 });
 
 describe('splitName', () => {
@@ -113,5 +117,62 @@ On Mon, Sep 29, 2026 at 9:00 AM Credit Card Operations <creditcardoperations@wea
   it('strips a leading 1 from an 11-digit phone and rejects short numbers', () => {
     expect(parseEligibilityEmail(raw({ plainBody: 'Tel: +1 (416) 555-0142' }), EXCLUDED).phone).toBe('4165550142');
     expect(parseEligibilityEmail(raw({ plainBody: 'Phone: 555-0142' }), EXCLUDED).phone).toBeNull();
+  });
+
+  it('ignores unlabelled phone numbers in signature blocks', () => {
+    const body = `Cardholder: Priya Ramanathan
+last 4 digits - 1763
+
+Jane Adjuster
+Office 905-555-0100`;
+    const r = parseEligibilityEmail(raw({ plainBody: body }), EXCLUDED);
+    expect(r.phone).toBeNull();
+  });
+
+  it('strips Outlook-style quoted sections', () => {
+    const body = `Cardholder: Priya Ramanathan
+Email: priya.r1985@example.com
+last 4 digits - 1763
+
+-----Original Message-----
+From: Someone Else <someone.else@example.com>
+Sent: Monday, September 29, 2026 9:00 AM
+To: Jane Adjuster
+Subject: RE: Eligibility Request
+
+Here are the requested details:
+Last 4 digits of card: 5555
+ending in 7777`;
+    const r = parseEligibilityEmail(raw({ plainBody: body }), EXCLUDED);
+    expect(r.last4).toBe('1763');
+    expect(r.warnings).toEqual([]);
+    expect(r.emails).toEqual(['priya.r1985@example.com']);
+  });
+
+  it('strips two-line Gmail quoted sections', () => {
+    const body = `Cardholder: Priya Ramanathan
+Email: priya.r1985@example.com
+last 4 digits - 1763
+
+On Mon, Sep 29, 2026 at 9:00 AM Credit Card Operations <creditcardoperations@example.com>
+wrote:
+> Here are the requested details for client someone.else@example.com:
+> • Last 4 digits of card: 5555`;
+    const r = parseEligibilityEmail(raw({ plainBody: body }), EXCLUDED);
+    expect(r.last4).toBe('1763');
+    expect(r.warnings).toEqual([]);
+    expect(r.emails).toEqual(['priya.r1985@example.com']);
+  });
+
+  it('accepts cardholder name with curly apostrophe from subject line', () => {
+    const r = parseEligibilityEmail(
+      raw({
+        subject: 'Eligibility Confirmation Request - Zoë O’Neil',
+        plainBody: 'Card ending in 1763. Email: priya.r1985@example.com',
+      }),
+      EXCLUDED,
+    );
+    expect(r.cardholderName?.raw).toBe('Zoë O’Neil');
+    expect(r.last4).toBe('1763');
   });
 });

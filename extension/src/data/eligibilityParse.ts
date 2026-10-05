@@ -14,7 +14,7 @@ const LAST4_PATTERNS: RegExp[] = [
   /\d{4,6}[*xX•]{3,}(\d{4})\b/g,
   /[*xX•]{4,}\s?(\d{4})\b/g,
 ];
-const SUBJECT_NAME_RE = /^[A-Za-zÀ-ÿ''.-]+(?:\s+[A-Za-zÀ-ÿ''.-]+){1,3}$/;
+const SUBJECT_NAME_RE = /^[A-Za-zÀ-ÿ’'.-]+(?:\s+[A-Za-zÀ-ÿ’'.-]+){1,3}$/;
 const CLAIM_RE = /claim\s*(?:#|no\.?|number)?\s*[:\-]?\s*([A-Z0-9-]{5,})/i;
 
 export function normalizeName(s: string): string {
@@ -22,7 +22,7 @@ export function normalizeName(s: string): string {
     .normalize('NFD')
     .replace(/[̀-ͯ]/g, '')
     .toLowerCase()
-    .replace(/[']/g, "'")
+    .replace(/[’]/g, "'")
     .replace(/[^a-z\s'-]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -35,9 +35,38 @@ export function splitName(raw: string): PersonName | null {
   return { first: parts.slice(0, -1).join(' '), last: parts[parts.length - 1], raw: clean };
 }
 
-/** Drop quoted reply history: everything from an "On … wrote:" line, plus `>` lines. */
+/** Drop quoted reply history: everything from quote markers, plus `>` lines. */
 function stripQuoted(body: string): string {
-  const cut = body.search(/^On .+wrote:\s*$/m);
+  let cut = -1;
+
+  // Single-line Gmail: "On … wrote:"
+  const singleLineGmail = body.search(/^On .+wrote:\s*$/m);
+  if (singleLineGmail >= 0) cut = singleLineGmail;
+
+  // Multi-line Gmail: "On …\nwrote:"
+  if (cut < 0) {
+    const multiLineGmail = body.search(/^On .+\nwrote:\s*$/m);
+    if (multiLineGmail >= 0) cut = multiLineGmail;
+  }
+
+  // Outlook: "-----Original Message-----"
+  if (cut < 0) {
+    const outlook1 = body.search(/^-{5,}Original Message-{5,}\s*$/m);
+    if (outlook1 >= 0) cut = outlook1;
+  }
+
+  // Outlook: "From: …" followed by "Sent:" or "Date:"
+  if (cut < 0) {
+    const outlook2 = body.search(/^From: .+\n(?:Sent|Date):/m);
+    if (outlook2 >= 0) cut = outlook2;
+  }
+
+  // Forwarded: "---------- Forwarded message"
+  if (cut < 0) {
+    const forwarded = body.search(/^-{2,}\s*Forwarded message/m);
+    if (forwarded >= 0) cut = forwarded;
+  }
+
   const head = cut >= 0 ? body.slice(0, cut) : body;
   return head
     .split('\n')
@@ -102,8 +131,7 @@ export function parseEligibilityEmail(raw: RawEligibilityEmail, excludedDomains:
   const cardholderName = nameRaw ? splitName(nameRaw) : null;
 
   const phoneLabel = labelled(body, PHONE_LABELS);
-  const phoneMatch = (phoneLabel ?? '').match(PHONE_RE) ?? body.match(PHONE_RE);
-  const phone = phoneLabel ? normalizePhone(phoneLabel) : phoneMatch ? normalizePhone(phoneMatch[0]) : null;
+  const phone = phoneLabel ? normalizePhone(phoneLabel) : null;
 
   const last4s = findLast4s(body);
   if (last4s.length > 1) warnings.push('Multiple last-4 values found: ' + last4s.join(', '));
