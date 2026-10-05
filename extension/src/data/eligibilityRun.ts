@@ -23,11 +23,15 @@ const i2cDeps = { mapProgram: mapI2cProgram, parseDelinquency: parseI2cDelinquen
 
 function nameMatches(req: EligibilityRequest, hit: AtlasPhoneHit): boolean {
   if (!req.cardholderName) return false;
-  const wantFirst = normalizeName(req.cardholderName.first).split(' ')[0];
-  const wantLast = normalizeName(req.cardholderName.last);
-  const gotFirst = normalizeName(hit.firstName).split(' ')[0];
-  const gotLast = normalizeName(hit.lastName);
-  return !!wantFirst && wantFirst === gotFirst && wantLast === gotLast;
+  // Atlas gives only a full name, and the request may carry a middle name in either
+  // field: the first names must agree on the first token, and the full name must be
+  // exactly "first last" or end with the request's last name.
+  const hitFull = normalizeName(hit.fullName);
+  const reqFirst = normalizeName(req.cardholderName.first).split(' ')[0];
+  const reqLast = normalizeName(req.cardholderName.last);
+  if (!hitFull || !reqFirst || !reqLast) return false;
+  return hitFull.split(' ')[0] === reqFirst
+    && (hitFull === reqFirst + ' ' + reqLast || hitFull.endsWith(' ' + reqLast));
 }
 
 async function resolveLive(req: EligibilityRequest, deps: ResolveDeps): Promise<Resolution> {
@@ -51,7 +55,7 @@ async function resolveLive(req: EligibilityRequest, deps: ResolveDeps): Promise<
       if (hits.length > 1) {
         return multipleCandidates(
           req,
-          hits.map((h) => ({ identityId: h.identityId, clientEmail: h.email ?? '', name: `${h.firstName} ${h.lastName}` })),
+          hits.map((h) => ({ identityId: h.identityId, clientEmail: h.email ?? '', name: h.fullName })),
           `${hits.length} Atlas identities share this phone and name.`,
         );
       }

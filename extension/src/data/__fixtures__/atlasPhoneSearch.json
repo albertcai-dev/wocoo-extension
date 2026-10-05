@@ -1,0 +1,93 @@
+{
+  "data": {
+    "searchForUsers": {
+      "user": {
+        "total": 4,
+        "hits": [
+          {
+            "source": {
+              "fullName": "Priya Ramanathan",
+              "phone": "(416) 555-0142",
+              "email": "Priya.Test1@example.com",
+              "authTags": [],
+              "custodianAccountIds": [],
+              "accountCanonicalIds": [],
+              "identityId": "identity-TESTaaaaAAAA1111",
+              "id": "user-TESTaaaa0001",
+              "cashHandle": null,
+              "__typename": "UserSearchSource"
+            },
+            "highlights": null,
+            "__typename": "UserSearchHit"
+          },
+          {
+            "source": {
+              "fullName": "Priya Ramanathan",
+              "phone": "(416) 555-0142",
+              "email": "priya.test2@example.com",
+              "authTags": [],
+              "custodianAccountIds": [],
+              "accountCanonicalIds": [],
+              "identityId": "identity-TESTaaaaAAAA1111",
+              "id": "user-TESTaaaa0002",
+              "cashHandle": null,
+              "__typename": "UserSearchSource"
+            },
+            "highlights": null,
+            "__typename": "UserSearchHit"
+          },
+          {
+            "source": {
+              "fullName": "  Priya Ramanathan ",
+              "phone": "(416) 555-0142",
+              "email": null,
+              "authTags": [],
+              "custodianAccountIds": [],
+              "accountCanonicalIds": [],
+              "identityId": "identity-TESTaaaaAAAA1111",
+              "id": "user-TESTaaaa0003",
+              "cashHandle": null,
+              "__typename": "UserSearchSource"
+            },
+            "highlights": null,
+            "__typename": "UserSearchHit"
+          },
+          {
+            "source": {
+              "fullName": "Sam Example Tester",
+              "phone": "(416) 555-9999",
+              "email": "sam.tester@example.com",
+              "authTags": [],
+              "custodianAccountIds": [],
+              "accountCanonicalIds": [],
+              "identityId": "identity-TESTbbbbBBBB2222",
+              "id": "user-TESTbbbb0001",
+              "cashHandle": null,
+              "__typename": "UserSearchSource"
+            },
+            "highlights": null,
+            "__typename": "UserSearchHit"
+          }
+        ],
+        "__typename": "UserSearchResults"
+      },
+      "employer": {
+        "total": 1,
+        "hits": [
+          {
+            "source": { "name": "Example Test Corp", "id": "employer-TEST0001", "__typename": "EmployerSearchSource" },
+            "highlights": null,
+            "__typename": "EmployerSearchHit"
+          }
+        ],
+        "__typename": "EmployerSearchResults"
+      },
+      "dedicatedAdvisorClient": {
+        "total": 0,
+        "hits": [],
+        "__typename": "DedicatedAdvisorClientSearchResults"
+      },
+      "__typename": "SearchResults"
+    }
+  }
+}

@@ -61,8 +61,8 @@ describe('resolveBatch', () => {
   it('falls back to Atlas phone → name check → Atlas email → i2c', async () => {
     const d = deps({
       atlasByPhone: async () => [
-        { identityId: 'identity-Z', firstName: 'Someone', lastName: 'Else', email: 'z@example.com' },
-        { identityId: 'identity-P', firstName: 'Priya', lastName: 'Ramanathan', email: null },
+        { identityId: 'identity-Z', fullName: 'Someone Else', firstName: 'Someone', lastName: 'Else', email: 'z@example.com' },
+        { identityId: 'identity-P', fullName: 'Priya Ramanathan', firstName: 'Priya', lastName: 'Ramanathan', email: null },
       ],
       atlasEmail: async () => 'real.priya@example.com',
       i2cCards: async (email) => (email === 'real.priya@example.com' ? i2cOpen : []),
@@ -76,12 +76,41 @@ describe('resolveBatch', () => {
   it('flags multiple name-matched Atlas identities instead of picking one', async () => {
     const d = deps({
       atlasByPhone: async () => [
-        { identityId: 'identity-P1', firstName: 'Priya', lastName: 'Ramanathan', email: 'a@example.com' },
-        { identityId: 'identity-P2', firstName: 'Priya', lastName: 'Ramanathan', email: 'b@example.com' },
+        { identityId: 'identity-P1', fullName: 'Priya Ramanathan', firstName: 'Priya', lastName: 'Ramanathan', email: 'a@example.com' },
+        { identityId: 'identity-P2', fullName: 'Priya Ramanathan', firstName: 'Priya', lastName: 'Ramanathan', email: 'b@example.com' },
       ],
     });
     const [r] = await resolveBatch([req('m1')], d);
     expect(r.flags).toEqual(['multiple_candidates']);
+  });
+
+  describe('Atlas name matching on fullName', () => {
+    async function matches(first: string, last: string, fullName: string): Promise<boolean> {
+      const [firstName, ...rest] = fullName.split(' ');
+      const d = deps({
+        atlasByPhone: async () => [
+          { identityId: 'identity-N', fullName, firstName, lastName: rest.join(' '), email: 'n@example.com' },
+        ],
+        i2cCards: async (email) => (email === 'n@example.com' ? i2cOpen : []),
+      });
+      const [r] = await resolveBatch(
+        [req('m1', { cardholderName: { first, last, raw: first + ' ' + last }, emails: [] })],
+        d,
+      );
+      return r.method === 'atlas_phone_i2c';
+    }
+
+    it('matches a multi-word surname', async () => {
+      expect(await matches('Hung', 'Lin Tai', 'Hung Lin Tai')).toBe(true);
+    });
+    it('matches a multi-word first name with or without the middle name on Atlas', async () => {
+      expect(await matches('Mary Ann', 'Smith', 'Mary Ann Smith')).toBe(true);
+      expect(await matches('Mary Ann', 'Smith', 'Mary Smith')).toBe(true);
+    });
+    it('does not match a longer first name or a truncated surname', async () => {
+      expect(await matches('Priya', 'Ramanathan', 'Priyanka Ramanathan')).toBe(false);
+      expect(await matches('Priya', 'Ramanathan', 'Priya Raman')).toBe(false);
+    });
   });
 
   it('never looks anything up for already-replied or no-last4 requests', async () => {
