@@ -21,17 +21,50 @@ export interface ResolveDeps {
 
 const i2cDeps = { mapProgram: mapI2cProgram, parseDelinquency: parseI2cDelinquency };
 
-function nameMatches(req: EligibilityRequest, hit: AtlasPhoneHit): boolean {
-  if (!req.cardholderName) return false;
-  // Atlas gives only a full name, and the request may carry a middle name in either
-  // field: the first names must agree on the first token, and the full name must be
-  // exactly "first last" or end with the request's last name.
+type NameMatch = 'exact' | 'variant' | 'none';
+
+/** Levenshtein distance <= 1 (substitution, insertion or deletion), without building a matrix. */
+function withinOneEdit(a: string, b: string): boolean {
+  if (Math.abs(a.length - b.length) > 1) return false;
+  let i = 0;
+  while (i < a.length && i < b.length && a[i] === b[i]) i++;
+  if (i === a.length && i === b.length) return true;
+  if (a.length === b.length) return a.slice(i + 1) === b.slice(i + 1);
+  return a.length > b.length ? a.slice(i + 1) === b.slice(i) : b.slice(i + 1) === a.slice(i);
+}
+
+const VARIANT_MIN_LEN = 4;
+
+/**
+ * Atlas gives only a full name, and the request may carry a middle name in either field.
+ * 'exact': first tokens agree and the full name is "first last" or ends with the request's last name.
+ * 'variant': same last-name rule, first tokens within one edit (both >= 4 chars). Only meaningful on
+ * the Atlas phone path, where the phone is already an exact digit match; it is never auto-drafted.
+ */
+function nameMatch(req: EligibilityRequest, hit: AtlasPhoneHit): NameMatch {
+  if (!req.cardholderName) return 'none';
   const hitFull = normalizeName(hit.fullName);
   const reqFirst = normalizeName(req.cardholderName.first).split(' ')[0];
   const reqLast = normalizeName(req.cardholderName.last);
-  if (!hitFull || !reqFirst || !reqLast) return false;
-  return hitFull.split(' ')[0] === reqFirst
-    && (hitFull === reqFirst + ' ' + reqLast || hitFull.endsWith(' ' + reqLast));
+  if (!hitFull || !reqFirst || !reqLast) return 'none';
+  if (!(hitFull === reqFirst + ' ' + reqLast || hitFull.endsWith(' ' + reqLast))) return 'none';
+  const hitFirst = hitFull.split(' ')[0];
+  if (hitFirst === reqFirst) return 'exact';
+  if (hitFirst.length >= VARIANT_MIN_LEN && reqFirst.length >= VARIANT_MIN_LEN && withinOneEdit(hitFirst, reqFirst)) return 'variant';
+  return 'none';
+}
+
+/** Marks a variant-name match for review; the user must tick it before a draft is created. */
+function withNameVariant(req: EligibilityRequest, hit: AtlasPhoneHit, r: Resolution): Resolution {
+  const reqFirst = req.cardholderName?.first.trim().split(/\s+/)[0] ?? '';
+  const atlasFirst = hit.fullName.trim().split(/\s+/)[0] ?? '';
+  const cap = (x: string) => x.charAt(0).toUpperCase() + x.slice(1).toLowerCase();
+  return {
+    ...r,
+    status: 'needs_review',
+    flags: [...new Set<EligibilityFlag>([...r.flags, 'name_variant'])],
+    note: `${r.note} First name differs: request "${cap(reqFirst)}", Atlas "${cap(atlasFirst)}".`.trim(),
+  };
 }
 
 /**
@@ -99,7 +132,11 @@ async function resolveLive(req: EligibilityRequest, deps: ResolveDeps): Promise<
   if (deps.atlasByPhone && req.phone && req.cardholderName) {
     deps.onProgress?.(req.messageId, 'Atlas: phone search');
     try {
-      const hits = (await deps.atlasByPhone(req.phone)).filter((h) => nameMatches(req, h));
+      const scored = (await deps.atlasByPhone(req.phone)).map((h) => ({ h, m: nameMatch(req, h) }));
+      // Exact matches win outright; variants only count when there is no exact match at all.
+      const exact = scored.filter((x) => x.m === 'exact');
+      const isVariant = exact.length === 0;
+      const hits = (isVariant ? scored.filter((x) => x.m === 'variant') : exact).map((x) => x.h);
       if (hits.length > 1) {
         return multipleCandidates(
           req,
@@ -114,7 +151,10 @@ async function resolveLive(req: EligibilityRequest, deps: ResolveDeps): Promise<
           deps.onProgress?.(req.messageId, `i2c: ${email}`);
           const cards = await deps.i2cCards(email, req.messageId);
           const r = resolveFromI2c(req, { email, method: 'atlas_phone_i2c', identityId: hit.identityId, cards, ...i2cDeps });
-          if (r) return await withWarehouseDetails(req, r, deps);
+          if (r) {
+            const res = await withWarehouseDetails(req, r, deps);
+            return isVariant ? withNameVariant(req, hit, res) : res;
+          }
         }
       }
     } catch (e) {

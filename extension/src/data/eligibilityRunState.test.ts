@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   canRunStep3, defaultSelected, EMPTY_RUN, earlierDraftRow, earlierRunResolution, formatSkippedLine, mergeResolutions, nextLogStatus, rowsToResolve,
-  sortSkippedNewestFirst, unloggedCount, unsentDraftCount, unsentLoggedCount, type RunRow,
+  shouldShowClientEmail, sortSkippedNewestFirst, unloggedCount, unsentDraftCount, unsentLoggedCount, type RunRow,
 } from './eligibilityRunState';
 import type { EligibilityRequest, Resolution } from './eligibilityTypes';
 
@@ -139,5 +139,15 @@ describe('formatSkippedLine / sortSkippedNewestFirst', () => {
     ];
     expect(sortSkippedNewestFirst(items).map((i) => i.subject)).toEqual(['new', 'old']);
     expect(items[0].subject).toBe('old');
+  });
+});
+
+describe('shouldShowClientEmail', () => {
+  it('shows the matched email whenever we have one', () => {
+    expect(shouldShowClientEmail({ ...base, clientEmail: 'real.address@example.com' })).toBe(true);
+  });
+  it('hides it when there is none', () => {
+    expect(shouldShowClientEmail({ ...base, clientEmail: null })).toBe(false);
+    expect(shouldShowClientEmail({ ...base, clientEmail: '' })).toBe(false);
   });
 });

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { resolveBatch, type ResolveDeps } from './eligibilityRun';
+import { isDraftable } from './eligibilityResolve';
 import type { EligibilityRequest } from './eligibilityTypes';
 
 function req(id: string, over: Partial<EligibilityRequest> = {}): EligibilityRequest {
@@ -115,6 +116,98 @@ describe('resolveBatch', () => {
       const [r] = await resolveBatch([req('m1', { emails: [] })], d);
       expect(r.flags).toEqual(['multiple_candidates']);
       expect(d.calls).toEqual([]);
+    });
+  });
+
+  describe('Atlas first-name spelling variants (phone path only)', () => {
+    const hit = (identityId: string, fullName: string, email: string) => {
+      const [firstName, ...rest] = fullName.split(' ');
+      return { identityId, fullName, firstName, lastName: rest.join(' '), email };
+    };
+    const named = (first: string, last: string) =>
+      req('m1', { cardholderName: { first, last, raw: first + ' ' + last }, emails: [] });
+    const withHits = (hits: ReturnType<typeof hit>[]) => {
+      const d = deps({
+        atlasByPhone: async () => hits,
+        i2cCards: async (email) => { d.calls.push('i2c:' + email); return i2cOpen; },
+      });
+      return d;
+    };
+
+    it('one-letter substitution (Yousef vs Youcef) proceeds, flagged name_variant and draft-blocked until ticked', async () => {
+      const d = withHits([hit('identity-Y', 'YOUCEF KARA MOSTEFA', 'y@example.com')]);
+      const [r] = await resolveBatch([named('Yousef', 'Kara Mostefa')], d);
+      expect(r.method).toBe('atlas_phone_i2c');
+      expect(r.identityId).toBe('identity-Y');
+      expect(r.status).toBe('needs_review');
+      expect(r.flags).toContain('name_variant');
+      expect(r.note).toContain('First name differs: request "Yousef", Atlas "Youcef".');
+      expect(isDraftable(r)).toBe(true);
+    });
+
+    it('keeps the flag and note when the warehouse follow-up replaces cards and flags', async () => {
+      const sqls: string[] = [];
+      const d = withHits([hit('identity-Y', 'Youcef Kara Mostefa', 'y@example.com')]);
+      d.runSql = async (sql) => { sqls.push(sql); return sqls.length === 1 ? [] : [whRow('m1', { identity_id: 'identity-Y', client_email: 'y@example.com' })]; };
+      const [r] = await resolveBatch([named('Yousef', 'Kara Mostefa')], d);
+      expect(sqls).toHaveLength(2);
+      expect(r.note).toContain('Card details from the warehouse.');
+      expect(r.flags).toContain('name_variant');
+      expect(r.status).toBe('needs_review');
+      expect(r.note).toContain('First name differs: request "Yousef", Atlas "Youcef".');
+    });
+
+    it('insertion (Yousef vs Youssef) is a variant', async () => {
+      const d = withHits([hit('identity-Y', 'Youssef Kara', 'y@example.com')]);
+      const [r] = await resolveBatch([named('Yousef', 'Kara')], d);
+      expect(r.method).toBe('atlas_phone_i2c');
+      expect(r.flags).toContain('name_variant');
+    });
+
+    it('Priya vs Priyanka is not a match', async () => {
+      const d = withHits([hit('identity-Y', 'Priyanka Ramanathan', 'y@example.com')]);
+      const [r] = await resolveBatch([named('Priya', 'Ramanathan')], d);
+      expect(r.status).toBe('no_match');
+      expect(d.calls).toEqual([]);
+    });
+
+    it('short first names never vary (Ana vs Ann)', async () => {
+      const d = withHits([hit('identity-Y', 'Ann Ramanathan', 'y@example.com')]);
+      const [r] = await resolveBatch([named('Ana', 'Ramanathan')], d);
+      expect(r.status).toBe('no_match');
+    });
+
+    it('a differing last name never matches', async () => {
+      const d = withHits([hit('identity-Y', 'Youcef Mostefa', 'y@example.com')]);
+      const [r] = await resolveBatch([named('Yousef', 'Kara')], d);
+      expect(r.status).toBe('no_match');
+    });
+
+    it('an exact match beats a variant match on the same phone, with no flag', async () => {
+      const d = withHits([
+        hit('identity-V', 'Youcef Kara', 'v@example.com'),
+        hit('identity-E', 'Yousef Kara', 'e@example.com'),
+      ]);
+      const [r] = await resolveBatch([named('Yousef', 'Kara')], d);
+      expect(r.identityId).toBe('identity-E');
+      expect(r.flags).not.toContain('name_variant');
+      expect(r.status).toBe('matched');
+    });
+
+    it('two variant matches are multiple_candidates', async () => {
+      const d = withHits([
+        hit('identity-V1', 'Youcef Kara', 'v1@example.com'),
+        hit('identity-V2', 'Youssef Kara', 'v2@example.com'),
+      ]);
+      const [r] = await resolveBatch([named('Yousef', 'Kara')], d);
+      expect(r.flags).toEqual(['multiple_candidates']);
+      expect(d.calls).toEqual([]);
+    });
+
+    it('variants are not used on the email paths (warehouse name rule untouched)', async () => {
+      const d = deps({ runSql: async () => [whRow('m1', { match_rule: 'email' })] });
+      const [r] = await resolveBatch([req('m1')], d);
+      expect(r.flags).not.toContain('name_variant');
     });
   });
 

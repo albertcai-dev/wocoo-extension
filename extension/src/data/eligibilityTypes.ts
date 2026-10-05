@@ -65,7 +65,8 @@ export type EligibilityFlag =
   | 'already_replied'
   | 'unknown_product'
   | 'i2c_details_incomplete'
-  | 'lookup_error';
+  | 'lookup_error'
+  | 'name_variant';
 
 export interface Candidate {
   identityId: string;

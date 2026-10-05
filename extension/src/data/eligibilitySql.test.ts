@@ -19,8 +19,10 @@ describe('buildEligibilitySql', () => {
     expect(sql).toContain("SELECT 'abc123' AS request_id, 'wrong.address@example.com' AS email, '1763' AS last4");
     expect(sql).toContain("SELECT 'abc123', 'priya.r1985@example.com', '1763'");
     expect(sql).toContain("SELECT 'abc123' AS request_id, 'priya' AS first_norm, 'ramanathan' AS last_norm, '1763' AS last4");
-    expect(sql).toContain("cc.i2c_card_status = 'open'");
+    expect(sql).toContain("cc.i2c_card_status IN ('open', 'inactive', 'issued_inactive')");
     expect(sql).toContain("'ws_visa_infinite_core'");
+    expect(sql).not.toContain("'closed'");
+    expect(sql).not.toContain("'fraud_block'");
   });
 
   it('escapes apostrophes in names', () => {

@@ -73,7 +73,7 @@ open_cards AS (
   SELECT cc.identity_id AS identity_canonical_id, RIGHT(cc.card_number, 4) AS card_last4,
          cc.created_at, cc.card_product_id
   FROM fort_knox.credit_cards cc
-  WHERE cc.i2c_card_status = 'open' AND cc.card_product_id IN (${products})
+  WHERE cc.i2c_card_status IN ('open', 'inactive', 'issued_inactive') AND cc.card_product_id IN (${products})
 ),
 latest_delinquency AS (
   SELECT d.identity_canonical_id, d.is_delinquent_account,

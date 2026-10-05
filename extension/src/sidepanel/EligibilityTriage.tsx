@@ -17,7 +17,7 @@ import { isDraftable } from '../data/eligibilityResolve';
 import { resolveBatch, type ResolveDeps } from '../data/eligibilityRun';
 import {
   canRunStep3, earlierDraftRow, earlierRunResolution, EMPTY_RUN, formatSkippedLine, mergeResolutions, nextLogStatus, rowsToResolve, RUN_STATE_KEY,
-  sortSkippedNewestFirst, type SkippedEmail,
+  shouldShowClientEmail, sortSkippedNewestFirst, type SkippedEmail,
   unsentDraftCount, unsentLoggedCount, type RunRow, type RunState,
 } from '../data/eligibilityRunState';
 import { buildEligibilitySql } from '../data/eligibilitySql';
@@ -34,6 +34,7 @@ const FLAG_TEXT: Record<string, string> = {
   unknown_product: 'i2c program not recognised',
   i2c_details_incomplete: 'i2c details incomplete',
   lookup_error: 'A lookup failed',
+  name_variant: 'First name spelled differently — confirm before drafting',
 };
 
 function liveDeps(onProgress: (id: string, stage: string) => void): Omit<ResolveDeps, 'runSql'> {
@@ -124,7 +125,7 @@ export function EligibilityTriage({ onClose }: { onClose: () => void }) {
         isDraftable(res)
           ? renderEligibilityDraft({
               clientEmail: res.clientEmail,
-              emailWasProvided: !!res.clientEmail && r.req.emails.includes(res.clientEmail),
+              emailWasProvided: shouldShowClientEmail(res),
               cards: res.cards,
               requestedLast4: r.req.last4 ?? '',
             })

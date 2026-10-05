@@ -10,7 +10,7 @@ export const REVIEW_FREE_PRODUCTS = [
 ] as const;
 
 /** Flags that are acceptable for drafting. Others (parse_warning, unknown_product, etc.) block drafting. */
-const TICKABLE_FLAGS: readonly EligibilityFlag[] = ['delinquent', 'vi_1pct'];
+const TICKABLE_FLAGS: readonly EligibilityFlag[] = ['delinquent', 'vi_1pct', 'name_variant'];
 
 /** The i2c card shape this module needs (I2cCard from i2cCardLookup.ts satisfies it). */
 export interface I2cCardInput {

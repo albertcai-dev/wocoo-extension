@@ -55,6 +55,11 @@ export function sortSkippedNewestFirst(items: SkippedEmail[]): SkippedEmail[] {
   return [...items].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
 }
 
+/** Always show the matched client email in the draft (user decision, live run 5). */
+export function shouldShowClientEmail(res: Resolution): boolean {
+  return !!res.clientEmail;
+}
+
 export function defaultSelected(res: Resolution): boolean {
   return res.status === 'matched';
 }
