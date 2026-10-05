@@ -27,6 +27,9 @@
 export const BRIDGE_URL =
   'https://script.google.com/a/macros/wealthsimple.com/s/AKfycbzWtgcWj8MgRW-MV9Yf9O5cLgDdktBsMw7vno760EJTjTMQsQKrKg9sZK7LCA73XuA-rA/exec';
 
+/** CC Ops Automation eligibility bridge — deployed as creditcardoperations@. Empty until the Apps Script is deployed (plan Task 10). */
+export const ELIGIBILITY_BRIDGE_URL = '';
+
 const REGISTRY_KEY = 'bridge_open_tabs';
 
 /** Extra slack past a call's own timeout before we consider its tab abandoned. Keeps the
@@ -159,7 +162,7 @@ export async function sweepExpiredBridgeTabs(): Promise<number> {
  *  plain `/exec` with no query, and the Atlassian OAuth callback is `/exec?code=&state=`.
  *  Neither carries `action`, so neither is swept. */
 function isBridgeActionTab(url: string | undefined): boolean {
-  if (!url || !url.startsWith(BRIDGE_URL)) return false;
+  if (!url || !(url.startsWith(BRIDGE_URL) || (ELIGIBILITY_BRIDGE_URL !== '' && url.startsWith(ELIGIBILITY_BRIDGE_URL)))) return false;
   try {
     return new URL(url).searchParams.has('action');
   } catch {

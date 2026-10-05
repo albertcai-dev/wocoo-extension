@@ -9,8 +9,11 @@
 
 import type { TicketLogPayload, TicketLogUpdatePayload } from '../data/ticketLogTypes';
 import type { RecentLogRow, PlaybookChunk } from '../data/aiTriageTypes';
+import type { RawEligibilityEmail } from '../data/eligibilityTypes';
+import type { EligibilityLogRow } from '../data/eligibilityLog';
 import {
   BRIDGE_URL,
+  ELIGIBILITY_BRIDGE_URL,
   registerBridgeTab,
   unregisterBridgeTab,
   sweepExpiredBridgeTabs,
@@ -145,9 +148,10 @@ function callBridge(
   expectedReply: string,
   timeoutMs = 30_000,
   openInBackground = false,
+  baseUrl: string = BRIDGE_URL,
 ): Promise<Record<string, unknown>> {
   const qs = new URLSearchParams({ action, ...params }).toString();
-  const url = BRIDGE_URL + '?' + qs;
+  const url = baseUrl + '?' + qs;
 
   console.debug('[wocoo-bridge] →', action, params, '(expected reply:', expectedReply + ', timeout:', timeoutMs + 'ms, headless:', openInBackground + ')');
 
@@ -919,4 +923,58 @@ export async function getPlaybookViaBridge(): Promise<PlaybookChunk[]> {
     chunkText: String(c.chunk_text ?? ''),
     updatedAt: String(c.updated_at ?? ''),
   }));
+}
+
+// ---- Insurance Eligibility Confirmation Triage (separate deployment, runs as creditcardoperations@) ----
+
+function requireEligibilityBridgeUrl(): void {
+  if (ELIGIBILITY_BRIDGE_URL === '') {
+    throw new Error('Eligibility bridge URL not set — deploy the CC Ops eligibility Apps Script first (plan Task 10).');
+  }
+}
+
+export async function listEligibilityRequestsViaBridge(): Promise<{
+  requests: RawEligibilityEmail[];
+  excludedDomains: string[];
+  skippedUnknownSender: number;
+}> {
+  requireEligibilityBridgeUrl();
+  const res = await callBridge('listEligibilityRequests', {}, 'eligibilityRequestsListed', 120_000, true, ELIGIBILITY_BRIDGE_URL);
+  const raw = Array.isArray(res.requests) ? (res.requests as Record<string, unknown>[]) : [];
+  return {
+    requests: raw.map((o) => ({
+      threadId: String(o.threadId ?? ''),
+      messageId: String(o.messageId ?? ''),
+      from: String(o.from ?? ''),
+      fromEmail: String(o.fromEmail ?? '').toLowerCase(),
+      subject: String(o.subject ?? ''),
+      date: String(o.date ?? ''),
+      messageCount: Number(o.messageCount ?? 1),
+      plainBody: String(o.plainBody ?? ''),
+    })),
+    excludedDomains: Array.isArray(res.excludedDomains) ? (res.excludedDomains as unknown[]).map(String) : [],
+    skippedUnknownSender: Number(res.skippedUnknownSender ?? 0),
+  };
+}
+
+export async function createEligibilityDraftViaBridge(messageId: string, body: string): Promise<string> {
+  requireEligibilityBridgeUrl();
+  const res = await callBridge('createEligibilityDraft', { messageId, body }, 'eligibilityDraftCreated', 60_000, true, ELIGIBILITY_BRIDGE_URL);
+  const draftId = String(res.draftId ?? '');
+  if (!draftId) throw new Error('Bridge returned no draftId.');
+  return draftId;
+}
+
+export async function sendEligibilityDraftsViaBridge(
+  draftIds: string[],
+): Promise<{ draftId: string; ok: boolean; error?: string }[]> {
+  requireEligibilityBridgeUrl();
+  const res = await callBridge('sendEligibilityDrafts', { draftIds: draftIds.join(',') }, 'eligibilityDraftsSent', 300_000, true, ELIGIBILITY_BRIDGE_URL);
+  const raw = Array.isArray(res.results) ? (res.results as Record<string, unknown>[]) : [];
+  return raw.map((r) => ({ draftId: String(r.draftId ?? ''), ok: r.ok === true, error: r.error ? String(r.error) : undefined }));
+}
+
+export async function logEligibilityResultViaBridge(row: EligibilityLogRow): Promise<void> {
+  requireEligibilityBridgeUrl();
+  await callBridge('logEligibilityResult', { row: JSON.stringify(row) }, 'eligibilityResultLogged', 60_000, true, ELIGIBILITY_BRIDGE_URL);
 }
