@@ -488,4 +488,9 @@ async function bootstrap() {
   }
 }
 
-bootstrap();
+// Only dashboards get the filter chain. This also keeps the script inert on the hidden
+// /api/... tab that data/presetSql opens to run SQL, so it never reads or clears a staged
+// identity there. Every dashboard URL the extension opens is /superset/dashboard/<id>/.
+if (/^\/(superset\/)?dashboard\//.test(location.pathname)) {
+  bootstrap();
+}
