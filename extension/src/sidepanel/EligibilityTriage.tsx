@@ -22,7 +22,8 @@ import {
   unsentDraftCount, unsentLoggedCount, type RunRow, type RunState,
 } from '../data/eligibilityRunState';
 import { buildEligibilitySql } from '../data/eligibilitySql';
-import { fetchI2cCardDetailsHeadless } from '../data/i2cCardLookup';
+import { openI2cSession, type I2cSession } from '../data/i2cCardLookup';
+import { createSerialQueue } from '../data/serialQueue';
 import { parsePastedResults, PRESET_DIRECT_ENABLED, PresetAuthError, runPresetSql } from '../data/presetSql';
 import { errorBanner, infoCard, listItemStyle, Pill, primaryButton, secondaryButton, ToolHeader } from './toolUi';
 
@@ -42,11 +43,15 @@ const FLAG_TEXT: Record<string, string> = {
 /** Max URL-encoded size of one createAndLogEligibility chunk (the items travel in a GET query string). */
 const CREATE_CHUNK_MAX_CHARS = 6000;
 
-function liveDeps(onProgress: (id: string, stage: string) => void): Omit<ResolveDeps, 'runSql'> {
+function liveDeps(i2c: I2cSession, onProgress: (id: string, stage: string) => void): Omit<ResolveDeps, 'runSql'> {
+  // The Atlas email scrape hands its request id to the content script through one shared
+  // storage key, so two at once could swap clients — keep it one at a time like i2c.
+  const atlasQueue = createSerialQueue();
   return {
-    i2cCards: (email, id) => fetchI2cCardDetailsHeadless({ clientEmail: email, sourceTicketId: 'elig-' + id }),
+    i2cCards: (email, id) => i2c.lookup(email, 'elig-' + id),
     atlasByPhone: ATLAS_PHONE_SEARCH_ENABLED ? searchAtlasByPhone : null,
-    atlasEmail: (identityId, id) => fetchAtlasClientEmailHeadless({ identityId, sourceTicketId: 'elig-' + id }),
+    atlasEmail: (identityId, id) =>
+      atlasQueue.run(() => fetchAtlasClientEmailHeadless({ identityId, sourceTicketId: 'elig-' + id })),
     onProgress,
   };
 }
@@ -114,6 +119,8 @@ export function EligibilityTriage({ onClose }: { onClose: () => void }) {
 
   async function onResolve(pastedText?: string) {
     setBusy('Matching clients…'); setError('');
+    // One signed-in i2c tab for the whole Resolve (opened lazily on the first lookup).
+    const i2c = openI2cSession();
     try {
       // M1: parse inside the try so a bad paste surfaces as an error.
       const pastedRows = pastedText !== undefined ? parsePastedResults(pastedText) : undefined;
@@ -125,7 +132,7 @@ export function EligibilityTriage({ onClose }: { onClose: () => void }) {
       // I5: drafted/sent rows (incl. earlier-run rows) are never re-resolved.
       const results = await resolveBatch(rowsToResolve(run.rows).map((r) => r.req), {
         runSql,
-        ...liveDeps((id, stage) => setProgress((p) => ({ ...p, [id]: stage }))),
+        ...liveDeps(i2c, (id, stage) => setProgress((p) => ({ ...p, [id]: stage }))),
       });
       const rows = mergeResolutions(run.rows, results, (r, res) =>
         isDraftable(res)
@@ -142,7 +149,10 @@ export function EligibilityTriage({ onClose }: { onClose: () => void }) {
       const msg = e instanceof PresetAuthError ? 'Sign in to Preset, then press Resolve again — or use Copy SQL.' : (e as Error).message;
       setError(msg);
       setPasteMode(true);
-    } finally { setBusy(''); setProgress({}); }
+    } finally {
+      await i2c.close();
+      setBusy(''); setProgress({});
+    }
   }
 
   async function onCreateDrafts() {

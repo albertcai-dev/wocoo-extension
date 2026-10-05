@@ -238,16 +238,20 @@ function setTextareaValue(el: HTMLTextAreaElement, value: string) {
   el.dispatchEvent(new Event('change', { bubbles: true }));
 }
 
+const SEARCH_SUBMITTED_KEY = 'wocoo_i2c_search_submitted';
 let emailSearchRan = false;
 async function tryEmailSearch(): Promise<boolean> {
   if (emailSearchRan) return true;
-  const res = await chrome.storage.local.get(PENDING_EMAIL_KEY);
+  const res = await chrome.storage.local.get([PENDING_EMAIL_KEY, 'pending_i2c_started_at']);
   const email = res[PENDING_EMAIL_KEY];
   if (!email || typeof email !== 'string') return false;
   const emailInput = findEmailInput();
   if (!emailInput) return false;
   setValue(emailInput, email);
   emailSearchRan = true;
+  // Tells tryOpenCustomerSearch this lookup is past Customer Search, so it never navigates
+  // away from a customer page that is still rendering.
+  try { sessionStorage.setItem(SEARCH_SUBMITTED_KEY, String(res.pending_i2c_started_at ?? '')); } catch { /* fine */ }
   const btn = findSectionSearchButton(emailInput);
   if (btn) setTimeout(() => btn.click(), 100);
   return true;
@@ -1378,6 +1382,61 @@ async function tryCardDetailsNoRecord(): Promise<boolean> {
   return true;
 }
 
+// card_details only: the Eligibility i2c session re-points its signed-in tab at CSHome.do
+// for each lookup. If that lands somewhere without the Customer Search form, click the
+// "Customer Search" link/menu item so tryEmailSearch can take over. At most once per
+// lookup per tab (sessionStorage survives the navigation; the chain's started_at is the
+// lookup's id), so a page that never shows the form can't make it click in a loop.
+const PAGE_LOADED_AT = Date.now();
+const CUSTOMER_SEARCH_SETTLE_MS = 1500;
+const CUSTOMER_SEARCH_CLICKED_KEY = 'wocoo_i2c_customer_search_clicked';
+let customerSearchClickRan = false;
+
+function findCustomerSearchLink(): HTMLElement | null {
+  const isLabel = (el: HTMLElement) =>
+    /^Customer\s+Search$/i.test(((el as HTMLInputElement).value || el.textContent || '').replace(/\s+/g, ' ').trim());
+  const groups = [
+    'a',
+    '[role="menuitem"], [role="link"], button, input[type="button"], input[type="submit"]',
+    'li, td, span, div',
+  ];
+  for (const sel of groups) {
+    const hit = Array.from(document.querySelectorAll<HTMLElement>(sel)).find((el) => isLabel(el) && isVisible(el));
+    if (hit) return hit;
+  }
+  return null;
+}
+
+async function tryOpenCustomerSearch(): Promise<boolean> {
+  if (customerSearchClickRan) return true;
+  if ((await getFlow()) !== 'card_details') return false;
+  if (!(await chainActive())) return false;
+  // Give a server-rendered page a moment before deciding the form isn't there.
+  if (Date.now() - PAGE_LOADED_AT < CUSTOMER_SEARCH_SETTLE_MS) return false;
+  if (findFields() || findEmailInput() || pageHasMaskedPan()) return false;
+  if (/Manage Sessions/i.test(document.body?.textContent || '')) return false;
+
+  const hasContinue = Array.from(document.querySelectorAll<HTMLElement>('input[type="submit"], input[type="button"], button'))
+    .some((b) => /^Continue\s+with\s+this\s+Customer$/i.test(((b as HTMLInputElement).value || b.textContent || '').trim()));
+  if (hasContinue) return false;
+
+  const res = await chrome.storage.local.get('pending_i2c_started_at');
+  const lookupId = String(res.pending_i2c_started_at ?? '');
+  try {
+    // Only before this lookup's search was submitted, and at most one click per lookup.
+    if (sessionStorage.getItem(SEARCH_SUBMITTED_KEY) === lookupId) return false;
+    if (sessionStorage.getItem(CUSTOMER_SEARCH_CLICKED_KEY) === lookupId) return false;
+  } catch { /* storage blocked — the per-page flag still limits it */ }
+
+  const link = findCustomerSearchLink();
+  if (!link) return false;
+  customerSearchClickRan = true;
+  try { sessionStorage.setItem(CUSTOMER_SEARCH_CLICKED_KEY, lookupId); } catch { /* fine */ }
+  log('  → card_details: no Customer Search form here — clicking "Customer Search"');
+  setTimeout(() => link.click(), 100);
+  return true;
+}
+
 function formatMmDdYyyy(d: Date): string {
   const mm = String(d.getMonth() + 1).padStart(2, '0');
   const dd = String(d.getDate()).padStart(2, '0');
@@ -1452,6 +1511,8 @@ async function bootstrap() {
     // rather than re-submit the same search.
     await tryCardDetailsNoRecord();
     await tryEmailSearch();
+    // card_details only, and only when the page has no search form, login or customer page.
+    await tryOpenCustomerSearch();
     // Before tryContinueWithCustomer: on the customer page this captures the cards and
     // clears the chain keys, so nothing downstream can navigate away.
     await tryCardDetailsScrape();

@@ -167,7 +167,28 @@ async function resolveLive(req: EligibilityRequest, deps: ResolveDeps): Promise<
     : noMatch(req, 'No client matched on email, name, or phone with this last 4.');
 }
 
-export async function resolveBatch(reqs: EligibilityRequest[], deps: ResolveDeps): Promise<Resolution[]> {
+/**
+ * Run `fn` over `items` with `concurrency` workers. With two, worker A takes from the front and
+ * worker B from the back, each synchronously claiming the next unclaimed item until none remain
+ * (the onCreateDrafts / WiresPendingPostingV2 pattern). Even workers take the front, odd the back.
+ */
+export async function runFromBothEnds<T>(
+  items: readonly T[], concurrency: number, fn: (item: T) => Promise<void>,
+): Promise<void> {
+  let front = 0;
+  let back = items.length - 1;
+  async function worker(fromFront: boolean) {
+    while (front <= back) {
+      await fn(fromFront ? items[front++] : items[back--]);
+    }
+  }
+  const n = Math.max(1, Math.min(Math.floor(concurrency) || 1, items.length));
+  await Promise.all(Array.from({ length: n }, (_, i) => worker(i % 2 === 0)));
+}
+
+export async function resolveBatch(
+  reqs: EligibilityRequest[], deps: ResolveDeps, opts: { concurrency?: number } = {},
+): Promise<Resolution[]> {
   const out = new Map<string, Resolution>();
   const pending: EligibilityRequest[] = [];
   for (const r of reqs) {
@@ -179,9 +200,16 @@ export async function resolveBatch(reqs: EligibilityRequest[], deps: ResolveDeps
   const sql = buildEligibilitySql(pending);
   const rows = sql ? toWarehouseRows(await deps.runSql(sql)) : [];
 
+  const live: EligibilityRequest[] = [];
   for (const r of pending) {
     const wh = resolveFromWarehouse(r, rows);
-    out.set(r.messageId, wh ?? (await resolveLive(r, deps)));
+    if (wh) out.set(r.messageId, wh);
+    else live.push(r);
   }
+  // i2c allows one session per user, so callers must serialise deps.i2cCards themselves
+  // (openI2cSession does); the workers overlap the Atlas and warehouse follow-up calls.
+  await runFromBothEnds(live, opts.concurrency ?? 2, async (r) => {
+    out.set(r.messageId, await resolveLive(r, deps));
+  });
   return reqs.map((r) => out.get(r.messageId)!);
 }

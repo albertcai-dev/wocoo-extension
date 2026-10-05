@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { resolveBatch, type ResolveDeps } from './eligibilityRun';
+import { resolveBatch, runFromBothEnds, type ResolveDeps } from './eligibilityRun';
+import { createSerialQueue } from './serialQueue';
 import { isDraftable } from './eligibilityResolve';
 import type { EligibilityRequest } from './eligibilityTypes';
 
@@ -370,5 +371,108 @@ describe('resolveBatch', () => {
       expect(r.cards[0].creationDate).toBe('07/07/2026');
       expect(r.note).toContain('Warehouse details unavailable (Preset timed out); using i2c details.');
     });
+  });
+});
+
+describe('runFromBothEnds', () => {
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  for (const n of [0, 1, 2, 5, 6]) {
+    it(`processes each of ${n} items exactly once at concurrency 2`, async () => {
+      const items = Array.from({ length: n }, (_, i) => i);
+      const seen: number[] = [];
+      await runFromBothEnds(items, 2, async (x) => { seen.push(x); await sleep(x % 3); });
+      expect([...seen].sort((a, b) => a - b)).toEqual(items);
+    });
+  }
+
+  it('worker A takes the front and worker B the back', async () => {
+    const order: number[] = [];
+    await runFromBothEnds([0, 1, 2, 3], 2, async (x) => { order.push(x); await sleep(1); });
+    expect(order.slice(0, 2)).toEqual([0, 3]);
+  });
+
+  it('runs two at a time, never more', async () => {
+    let running = 0;
+    let peak = 0;
+    await runFromBothEnds([1, 2, 3, 4, 5], 2, async () => {
+      running++; peak = Math.max(peak, running);
+      await sleep(2);
+      running--;
+    });
+    expect(peak).toBe(2);
+  });
+
+  it('concurrency 1 runs in order', async () => {
+    const order: number[] = [];
+    await runFromBothEnds([0, 1, 2], 1, async (x) => { order.push(x); await sleep(0); });
+    expect(order).toEqual([0, 1, 2]);
+  });
+});
+
+describe('resolveBatch concurrency', () => {
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const ids = (n: number) => Array.from({ length: n }, (_, i) => 'm' + i);
+
+  for (const n of [0, 1, 4, 5]) {
+    it(`resolves ${n} live requests exactly once each, output in input order`, async () => {
+      const lookups: string[] = [];
+      const d = deps({
+        i2cCards: async (email, id) => { lookups.push(id + ':' + email); await sleep(Number(id.slice(1)) % 3); return []; },
+        atlasByPhone: null,
+      });
+      const rs = await resolveBatch(ids(n).map((id) => req(id)), d);
+      expect(rs.map((r) => r.requestId)).toEqual(ids(n));
+      // Two listed emails per request → two lookups each, nothing repeated.
+      expect(lookups.length).toBe(n * 2);
+      expect(new Set(lookups).size).toBe(n * 2);
+    });
+  }
+
+  it('warehouse matches mixed with live requests keep input order', async () => {
+    const d = deps({
+      runSql: async () => [whRow('m1'), whRow('m3')],
+      i2cCards: async (email) => (email === 'priya.r1985@example.com' ? i2cOpen : []),
+      atlasByPhone: null,
+    });
+    const rs = await resolveBatch(ids(5).map((id) => req(id)), d);
+    expect(rs.map((r) => [r.requestId, r.method])).toEqual([
+      ['m0', 'i2c_email'], ['m1', 'email_last4'], ['m2', 'i2c_email'], ['m3', 'email_last4'], ['m4', 'i2c_email'],
+    ]);
+  });
+
+  it('i2c calls stay serialised when i2cCards is wrapped in a serial queue', async () => {
+    const q = createSerialQueue();
+    let running = 0;
+    let peak = 0;
+    let atlasRunning = 0;
+    let atlasPeak = 0;
+    const d = deps({
+      i2cCards: () => q.run(async () => {
+        running++; peak = Math.max(peak, running);
+        await sleep(1);
+        running--;
+        return [];
+      }),
+      atlasByPhone: async () => {
+        atlasRunning++; atlasPeak = Math.max(atlasPeak, atlasRunning);
+        await sleep(3);
+        atlasRunning--;
+        return [];
+      },
+    });
+    const rs = await resolveBatch(ids(6).map((id) => req(id)), d);
+    expect(rs).toHaveLength(6);
+    expect(peak).toBe(1);
+    expect(atlasPeak).toBe(2); // the two workers really do overlap
+  });
+
+  it('concurrency 1 keeps the old one-at-a-time order', async () => {
+    const d = deps({ atlasByPhone: null });
+    await resolveBatch(['a', 'b'].map((id) => req(id)), d, { concurrency: 1 });
+    expect(d.calls).toEqual([
+      'i2c:wrong.address@example.com', 'i2c:priya.r1985@example.com',
+      'i2c:wrong.address@example.com', 'i2c:priya.r1985@example.com',
+    ]);
   });
 });

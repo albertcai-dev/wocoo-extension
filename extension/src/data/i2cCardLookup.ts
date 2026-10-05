@@ -7,8 +7,16 @@
 //
 // i2c's status column says which is which (ACTIVE vs CLOSED CARD), so the workflow
 // auto-assigns when there's exactly one of each and falls back to clickable chips.
+//
+// openI2cSession() is the batch variant (Insurance Eligibility Resolve): one background
+// tab signs in once and is re-pointed at Customer Search for each lookup. i2c allows one
+// session per user, so its lookups run strictly one at a time.
+
+import { createSerialQueue } from './serialQueue';
 
 export const I2C_LOGIN_URL = 'https://wealthsimplecs.mycardplace.com/customerservice/wealthsimplelogin.jsp';
+/** Customer Search — where a signed-in session starts the next lookup. */
+export const I2C_HOME_URL = 'https://wealthsimplecs.mycardplace.com/customerservice/CSHome.do';
 
 export interface FetchI2cCardDetailsArgs {
   clientEmail: string;
@@ -32,34 +40,68 @@ export interface I2cCard {
   creationDate?: string;
 }
 
-export async function fetchI2cCardDetailsHeadless(args: FetchI2cCardDetailsArgs): Promise<I2cCard[]> {
-  const { clientEmail, sourceTicketId, timeoutMs = 75_000 } = args;
-  if (!clientEmail) throw new Error('clientEmail is required');
-  if (!sourceTicketId) throw new Error('sourceTicketId is required');
+type ChangeListener = (changes: Record<string, chrome.storage.StorageChange>, area: string) => void;
 
-  await chrome.storage.local.set({
+/** The chrome calls the lookups make — injectable so the session is unit-tested. */
+export interface I2cChromeDeps {
+  storageGet(keys: string[]): Promise<Record<string, unknown>>;
+  storageSet(items: Record<string, unknown>): Promise<void>;
+  storageRemove(keys: string[]): Promise<void>;
+  addChangeListener(fn: ChangeListener): void;
+  removeChangeListener(fn: ChangeListener): void;
+  tabsCreate(props: { url: string; active: boolean }): Promise<{ id?: number }>;
+  tabsUpdate(tabId: number, props: { url: string }): Promise<unknown>;
+  tabsRemove(tabId: number): Promise<void>;
+  sleep(ms: number): Promise<void>;
+}
+
+function chromeDeps(): I2cChromeDeps {
+  return {
+    storageGet: (keys) => chrome.storage.local.get(keys),
+    storageSet: (items) => chrome.storage.local.set(items),
+    storageRemove: (keys) => chrome.storage.local.remove(keys),
+    addChangeListener: (fn) => chrome.storage.onChanged.addListener(fn),
+    removeChangeListener: (fn) => chrome.storage.onChanged.removeListener(fn),
+    tabsCreate: (props) => chrome.tabs.create(props),
+    tabsUpdate: (tabId, props) => chrome.tabs.update(tabId, props),
+    tabsRemove: (tabId) => chrome.tabs.remove(tabId),
+    sleep: (ms) => new Promise<void>((r) => setTimeout(r, ms)),
+  };
+}
+
+/** Arm the i2c.ts content script's card_details chain for one email. */
+async function writePendingKeys(deps: I2cChromeDeps, clientEmail: string, sourceTicketId: string): Promise<void> {
+  await deps.storageSet({
     pending_i2c_email: clientEmail,
     pending_i2c_flow: 'card_details',
     pending_i2c_source_ticket_id: sourceTicketId,
     pending_i2c_started_at: Date.now(),
   });
   // Leftover keys from an earlier flow would send the chain down the wrong branch.
-  await chrome.storage.local.remove(['pending_i2c_ticket_url', 'pending_i2c_admin_debit_amount']);
+  await deps.storageRemove(['pending_i2c_ticket_url', 'pending_i2c_admin_debit_amount']);
+}
 
-  const tab = await chrome.tabs.create({ url: I2C_LOGIN_URL, active: false });
-  const tabId = tab.id ?? null;
+interface CardDetailsWait {
+  result: Promise<I2cCard[]>;
+  /** Stop waiting: drop the listener and timer, and reject `result` with `reason`. */
+  cancel(reason: Error): void;
+}
 
-  return new Promise<I2cCard[]>((resolve, reject) => {
+/** Wait for the content script to write `i2c_card_details` for `sourceTicketId`.
+ *  `onSettle` runs once, on success, timeout or cancel. */
+function awaitCardDetails(
+  deps: I2cChromeDeps, sourceTicketId: string, timeoutMs: number, onSettle: () => void = () => {},
+): CardDetailsWait {
+  let cancel: (reason: Error) => void = () => {};
+  const result = new Promise<I2cCard[]>((resolve, reject) => {
     let settled = false;
     const cleanup = () => {
       settled = true;
-      chrome.storage.onChanged.removeListener(onChange);
-      window.clearTimeout(timer);
-      if (tabId != null) {
-        void chrome.tabs.remove(tabId).catch(() => { /* tab may already be closed */ });
-      }
+      deps.removeChangeListener(onChange);
+      clearTimeout(timer);
+      onSettle();
     };
-    const onChange = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
+    const onChange: ChangeListener = (changes, area) => {
       if (settled || area !== 'local' || !('i2c_card_details' in changes)) return;
       const v = changes.i2c_card_details.newValue as {
         sourceTicketId?: string;
@@ -70,11 +112,112 @@ export async function fetchI2cCardDetailsHeadless(args: FetchI2cCardDetailsArgs)
         resolve(v.cards);
       }
     };
-    chrome.storage.onChanged.addListener(onChange);
-    const timer = window.setTimeout(() => {
+    deps.addChangeListener(onChange);
+    const timer = setTimeout(() => {
       if (settled) return;
       cleanup();
       reject(new Error('i2c card lookup timed out — the chain may have stopped at login or the customer search'));
     }, timeoutMs);
+    cancel = (reason) => {
+      if (settled) return;
+      cleanup();
+      reject(reason);
+    };
   });
+  return { result, cancel: (reason) => cancel(reason) };
+}
+
+export async function fetchI2cCardDetailsHeadless(args: FetchI2cCardDetailsArgs): Promise<I2cCard[]> {
+  const { clientEmail, sourceTicketId, timeoutMs = 75_000 } = args;
+  if (!clientEmail) throw new Error('clientEmail is required');
+  if (!sourceTicketId) throw new Error('sourceTicketId is required');
+
+  const deps = chromeDeps();
+  await writePendingKeys(deps, clientEmail, sourceTicketId);
+
+  const tab = await deps.tabsCreate({ url: I2C_LOGIN_URL, active: false });
+  const tabId = tab.id ?? null;
+
+  return awaitCardDetails(deps, sourceTicketId, timeoutMs, () => {
+    if (tabId != null) {
+      void deps.tabsRemove(tabId).catch(() => { /* tab may already be closed */ });
+    }
+  }).result;
+}
+
+export interface I2cSession {
+  /** Look up one email's cards. Calls queue FIFO; only one runs at a time. */
+  lookup(email: string, sourceTicketId: string, timeoutMs?: number): Promise<I2cCard[]>;
+  /** Close the shared tab and stop any in-flight wait. Later lookups reject. */
+  close(): Promise<void>;
+}
+
+/** How long to wait for the previous chain's content script to clear its pending keys
+ *  (it does so just after writing the result) before arming the next lookup. */
+const CHAIN_IDLE_MAX_MS = 2_000;
+const CHAIN_IDLE_POLL_MS = 100;
+
+export function openI2cSession(deps: I2cChromeDeps = chromeDeps()): I2cSession {
+  const queue = createSerialQueue();
+  let tabId: number | null = null;
+  let closed = false;
+  let current: CardDetailsWait | null = null;
+
+  const closedError = () => new Error('i2c session closed');
+
+  // The content script clears every pending key right after it writes i2c_card_details,
+  // so the panel can hear the result first. Writing the next lookup's keys before that
+  // remove lands would have them wiped and the next chain would never start.
+  async function waitForChainIdle(): Promise<void> {
+    for (let waited = 0; waited < CHAIN_IDLE_MAX_MS; waited += CHAIN_IDLE_POLL_MS) {
+      const res = await deps.storageGet(['pending_i2c_email']);
+      if (typeof res.pending_i2c_email !== 'string') return;
+      await deps.sleep(CHAIN_IDLE_POLL_MS);
+    }
+  }
+
+  async function pointTabAtSearch(): Promise<void> {
+    if (tabId != null) {
+      try {
+        await deps.tabsUpdate(tabId, { url: I2C_HOME_URL });
+        return;
+      } catch {
+        tabId = null; // closed by the user — sign in again in a fresh tab
+      }
+    }
+    const tab = await deps.tabsCreate({ url: I2C_LOGIN_URL, active: false });
+    tabId = tab.id ?? null;
+  }
+
+  return {
+    lookup(email, sourceTicketId, timeoutMs = 60_000) {
+      return queue.run(async () => {
+        if (closed) throw closedError();
+        if (!email) throw new Error('clientEmail is required');
+        if (!sourceTicketId) throw new Error('sourceTicketId is required');
+        if (tabId != null) await waitForChainIdle();
+        await writePendingKeys(deps, email, sourceTicketId);
+        await pointTabAtSearch();
+        if (closed) {
+          // close() ran while the tab was opening and couldn't see its id yet.
+          if (tabId != null) void deps.tabsRemove(tabId).catch(() => {});
+          tabId = null;
+          throw closedError();
+        }
+        const wait = awaitCardDetails(deps, sourceTicketId, timeoutMs, () => { current = null; });
+        current = wait;
+        return wait.result;
+      });
+    },
+    async close() {
+      closed = true;
+      current?.cancel(closedError());
+      current = null;
+      if (tabId != null) {
+        const id = tabId;
+        tabId = null;
+        await deps.tabsRemove(id).catch(() => { /* tab may already be closed */ });
+      }
+    },
+  };
 }
