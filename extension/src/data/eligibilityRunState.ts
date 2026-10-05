@@ -23,6 +23,9 @@ export interface RunRow {
   sendNote?: string;
 }
 
+/** An insurer email dropped as a non-eligibility request. Metadata only — never the body. */
+export interface SkippedEmail { subject: string; from: string; date: string }
+
 export interface RunState {
   stage: 'idle' | 'fetched' | 'resolved' | 'drafted' | 'sent';
   rows: RunRow[];
@@ -31,11 +34,26 @@ export interface RunState {
   skippedUnknownSenderCapped?: boolean;
   /** Insurer emails dropped because neither subject nor body mentions eligibility. */
   skippedNotEligibility: number;
+  /** Which emails those were (restored state from before this field existed may lack it — read with `?? []`). */
+  skippedNotEligibilityList: SkippedEmail[];
   /** Last generated warehouse SQL, for the Copy SQL fallback. */
   sql: string;
 }
 
-export const EMPTY_RUN: RunState = { stage: 'idle', rows: [], skippedUnknownSender: 0, skippedNotEligibility: 0, sql: '' };
+export const EMPTY_RUN: RunState = { stage: 'idle', rows: [], skippedUnknownSender: 0, skippedNotEligibility: 0, skippedNotEligibilityList: [], sql: '' };
+
+const SKIPPED_SUBJECT_MAX = 120;
+
+/** `YYYY-MM-DD · from · subject`, subject truncated to 120 chars with an ellipsis. */
+export function formatSkippedLine(item: SkippedEmail): string {
+  const subject = item.subject.length > SKIPPED_SUBJECT_MAX ? item.subject.slice(0, SKIPPED_SUBJECT_MAX - 1) + '…' : item.subject;
+  return `${item.date.slice(0, 10)} · ${item.from} · ${subject}`;
+}
+
+/** Newest first (ISO dates sort lexicographically); input is not mutated. */
+export function sortSkippedNewestFirst(items: SkippedEmail[]): SkippedEmail[] {
+  return [...items].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+}
 
 export function defaultSelected(res: Resolution): boolean {
   return res.status === 'matched';

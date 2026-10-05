@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  canRunStep3, defaultSelected, EMPTY_RUN, earlierDraftRow, earlierRunResolution, mergeResolutions, nextLogStatus, rowsToResolve,
-  unloggedCount, unsentDraftCount, unsentLoggedCount, type RunRow,
+  canRunStep3, defaultSelected, EMPTY_RUN, earlierDraftRow, earlierRunResolution, formatSkippedLine, mergeResolutions, nextLogStatus, rowsToResolve,
+  sortSkippedNewestFirst, unloggedCount, unsentDraftCount, unsentLoggedCount, type RunRow,
 } from './eligibilityRunState';
 import type { EligibilityRequest, Resolution } from './eligibilityTypes';
 
@@ -121,5 +121,23 @@ describe('rowsToResolve / mergeResolutions', () => {
 describe('EMPTY_RUN', () => {
   it('starts with no skipped non-eligibility emails', () => {
     expect(EMPTY_RUN.skippedNotEligibility).toBe(0);
+  });
+});
+
+describe('formatSkippedLine / sortSkippedNewestFirst', () => {
+  it('formats date · from · subject', () => {
+    expect(formatSkippedLine({ subject: 'Hello', from: 'a@b.com', date: '2026-10-04T15:00:00.000Z' })).toBe('2026-10-04 · a@b.com · Hello');
+  });
+  it('truncates long subjects to 120 chars with an ellipsis', () => {
+    const line = formatSkippedLine({ subject: 'x'.repeat(300), from: 'a@b.com', date: '2026-10-04' });
+    expect(line).toBe('2026-10-04 · a@b.com · ' + 'x'.repeat(119) + '…');
+  });
+  it('sorts newest first without mutating', () => {
+    const items = [
+      { subject: 'old', from: 'a', date: '2026-10-01T00:00:00Z' },
+      { subject: 'new', from: 'a', date: '2026-10-04T00:00:00Z' },
+    ];
+    expect(sortSkippedNewestFirst(items).map((i) => i.subject)).toEqual(['new', 'old']);
+    expect(items[0].subject).toBe('old');
   });
 });

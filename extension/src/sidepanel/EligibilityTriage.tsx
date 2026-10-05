@@ -16,7 +16,8 @@ import { isEligibilityRequest, parseEligibilityEmail } from '../data/eligibility
 import { isDraftable } from '../data/eligibilityResolve';
 import { resolveBatch, type ResolveDeps } from '../data/eligibilityRun';
 import {
-  canRunStep3, earlierDraftRow, earlierRunResolution, EMPTY_RUN, mergeResolutions, nextLogStatus, rowsToResolve, RUN_STATE_KEY,
+  canRunStep3, earlierDraftRow, earlierRunResolution, EMPTY_RUN, formatSkippedLine, mergeResolutions, nextLogStatus, rowsToResolve, RUN_STATE_KEY,
+  sortSkippedNewestFirst, type SkippedEmail,
   unsentDraftCount, unsentLoggedCount, type RunRow, type RunState,
 } from '../data/eligibilityRunState';
 import { buildEligibilitySql } from '../data/eligibilitySql';
@@ -80,6 +81,11 @@ export function EligibilityTriage({ onClose }: { onClose: () => void }) {
       const eligible = requests.filter(isEligibilityRequest);
       const eligibleDrafted = drafted.filter(isEligibilityRequest);
       const skippedNotEligibility = (requests.length - eligible.length) + (drafted.length - eligibleDrafted.length);
+      // Subject/sender/date only (no body) so the user can spot real requests the filter dropped.
+      const skippedNotEligibilityList: SkippedEmail[] = [
+        ...requests.filter((r) => !isEligibilityRequest(r)),
+        ...drafted.filter((r) => !isEligibilityRequest(r)),
+      ].map((r) => ({ subject: r.subject || '', from: r.fromEmail, date: r.date || '' }));
       const fresh: RunRow[] = eligible.map((raw) => ({
         req: parseEligibilityEmail(raw, excludedDomains),
         res: null, selected: false, draftId: '', draftBody: '', sent: 'no' as const, sendError: '', logged: false, sentLogged: false,
@@ -91,7 +97,7 @@ export function EligibilityTriage({ onClose }: { onClose: () => void }) {
         .map(({ draftId, ...raw }) => earlierDraftRow(parseEligibilityEmail(raw, excludedDomains), draftId));
       const rows = [...fresh, ...earlier];
       save({
-        stage: 'fetched', rows, skippedUnknownSender, skippedUnknownSenderCapped, skippedNotEligibility,
+        stage: 'fetched', rows, skippedUnknownSender, skippedUnknownSenderCapped, skippedNotEligibility, skippedNotEligibilityList,
         sql: buildEligibilitySql(fresh.map((r) => r.req)) ?? '',
       });
     } catch (e) {
@@ -222,9 +228,14 @@ export function EligibilityTriage({ onClose }: { onClose: () => void }) {
         </div>
       ) : null}
       {(run.skippedNotEligibility ?? 0) > 0 ? (
-        <div style={{ color: 'var(--mint-fg-soft)' }}>
-          {run.skippedNotEligibility} insurer email(s) weren't eligibility requests and were skipped.
-        </div>
+        <details style={{ color: 'var(--mint-fg-soft)' }}>
+          <summary>{run.skippedNotEligibility} insurer email(s) weren't eligibility requests and were skipped.</summary>
+          <ul style={{ margin: '4px 0 0', paddingLeft: 16, fontSize: 'var(--mint-text-nano)', wordBreak: 'break-word' }}>
+            {sortSkippedNewestFirst(run.skippedNotEligibilityList ?? []).map((s, i) => (
+              <li key={i}>{formatSkippedLine(s)}</li>
+            ))}
+          </ul>
+        </details>
       ) : null}
 
       {pasteMode ? (
