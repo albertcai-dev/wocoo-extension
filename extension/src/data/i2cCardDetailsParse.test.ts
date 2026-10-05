@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { pageSaysNoRecord, parseI2cDelinquency, readColumnForLast4, readLabelValue, readProgramForLast4 } from './i2cCardDetailsParse';
+import { gridFromRows, pageSaysNoRecord, parseI2cDelinquency, readColumnForLast4, readLabelValue, readProgramForLast4 } from './i2cCardDetailsParse';
 import { mapI2cProgram } from './eligibilityProducts';
 
 const LEAVES = [
@@ -67,6 +67,32 @@ describe('mapI2cProgram', () => {
     expect(mapI2cProgram('Wealthsimple  Visa Infinite VIP 01 Physical ')).toBe('ws_visa_infinite_privilege');
     expect(mapI2cProgram('Something Else')).toBeNull();
     expect(mapI2cProgram(undefined)).toBeNull();
+  });
+});
+
+describe('gridFromRows', () => {
+  const header = { table: 0, cells: ['Account Number', 'Account Ref. Num', 'Program', 'Account Type', 'Status', 'Opened'] };
+  const account = {
+    table: 0,
+    cells: ['412650******4766', '527003024872', 'Wealthsimple Visa Infinite VIP 01 Physical', 'Credit - Primary', 'Open', '08/03/2025'],
+  };
+  const nestedHeader = { table: 1, cells: ['Card Number', 'Name on Card', 'Type'] };
+  const nestedRow = { table: 1, cells: ['412650******4766', 'Pat Example', 'Primary'] };
+
+  it('reads the Accounts row even when a nested card table follows it', () => {
+    const { headers, rows } = gridFromRows([header, account, nestedHeader, nestedRow], 'Program');
+    expect(headers).toEqual(header.cells);
+    expect(rows).toEqual([account.cells]);
+    expect(readProgramForLast4(headers, rows, '4766')).toBe('Wealthsimple Visa Infinite VIP 01 Physical');
+    expect(readColumnForLast4(headers, rows, '4766', 'Account Ref. Num')).toBe('527003024872');
+  });
+  it('excludes a same-width row from a different table', () => {
+    const sameWidthNested = { table: 1, cells: ['a', 'b', 'c', 'd', 'e', 'f'] };
+    const { rows } = gridFromRows([header, account, sameWidthNested], 'program');
+    expect(rows).toEqual([account.cells]);
+  });
+  it('returns an empty grid when no Program header exists', () => {
+    expect(gridFromRows([nestedHeader, nestedRow], 'Program')).toEqual({ headers: [], rows: [] });
   });
 });
 

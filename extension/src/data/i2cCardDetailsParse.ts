@@ -12,6 +12,28 @@ export function readLabelValue(leaves: string[], label: string): string | null {
   return next;
 }
 
+/**
+ * Table grid from flat row records (direct cells only, with the index of the table each row
+ * belongs to). Headers = first row containing `headerName`; data rows = the following rows of
+ * that SAME table with a matching cell count, so a nested table's rows never leak in.
+ */
+export function gridFromRows(
+  rows: { table: number; cells: string[] }[],
+  headerName: string,
+): { headers: string[]; rows: string[][] } {
+  const want = norm(headerName);
+  const h = rows.findIndex((r) => r.cells.some((c) => norm(c) === want));
+  if (h < 0) return { headers: [], rows: [] };
+  const { table, cells: headers } = rows[h];
+  return {
+    headers,
+    rows: rows
+      .slice(h + 1)
+      .filter((r) => r.table === table && r.cells.length === headers.length)
+      .map((r) => r.cells),
+  };
+}
+
 /** The `columnName` cell of the row whose masked card number ends in `last4`. */
 export function readColumnForLast4(headers: string[], rows: string[][], last4: string, columnName: string): string | null {
   const want = norm(columnName);

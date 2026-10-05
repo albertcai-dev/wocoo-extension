@@ -4,7 +4,7 @@
 // The login form is a server-rendered JSP, so the inputs exist by document_idle. We
 // retry a few times anyway in case the form is replaced after first paint.
 
-import { pageSaysNoRecord, readColumnForLast4, readLabelValue, readProgramForLast4 } from '../data/i2cCardDetailsParse';
+import { gridFromRows, pageSaysNoRecord, readColumnForLast4, readLabelValue, readProgramForLast4 } from '../data/i2cCardDetailsParse';
 
 export {}; // Module-scoped so helpers don't collide with other content scripts at the TS layer.
 
@@ -1296,17 +1296,15 @@ function leafTextsForDetails(): string[] {
 
 /** Program per card, from whichever table has a "Program" header. */
 function enrichCards(cards: ScrapedCard[]): ScrapedCard[] {
-  let headers: string[] = [];
-  let rows: string[][] = [];
-  for (const table of Array.from(document.querySelectorAll<HTMLTableElement>('table'))) {
-    const ths = Array.from(table.querySelectorAll('th')).map((th) => (th.textContent || '').trim());
-    if (!ths.some((h) => /^program$/i.test(h))) continue;
-    headers = ths;
-    rows = Array.from(table.querySelectorAll('tr'))
-      .filter((tr) => tr.querySelectorAll('td').length > 0 && !tr.querySelector('tr'))
-      .map((tr) => Array.from(tr.querySelectorAll('td')).map((td) => (td.textContent || '').trim()));
-    break;
-  }
+  // Direct child cells only: the Accounts row can contain the nested "Primary Card(s)" table.
+  const tables = Array.from(document.querySelectorAll<HTMLTableElement>('table'));
+  const allRows = Array.from(document.querySelectorAll<HTMLTableRowElement>('tr')).map((tr) => ({
+    table: tables.indexOf(tr.closest('table') as HTMLTableElement),
+    cells: Array.from(tr.children)
+      .filter((el) => el.tagName === 'TD' || el.tagName === 'TH')
+      .map((el) => (el.textContent || '').trim()),
+  }));
+  const { headers, rows } = gridFromRows(allRows, 'Program');
   const leaves = leafTextsForDetails();
   const delinquencyStatus = readLabelValue(leaves, 'Delinquency Status:') ?? undefined;
   const creationDate = readLabelValue(leaves, 'Card Creation Date:') ?? undefined;
