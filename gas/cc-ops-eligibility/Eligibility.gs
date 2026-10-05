@@ -14,9 +14,12 @@ function doGet(e) {
     // C1: Access control — check user authorization.
     var user = String(Session.getActiveUser().getEmail() || '').toLowerCase();
     var props = PropertiesService.getScriptProperties();
-    var allowedStr = (props.getProperty('ELIG_ALLOWED_USERS') || '').trim();
-    var allowed = allowedStr ? allowedStr.split(',').map(function (s) { return s.trim().toLowerCase(); }) : [];
-    if (!allowedStr || allowed.indexOf(user) === -1) {
+    // A: trim + lowercase + drop blanks, so "a@ws.com," can't admit a blank getActiveUser().
+    var allowed = String(props.getProperty('ELIG_ALLOWED_USERS') || '')
+      .split(',')
+      .map(function (s) { return s.trim().toLowerCase(); })
+      .filter(String);
+    if (!user || allowed.indexOf(user) === -1) {
       return eligReply_({ error: 'Not authorised for the eligibility bridge: ' + (user || 'unknown user') });
     }
 
@@ -51,65 +54,113 @@ function eligHasLabel_(thread, name) {
   return thread.getLabels().some(function (l) { return l.getName() === name; });
 }
 
+var ELIG_LIST_CAP = 500;
+var ELIG_DRAFTED_CAP = 200;
+var ELIG_UNKNOWN_CAP = 200;
+var ELIG_PAGE = 100;
+
+/** GmailApp.search paged by 100 up to `cap` threads. Returns { threads, capped }. */
+function eligSearchCapped_(query, cap) {
+  var out = [];
+  var start = 0;
+  while (out.length < cap) {
+    var want = Math.min(ELIG_PAGE, cap - out.length);
+    var page = GmailApp.search(query, start, want);
+    if (!page || page.length === 0) break;
+    out = out.concat(page);
+    if (page.length < want) return { threads: out, capped: false };
+    start += page.length;
+  }
+  return { threads: out, capped: out.length >= cap };
+}
+
+/** Latest non-draft message of a thread, plus the non-draft count; null when the thread is all drafts. */
+function eligLatest_(msgs) {
+  var real = msgs.filter(function (m) { return !m.isDraft(); });
+  if (!real.length) return null;
+  return { m: real[real.length - 1], count: real.length };
+}
+
+function eligRequestShape_(t, latest) {
+  var m = latest.m;
+  return {
+    threadId: t.getId(),
+    messageId: m.getId(),
+    from: m.getFrom(),
+    fromEmail: extractEmailAddress_(m.getFrom()),
+    subject: m.getSubject(),
+    date: m.getDate().toISOString(),
+    messageCount: latest.count,
+    plainBody: (m.getPlainBody() || '').substring(0, ELIG_BODY_CAP),
+  };
+}
+
 function eligList_() {
   var insurers = loadInsurers_();
+  var insurerAddrs = Object.keys(insurers);
+  var props = PropertiesService.getScriptProperties();
   // Domains from the normalised addresses. (loadInsurerDomains_ splits the raw
   // "Name <x@y>" string and yields "y>", so it never matches — don't reuse it.)
   var domains = {};
-  Object.keys(insurers).forEach(function (addr) {
+  insurerAddrs.forEach(function (addr) {
     var d = addr.split('@')[1];
     if (d) domains[d.toLowerCase()] = true;
   });
   domains['wealthsimple.com'] = true;
 
-  // I3: Build Gmail query with from-clause for insurer addresses.
-  var fromClauses = Object.keys(insurers).map(function (a) { return 'from:' + a; }).join(' ');
-  var query = 'in:inbox is:unread -label:sidekick-drafted {' + fromClauses + '}';
-
   var out = [];
-  var skipped = 0;
-  var totalSeen = 0;
-  var start = 0;
-  var pageSize = 100;
-  var maxThreads = 500;
+  var drafted = [];
 
-  // Page through results until we get fewer than 100 or hit the hard cap.
-  while (totalSeen < maxThreads) {
-    var threads = GmailApp.search(query, start, pageSize);
-    if (!threads || threads.length === 0) break;
+  // I4: with no insurers there is no from-clause to build — skip the insurer queries
+  // entirely (an empty `{}` group would match everything).
+  if (insurerAddrs.length) {
+    var fromGroup = '{' + insurerAddrs.map(function (a) { return 'from:' + a; }).join(' ') + '}';
 
-    threads.forEach(function (t) {
-      // I3: Ignore draft messages.
-      var msgs = t.getMessages().filter(function (m) { return !m.isDraft(); });
-      if (msgs.length === 0) return; // Skip thread with no non-draft messages.
-
-      var m = msgs[msgs.length - 1];
-      if (!m.isUnread()) return;
-      var fromEmail = extractEmailAddress_(m.getFrom());
-      if (!insurers[fromEmail]) { skipped++; return; }
-      out.push({
-        threadId: t.getId(),
-        messageId: m.getId(),
-        from: m.getFrom(),
-        fromEmail: fromEmail,
-        subject: m.getSubject(),
-        date: m.getDate().toISOString(),
-        messageCount: msgs.length,
-        plainBody: (m.getPlainBody() || '').substring(0, ELIG_BODY_CAP),
-      });
+    var reqThreads = eligSearchCapped_('in:inbox is:unread -label:sidekick-drafted ' + fromGroup, ELIG_LIST_CAP).threads;
+    var reqMsgs = reqThreads.length ? GmailApp.getMessagesForThreads(reqThreads) : [];
+    reqThreads.forEach(function (t, i) {
+      var latest = eligLatest_(reqMsgs[i]);
+      if (!latest || !latest.m.isUnread()) return;
+      // Threads whose latest sender isn't an insurer are counted by the unknown-sender search below.
+      if (!insurers[extractEmailAddress_(latest.m.getFrom())]) return;
+      out.push(eligRequestShape_(t, latest));
     });
 
-    totalSeen += threads.length;
-    if (threads.length < pageSize) break; // Less than a full page, we're done.
-    start += pageSize;
+    // I1: drafted-but-unsent threads, so a lost panel session can still send them.
+    var drThreads = eligSearchCapped_('in:inbox is:unread label:sidekick-drafted -label:sidekick-sent ' + fromGroup, ELIG_DRAFTED_CAP).threads;
+    var drMsgs = drThreads.length ? GmailApp.getMessagesForThreads(drThreads) : [];
+    drThreads.forEach(function (t, i) {
+      var draftId = props.getProperty('elig_draft_thread_' + t.getId());
+      if (!draftId) return; // Not a draft this bridge owns.
+      if (props.getProperty('elig_sent_' + draftId)) return; // Already sent; only the cleanup failed.
+      var latest = eligLatest_(drMsgs[i]);
+      if (!latest) return;
+      if (!insurers[extractEmailAddress_(latest.m.getFrom())]) return;
+      var row = eligRequestShape_(t, latest);
+      row.draftId = draftId;
+      drafted.push(row);
+    });
   }
 
-  return {
+  // I4: safety net — unread, untouched threads whose latest sender is NOT on the Insurers tab.
+  var unknown = eligSearchCapped_('in:inbox is:unread -label:sidekick-drafted -label:sidekick-sent', ELIG_UNKNOWN_CAP);
+  var unkMsgs = unknown.threads.length ? GmailApp.getMessagesForThreads(unknown.threads) : [];
+  var skipped = 0;
+  unknown.threads.forEach(function (t, i) {
+    var latest = eligLatest_(unkMsgs[i]);
+    if (!latest) return;
+    if (!insurers[extractEmailAddress_(latest.m.getFrom())]) skipped++;
+  });
+
+  var result = {
     action: 'eligibilityRequestsListed',
     requests: out,
+    drafted: drafted,
     excludedDomains: Object.keys(domains),
     skippedUnknownSender: skipped,
   };
+  if (unknown.capped) result.skippedUnknownSenderCapped = true;
+  return result;
 }
 
 function eligCreateDraft_(messageId, body) {
@@ -132,14 +183,18 @@ function eligCreateDraft_(messageId, body) {
     // I2: Check if we have a stored draft for this thread.
     var storedDraftId = props.getProperty(propKey);
     if (storedDraftId) {
+      var existing = null;
       try {
-        var existing = GmailApp.getDraft(storedDraftId);
-        return { action: 'eligibilityDraftCreated', messageId: messageId, draftId: storedDraftId, reused: true };
+        existing = GmailApp.getDraft(storedDraftId);
       } catch (err) {
-        // I2: Draft was deleted; clean up stale properties.
-        props.deleteProperty(propKey);
-        props.deleteProperty('elig_draft_id_' + storedDraftId);
+        existing = null;
       }
+      if (existing) {
+        return { action: 'eligibilityDraftCreated', messageId: messageId, draftId: storedDraftId, reused: true };
+      }
+      // M5: Draft was deleted (getDraft threw or returned null); clean up stale properties.
+      props.deleteProperty(propKey);
+      props.deleteProperty('elig_draft_id_' + storedDraftId);
     }
 
     // Create a new draft.
@@ -164,6 +219,11 @@ function eligSendDrafts_(draftIds) {
 
   var results = draftIds.map(function (id) {
     try {
+      // I2: A draft we already sent (e.g. the reply to an earlier call was lost) is never sent twice.
+      if (props.getProperty('elig_sent_' + id)) {
+        return { draftId: id, ok: true, alreadySent: true };
+      }
+
       // C1: Verify the draft is owned by Sidekick.
       var threadId = props.getProperty('elig_draft_id_' + id);
       if (!threadId) {
@@ -171,18 +231,24 @@ function eligSendDrafts_(draftIds) {
       }
 
       var sent = GmailApp.getDraft(id).send();
+    } catch (err) {
+      return { draftId: id, ok: false, error: String((err && err.message) || err) };
+    }
+
+    // The email is out; from here on nothing may read as "Send failed".
+    try {
+      // I2: Record the send first, so a retry of this draftId answers alreadySent.
+      props.setProperty('elig_sent_' + id, threadId);
       var t = sent.getThread();
       t.markRead();
       t.removeLabel(drafted);
       t.addLabel(sentLabel);
-
-      // C1: Delete both properties after successful send.
+      // C1: Delete both ownership properties after successful send (elig_sent_ stays).
       props.deleteProperty('elig_draft_id_' + id);
       props.deleteProperty('elig_draft_thread_' + threadId);
-
       return { draftId: id, ok: true };
     } catch (err) {
-      return { draftId: id, ok: false, error: String((err && err.message) || err) };
+      return { draftId: id, ok: true, warning: 'Sent, but tidy-up failed: ' + String((err && err.message) || err) };
     }
   });
   return { action: 'eligibilityDraftsSent', results: results };
@@ -241,7 +307,8 @@ function eligLog_(row) {
 
 function testListEligibilityRequests() {
   var r = eligList_();
-  Logger.log('requests=%s skippedUnknownSender=%s domains=%s', r.requests.length, r.skippedUnknownSender, r.excludedDomains.join(','));
+  Logger.log('requests=%s drafted=%s skippedUnknownSender=%s%s domains=%s', r.requests.length, r.drafted.length,
+    r.skippedUnknownSender, r.skippedUnknownSenderCapped ? '+' : '', r.excludedDomains.join(','));
   r.requests.slice(0, 3).forEach(function (q) { Logger.log('%s | %s | %s', q.messageId, q.fromEmail, q.subject); });
 }
 
