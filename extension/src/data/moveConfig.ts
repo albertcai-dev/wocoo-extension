@@ -1,7 +1,7 @@
 // Configuration for the Move workflow — destinations, per-destination required fields,
 // and the EOC Problem Area master list (157 options).
 
-export type MoveDestination = 'EOC' | 'DBO' | 'CRED' | 'FRAUD' | 'PRR' | 'PFO';
+export type MoveDestination = 'EOC' | 'DBO' | 'CRED' | 'FRAUD' | 'PRR' | 'PFO' | 'BOPSFUND';
 
 export interface DestinationConfig {
   key: MoveDestination;
@@ -60,6 +60,14 @@ export const DESTINATIONS: DestinationConfig[] = [
     boardUrl: 'https://wealthsimple.atlassian.net/jira/software/c/projects/PFO/boards/12356',
     notes: 'Card fulfillment only. Cheques moved to DBO (Cheque Delivery / Cheque: Stop Payment / Chequebook: Delivery Issue).',
   },
+  {
+    key: 'BOPSFUND',
+    name: 'BOPSFUND',
+    fullName: 'Brokerage Ops Funding',
+    apiEnabled: true,
+    boardUrl: 'https://wealthsimple.atlassian.net/jira/software/c/projects/BOPSFUND',
+    notes: 'Pick an issue type below — required fields render dynamically from Jira.',
+  },
 ];
 
 // ── PRR (Promotions, Referrals, Rewards) ──────────────────────────────────────
@@ -83,8 +91,10 @@ export interface PrrRequiredField {
    *  loads, so it's applied in a second pass (see applyOptionPrefills).
    *  'atlasName' / 'atlasAddress' aren't on the ticket at all — they come from a
    *  headless Atlas scrape that lands after the form has already rendered, so they
-   *  fill in asynchronously (see atlasPrefills). */
-  prefillFrom?: 'identityId' | 'ticketUrl' | 'atlasUrl' | 'tier' | 'atlasName' | 'atlasAddress';
+   *  fill in asynchronously (see atlasPrefills).
+   *  'accountId' uses the ticket's Account ID, else the Atlas account lookup the modal
+   *  already runs on open — which can also land after first render. */
+  prefillFrom?: 'identityId' | 'accountId' | 'ticketUrl' | 'atlasUrl' | 'tier' | 'atlasName' | 'atlasAddress';
   /** Jira does NOT require this field — we list it only because we can prefill it for free.
    *  Excluded from the "all fields filled" gate and skipped in the move payload when blank,
    *  so a failed prefill can't block a move Jira would have accepted. */
@@ -565,6 +575,53 @@ export const FRAUD_ISSUE_TYPES: PrrIssueTypeConfig[] = [
       F_FRAUD_DETECTION_METHOD,
     ],
   },
+];
+
+// ── BOPSFUND (Brokerage Ops Funding) ──────────────────────────────────────────
+// Every issue type requires the same three strings — User Identity ID, Account ID (W#),
+// Funds Transfer ID — and three types add one option field on top. Option labels come
+// from createmeta at runtime like FRAUD/DBO/PRR. BOPSFUND is an MCP "limited" project,
+// but the move runs on the extension's own Jira OAuth, so that doesn't apply here.
+//
+// Funds Transfer ID is required even where none exists (e.g. tracing a deposit that never
+// landed) — the operator enters "N/A". Sub-task is omitted: it needs a parent and isn't
+// offered in Jira's own Move dropdown.
+
+export const BOPSFUND_PROJECT_KEY = 'BOPSFUND';
+
+const F_BOPS_IDENTITY       = { fieldId: 'customfield_11458', name: 'User Identity ID',  type: 'string' as const, prefillFrom: 'identityId' as const };
+const F_BOPS_ACCOUNT_ID     = { fieldId: 'customfield_10082', name: 'Account ID (W#)',   type: 'string' as const, prefillFrom: 'accountId' as const };
+const F_BOPS_FUNDS_TRANSFER = { fieldId: 'customfield_10125', name: 'Funds Transfer ID', type: 'string' as const };
+const BOPS_COMMON = [F_BOPS_IDENTITY, F_BOPS_ACCOUNT_ID, F_BOPS_FUNDS_TRANSFER];
+
+// Order mirrors Jira's issue-type dropdown for the project.
+export const BOPSFUND_ISSUE_TYPES: PrrIssueTypeConfig[] = [
+  { id: '11224', name: 'Large Withdrawals', description: '$200k+ withdrawals.', requiredFields: BOPS_COMMON },
+  { id: '11506', name: 'Manual Requests - Cross Functional', description: 'Manual funding request that needs another team (RESP/FHSA/LIRA withdrawals, return funds, etc.).', requiredFields: BOPS_COMMON },
+  {
+    id: '11496',
+    name: 'Manual Requests - Exceptions',
+    description: 'Manual HBP/LLP, closed-account or fraud withdrawals, PAD reversal requests, approved in-product issues.',
+    requiredFields: [...BOPS_COMMON, { fieldId: 'customfield_11453', name: 'Manual Request Type', type: 'option' as const }],
+  },
+  {
+    id: '11497',
+    name: 'Stuck Transactions',
+    description: 'EFT, e-Transfer or debit card transaction stuck in flight.',
+    requiredFields: [...BOPS_COMMON, { fieldId: 'customfield_11454', name: 'Stuck Transaction Type', type: 'option' as const }],
+  },
+  {
+    id: '11498',
+    name: 'Tracing Requests',
+    description: 'Trace a missing EFT, ACH or bill payment. Use "N/A" for Funds Transfer ID if the funds never landed.',
+    requiredFields: [...BOPS_COMMON, { fieldId: 'customfield_11455', name: 'Tracing Request Type', type: 'option' as const }],
+  },
+  { id: '11500', name: 'Non-Resident Transactions', description: 'Deposits or withdrawals for non-resident clients.', requiredFields: BOPS_COMMON },
+  { id: '12076', name: 'PAD Dispute', description: 'Client disputes a pre-authorized debit.', requiredFields: BOPS_COMMON },
+  { id: '12077', name: 'Reversal', description: 'Reverse a funding transaction.', requiredFields: BOPS_COMMON },
+  { id: '10002', name: 'Task', description: 'Generic task. BOPSFUND discourages it ("Do not use Task") — prefer a specific type.', requiredFields: BOPS_COMMON },
+  { id: '11507', name: 'Archive', description: 'Deprecated issue type in BOPSFUND.', requiredFields: BOPS_COMMON },
+  { id: '11765', name: 'Wires Posting', description: 'Post a wire via the bulk upload tool; checks, reviews and approvals logged in one ticket.', requiredFields: BOPS_COMMON },
 ];
 
 // EOC Problem Area master list. Order matters — Payment Card group is pinned on top

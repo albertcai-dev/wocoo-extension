@@ -33,6 +33,8 @@ import {
   FRAUD_ISSUE_TYPES,
   PFO_PROJECT_KEY,
   PFO_ISSUE_TYPES,
+  BOPSFUND_PROJECT_KEY,
+  BOPSFUND_ISSUE_TYPES,
   tierToUserTierLabel,
 } from '../data/moveConfig';
 import {
@@ -71,6 +73,7 @@ function textPrefills(fields: PrrRequiredField[], ticket: WocooTicket): Record<s
   const out: Record<string, string> = {};
   for (const f of fields) {
     if (f.prefillFrom === 'identityId' && ticket.identityId) out[f.fieldId] = ticket.identityId;
+    else if (f.prefillFrom === 'accountId' && ticket.accountId) out[f.fieldId] = ticket.accountId;
     else if (f.prefillFrom === 'ticketUrl') out[f.fieldId] = `https://wealthsimple.atlassian.net/browse/${ticket.id}`;
     else if (f.prefillFrom === 'atlasUrl' && ticket.identityId) {
       out[f.fieldId] = `https://atlas.wealthsimple.com/identity/${ticket.identityId}/overview?ticketId=${ticket.id}`;
@@ -196,6 +199,14 @@ export function MoveModal({ ticket, onClose, initialDestKey = 'EOC' }: { ticket:
   const [pfoAtlasError, setPfoAtlasError] = useState<string | null>(null);
   const pfoAtlasAttempted = useRef(false);
 
+  // BOPSFUND: dynamic form driven by createmeta (mirrors FRAUD). Every issue type shares
+  // Identity / Account ID / Funds Transfer ID; three add one option field.
+  const [bopsIssueTypeId, setBopsIssueTypeId] = useState<string>('');
+  const [bopsFieldValues, setBopsFieldValues] = useState<Record<string, string>>({});
+  const [bopsMeta, setBopsMeta] = useState<CreateMetaField[] | null>(null);
+  const [bopsMetaState, setBopsMetaState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
+  const [bopsMetaError, setBopsMetaError] = useState<string | null>(null);
+
   // Close on Esc
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && status !== 'executing') onClose(); };
@@ -274,6 +285,11 @@ export function MoveModal({ ticket, onClose, initialDestKey = 'EOC' }: { ticket:
     [pfoIssueTypeId],
   );
 
+  const bopsConfig: PrrIssueTypeConfig | null = useMemo(
+    () => BOPSFUND_ISSUE_TYPES.find((t) => t.id === bopsIssueTypeId) || null,
+    [bopsIssueTypeId],
+  );
+
   // When the PRR issue type changes: reset field values (with prefill from ticket), and
   // fetch createmeta so option pickers have real labels to render.
   useEffect(() => {
@@ -330,6 +346,49 @@ export function MoveModal({ ticket, onClose, initialDestKey = 'EOC' }: { ticket:
       });
     return () => { cancelled = true; };
   }, [fraudConfig, ticket.identityId, ticket.id]);
+
+  // Same effect for BOPSFUND.
+  useEffect(() => {
+    if (!bopsConfig) {
+      setBopsMeta(null);
+      setBopsMetaState('idle');
+      setBopsMetaError(null);
+      setBopsFieldValues({});
+      return;
+    }
+    setBopsFieldValues(textPrefills(bopsConfig.requiredFields, ticket));
+    setBopsMetaState('loading');
+    setBopsMetaError(null);
+    let cancelled = false;
+    fetchCreateMetaFields(BOPSFUND_PROJECT_KEY, bopsConfig.id)
+      .then((fields) => {
+        if (cancelled) return;
+        setBopsMeta(fields);
+        setBopsMetaState('ready');
+      })
+      .catch((e: any) => {
+        if (cancelled) return;
+        setBopsMeta(null);
+        setBopsMetaError(e?.message || 'Failed to load BOPSFUND metadata');
+        setBopsMetaState('error');
+      });
+    return () => { cancelled = true; };
+  }, [bopsConfig, ticket.identityId, ticket.id]);
+
+  // Most WOCOO tickets have no Account ID, so Account ID (W#) usually comes from the Atlas
+  // lookup that runs on modal open — often after the form has rendered. Fill it only while
+  // blank so an operator's edit wins. Declared after the effect above so an issue-type
+  // switch (which resets the values) is re-filled in the same commit.
+  useEffect(() => {
+    if (!bopsConfig || !accountIdInput) return;
+    setBopsFieldValues((prev) => {
+      const add: Record<string, string> = {};
+      for (const f of bopsConfig.requiredFields) {
+        if (f.prefillFrom === 'accountId' && !(prev[f.fieldId] || '').trim()) add[f.fieldId] = accountIdInput;
+      }
+      return Object.keys(add).length ? { ...prev, ...add } : prev;
+    });
+  }, [bopsConfig, accountIdInput]);
 
   // Same effect for DBO — separate hook so PRR and DBO can coexist across dest switches.
   useEffect(() => {
@@ -459,6 +518,13 @@ export function MoveModal({ ticket, onClose, initialDestKey = 'EOC' }: { ticket:
       const v = fraudFieldValues[f.fieldId];
       return !!v && !!v.trim();
     });
+  const bopsReady =
+    !!bopsConfig &&
+    bopsMetaState === 'ready' &&
+    bopsConfig.requiredFields.every((f) => {
+      const v = bopsFieldValues[f.fieldId];
+      return !!v && !!v.trim();
+    });
   const dboReady =
     !!dboConfig &&
     dboMetaState === 'ready' &&
@@ -505,6 +571,7 @@ export function MoveModal({ ticket, onClose, initialDestKey = 'EOC' }: { ticket:
       dest.key === 'PRR' ? prrReady :
       dest.key === 'PFO' ? pfoReady :
       dest.key === 'FRAUD' ? fraudReady :
+      dest.key === 'BOPSFUND' ? bopsReady :
       false
     );
 
@@ -668,6 +735,23 @@ export function MoveModal({ ticket, onClose, initialDestKey = 'EOC' }: { ticket:
           sourceKey: ticket.id,
           destProjectId: projectId,
           destIssueTypeId: pfoConfig.id,
+          mandatoryFields: fields,
+        });
+      } else if (dest.key === 'BOPSFUND') {
+        if (!bopsConfig) throw new Error('Select a BOPSFUND issue type first.');
+        const { projectId } = await lookupProjectAndIssueType(BOPSFUND_PROJECT_KEY, bopsConfig.name);
+        destLabel = `BOPSFUND (${bopsConfig.name})`;
+        const fields: Record<string, ReturnType<typeof rawField>> = {
+          [MOVE_FIELDS.SUMMARY]: rawField(ticket.summary),
+        };
+        // All BOPSFUND required fields are strings or single options — rawField covers both.
+        for (const f of bopsConfig.requiredFields) {
+          fields[f.fieldId] = rawField(bopsFieldValues[f.fieldId].trim());
+        }
+        moveCall = () => moveTicket({
+          sourceKey: ticket.id,
+          destProjectId: projectId,
+          destIssueTypeId: bopsConfig.id,
           mandatoryFields: fields,
         });
       } else {
@@ -882,6 +966,19 @@ export function MoveModal({ ticket, onClose, initialDestKey = 'EOC' }: { ticket:
                   meta={fraudMeta}
                   metaState={fraudMetaState}
                   metaError={fraudMetaError}
+                  locked={status === 'confirming' || status === 'executing'}
+                />
+              )}
+
+              {dest.key === 'BOPSFUND' && (
+                <BopsfundFields
+                  issueTypeId={bopsIssueTypeId}
+                  onIssueTypeId={setBopsIssueTypeId}
+                  fieldValues={bopsFieldValues}
+                  onFieldValues={setBopsFieldValues}
+                  meta={bopsMeta}
+                  metaState={bopsMetaState}
+                  metaError={bopsMetaError}
                   locked={status === 'confirming' || status === 'executing'}
                 />
               )}
@@ -1538,6 +1635,79 @@ function FraudFields(props: {
               locked={locked}
             />
           ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+// BOPSFUND-specific wrapper — same shape as FraudFields, plus a hint for the two
+// required strings that often have no natural value.
+function BopsfundFields(props: {
+  issueTypeId: string;
+  onIssueTypeId: (id: string) => void;
+  fieldValues: Record<string, string>;
+  onFieldValues: (updater: (prev: Record<string, string>) => Record<string, string>) => void;
+  meta: CreateMetaField[] | null;
+  metaState: 'idle' | 'loading' | 'ready' | 'error';
+  metaError: string | null;
+  locked: boolean;
+}) {
+  const { issueTypeId, onIssueTypeId, fieldValues, onFieldValues, meta, metaState, metaError, locked } = props;
+  const cfg = BOPSFUND_ISSUE_TYPES.find((t) => t.id === issueTypeId) || null;
+
+  const setField = (fieldId: string, value: string) =>
+    onFieldValues((prev) => ({ ...prev, [fieldId]: value }));
+
+  return (
+    <section style={sectionStyle}>
+      <Label>Step 3: BOPSFUND fields</Label>
+
+      <div style={{ marginBottom: 'var(--mint-sp-3)' }}>
+        <FieldLabel>Issue Type</FieldLabel>
+        <select
+          value={issueTypeId}
+          disabled={locked}
+          onChange={(e) => onIssueTypeId(e.target.value)}
+          style={selectStyle}
+        >
+          <option value="">— Pick an issue type —</option>
+          {BOPSFUND_ISSUE_TYPES.map((t) => (
+            <option key={t.id} value={t.id}>{t.name}</option>
+          ))}
+        </select>
+        {cfg && (
+          <div style={{ marginTop: 6, fontSize: 'var(--mint-text-nano)', color: 'var(--mint-fg-soft)', lineHeight: 1.4 }}>
+            {cfg.description}
+          </div>
+        )}
+      </div>
+
+      {cfg && metaState === 'loading' && (
+        <InfoCard tone="info">Loading BOPSFUND field options from Jira…</InfoCard>
+      )}
+      {cfg && metaState === 'error' && (
+        <InfoCard tone="negative">Failed to load BOPSFUND fields: {metaError || 'unknown error'}. Reopen the modal to retry.</InfoCard>
+      )}
+
+      {cfg && metaState === 'ready' && meta && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--mint-sp-3)' }}>
+          {cfg.requiredFields.map((f) => (
+            <PrrFieldInput
+              key={f.fieldId}
+              field={f}
+              meta={meta}
+              value={fieldValues[f.fieldId] || ''}
+              childValue={fieldValues[`${f.fieldId}__child`] || ''}
+              onChange={(v) => setField(f.fieldId, v)}
+              onChildChange={(v) => setField(`${f.fieldId}__child`, v)}
+              locked={locked}
+            />
+          ))}
+          <div style={{ fontSize: 'var(--mint-text-nano)', color: 'var(--mint-fg-soft)', lineHeight: 1.4 }}>
+            Account ID comes from the ticket or the Atlas lookup — confirm it's the account in question.
+            Enter "N/A" for Funds Transfer ID if there isn't one.
+          </div>
         </div>
       )}
     </section>
