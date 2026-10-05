@@ -283,6 +283,24 @@ function eligLog_(row) {
     for (var i = 0; i < ids.length; i++) {
       if (String(ids[i][0]) === String(row.request_message_id)) {
         var targetRange = sheet.getRange(i + 2, 1, 1, 12);
+        // READ_EMAIL is logged with a minimal resolution when a draft from an earlier session is sent, so its
+        // blank fields must not wipe the DRAFTED audit values. Merge for READ_EMAIL only: any other status
+        // (e.g. NEEDS_REVIEW re-resolved to NO_MATCH) is a genuine re-resolution and must fully overwrite,
+        // otherwise stale card data would survive.
+        if (row.status === 'READ_EMAIL') {
+          var existing = targetRange.getValues()[0];
+          var merged = values[0].map(function (incoming, c) {
+            var cur = existing[c];
+            var incomingEmpty = incoming === '' || incoming === null || incoming === undefined;
+            if (incomingEmpty) return cur;
+            // notes is the last column (index 11): append when both differ.
+            if (c === 11 && cur !== '' && cur !== null && cur !== undefined && String(cur) !== String(incoming)) {
+              return cur + ' | ' + incoming;
+            }
+            return incoming;
+          });
+          values = [merged];
+        }
         // I4: Set number format to text.
         targetRange.setNumberFormat('@').setValues(values);
         return { action: 'eligibilityResultLogged', rowNumber: i + 2 };
