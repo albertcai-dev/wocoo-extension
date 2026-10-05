@@ -3,10 +3,13 @@ import {
   atlasGraphql,
   fetchAtlasAccountIdViaGraphql,
   fetchAtlasClientDetailsViaGraphql,
+  fetchAtlasClientEmailViaGraphql,
   GET_PROFILE_V2_QUERY,
   readClientDetails,
+  readIdentityEmail,
   readIndividualTier,
   readSpendAccountCanonicalId,
+  readSpendAccountNumberFromIdentity,
   readSpendCustodianAccountNumber,
 } from './atlasGraphql';
 
@@ -249,6 +252,44 @@ const DETAILS_OK = () => ok({
 });
 const PACKAGES_OK = () => ok({ data: { identity: { packages: [{ id: 'silver' }, { id: 'individual-tier-premium' }] } } });
 
+// Synthetic, not recorded: FetchIdentityAccounts is a schema guess (see atlasGraphql.ts).
+const identityAccounts = (accounts: Array<[string, string[]]>) => ok({
+  data: {
+    identity: {
+      accounts: {
+        edges: accounts.map(([id, custodians]) => ({
+          node: { id, custodianAccounts: custodians.map((c) => ({ id: c })) },
+        })),
+      },
+    },
+  },
+});
+const IDENTITY_ACCOUNTS_OK = () => identityAccounts([
+  ['tfsa-abc123', ['WTFSA1234CAD']],
+  ['ca-cash-msb-i_ma5GMI2g', ['C14792J29CAD', 'WK6RQDY37CAD']],
+]);
+
+describe('readSpendAccountNumberFromIdentity', () => {
+  const read = async (res: Response) => readSpendAccountNumberFromIdentity(await res.json());
+
+  it('takes the W# from the spend account only, ignoring other account types', async () => {
+    expect(await read(IDENTITY_ACCOUNTS_OK())).toBe('WK6RQDY37CAD');
+  });
+
+  it('returns null when two spend accounts carry different W#s', async () => {
+    expect(await read(identityAccounts([
+      ['ca-cash-msb-a', ['WAAAA1111CAD']],
+      ['ca-cash-msb-b', ['WBBBB2222CAD']],
+    ]))).toBeNull();
+  });
+
+  it('returns null with no spend account or an unreadable response', async () => {
+    expect(await read(identityAccounts([['tfsa-abc123', ['WTFSA1234CAD']]]))).toBeNull();
+    expect(readSpendAccountNumberFromIdentity(undefined)).toBeNull();
+    expect(readSpendAccountNumberFromIdentity({ data: { identity: { accounts: null } } })).toBeNull();
+  });
+});
+
 describe('fetchAtlasAccountIdViaGraphql', () => {
   it('returns the W# and the tier', async () => {
     stubByOperation({
@@ -308,6 +349,54 @@ describe('fetchAtlasAccountIdViaGraphql', () => {
 
     await expect(fetchAtlasAccountIdViaGraphql({ identityId: 'identity-1' }))
       .rejects.toThrow(/spend account number/i);
+  });
+
+  it('returns the one-hop W# without waiting for a slow chain', async () => {
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    let releaseChain: () => void = () => {};
+    const chainGate = new Promise<void>((r) => { releaseChain = r; });
+    vi.stubGlobal('fetch', vi.fn(async (_url: unknown, init: unknown) => {
+      const op = JSON.parse(String((init as RequestInit).body)).operationName;
+      if (op === 'FetchIdentityAccounts') return IDENTITY_ACCOUNTS_OK();
+      if (op === 'FetchIdentityPackages') return PACKAGES_OK();
+      await chainGate; // hop 1 never answers until the assertion is done
+      return op === 'WsBankAccount' ? BANK_OK() : DETAILS_OK();
+    }));
+
+    const result = await fetchAtlasAccountIdViaGraphql({ identityId: 'identity-1' });
+
+    expect(result).toEqual({ accountNumber: 'WK6RQDY37CAD', individualTierStatus: 'Premium' });
+    releaseChain();
+  });
+
+  it('falls through to the chain when the one-hop query is rejected', async () => {
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    stubByOperation({
+      FetchIdentityAccounts: () => ok({ errors: [{ message: "Field 'accounts' doesn't exist on type 'Identity'" }] }),
+      WsBankAccount: BANK_OK,
+      getAccountDetails: DETAILS_OK,
+      FetchIdentityPackages: PACKAGES_OK,
+    });
+
+    const result = await fetchAtlasAccountIdViaGraphql({ identityId: 'identity-1' });
+
+    expect(result.accountNumber).toBe('WK6RQDY37CAD');
+  });
+
+  it('warns when the one-hop W# disagrees with the chain', async () => {
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    stubByOperation({
+      FetchIdentityAccounts: () => identityAccounts([['ca-cash-msb-other', ['WOTHER123CAD']]]),
+      WsBankAccount: BANK_OK,
+      getAccountDetails: DETAILS_OK,
+      FetchIdentityPackages: PACKAGES_OK,
+    });
+
+    await fetchAtlasAccountIdViaGraphql({ identityId: 'identity-1' });
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/DISAGREES/), 'WOTHER123CAD', 'vs', 'WK6RQDY37CAD');
   });
 
   it('rejects an empty identityId without calling the network', async () => {
@@ -451,6 +540,60 @@ describe('fetchAtlasClientDetailsViaGraphql', () => {
   it('rejects an empty identityId without calling the network', async () => {
     const spy = stubFetch(() => ok(PROFILE_RES));
     await expect(fetchAtlasClientDetailsViaGraphql({ identityId: '' })).rejects.toThrow(/identityId is required/);
+    expect(spy).not.toHaveBeenCalled();
+  });
+});
+
+// Synthetic, not recorded: the email field is a schema guess (see atlasGraphql.ts).
+const IDENTITY_EMAIL_RES = {
+  data: { identity: { id: 'identity-1', email: 'client@example.com', __typename: 'Identity' } },
+};
+
+describe('readIdentityEmail', () => {
+  it('reads identity.email', () => {
+    expect(readIdentityEmail(IDENTITY_EMAIL_RES)).toBe('client@example.com');
+  });
+
+  it('trims surrounding whitespace', () => {
+    expect(readIdentityEmail({ data: { identity: { email: '  client@example.com ' } } })).toBe('client@example.com');
+  });
+
+  it('returns null for a missing, empty, or malformed email', () => {
+    expect(readIdentityEmail(undefined)).toBeNull();
+    expect(readIdentityEmail({ data: { identity: {} } })).toBeNull();
+    expect(readIdentityEmail({ data: { identity: { email: '' } } })).toBeNull();
+    expect(readIdentityEmail({ data: { identity: { email: 'not-an-email' } } })).toBeNull();
+  });
+});
+
+describe('fetchAtlasClientEmailViaGraphql', () => {
+  it('queries the identity on invest_graphql_api', async () => {
+    const spy = stubFetch(() => ok(IDENTITY_EMAIL_RES));
+
+    expect(await fetchAtlasClientEmailViaGraphql({ identityId: 'identity-1' })).toBe('client@example.com');
+
+    const [url, init] = spy.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe('https://cs-tools-satori.wealthsimple.com/api/atlas/graphql/invest_graphql_api');
+    const body = JSON.parse(String(init.body));
+    expect(body.operationName).toBe('FetchIdentityEmail');
+    expect(body.variables).toEqual({ id: 'identity-1' });
+  });
+
+  // The failure a wrong schema guess produces — it must throw so the caller falls back.
+  it('throws on a GraphQL validation error', async () => {
+    stubFetch(() => ok({ errors: [{ message: "Cannot query field 'email' on type 'Identity'." }] }));
+    await expect(fetchAtlasClientEmailViaGraphql({ identityId: 'identity-1' }))
+      .rejects.toThrow(/Cannot query field 'email'/);
+  });
+
+  it('throws when the identity has no email', async () => {
+    stubFetch(() => ok({ data: { identity: { id: 'identity-1', email: null } } }));
+    await expect(fetchAtlasClientEmailViaGraphql({ identityId: 'identity-1' })).rejects.toThrow(/no email/i);
+  });
+
+  it('rejects an empty identityId without calling the network', async () => {
+    const spy = stubFetch(() => ok(IDENTITY_EMAIL_RES));
+    await expect(fetchAtlasClientEmailViaGraphql({ identityId: '' })).rejects.toThrow(/identityId is required/);
     expect(spy).not.toHaveBeenCalled();
   });
 });

@@ -9,7 +9,11 @@
 // The atlas content script's polling deadline is 30s; we wait 35s before giving up and
 // closing the tab.
 
-import { fetchAtlasAccountIdViaGraphql, fetchAtlasClientDetailsViaGraphql } from './atlasGraphql';
+import {
+  fetchAtlasAccountIdViaGraphql,
+  fetchAtlasClientDetailsViaGraphql,
+  fetchAtlasClientEmailViaGraphql,
+} from './atlasGraphql';
 import type { AtlasLookupResult } from './atlasGraphql';
 
 // Re-exported so importers of this module keep working after the type moved to
@@ -109,10 +113,11 @@ export async function fetchAtlasAccountIdViaTab(args: FetchAtlasAccountIdArgs): 
 // -----------------------------------------------------------------------------
 // Headless Atlas client-email lookup.
 //
-// Opens Atlas in a background tab, waits for the atlas.ts email IIFE to scrape the
-// "Email" field from the identity homepage sidebar into
+// GraphQL first; the fallback opens Atlas in a background tab, waits for the atlas.ts
+// email IIFE to scrape the "Email" field from the identity homepage sidebar into
 // `chrome.storage.local.atlas_client_email`, then closes the tab. Used by Reverse Fee
-// on Interest-Related Issues tickets, where the ticket doesn't carry a clientEmail.
+// on Interest-Related Issues tickets, where the ticket doesn't carry a clientEmail, and
+// by the side panel's Fetch Account Number button.
 // -----------------------------------------------------------------------------
 
 export interface FetchAtlasClientEmailArgs {
@@ -121,7 +126,31 @@ export interface FetchAtlasClientEmailArgs {
   timeoutMs?: number;
 }
 
+/**
+ * Same shape as fetchAtlasAccountIdHeadless: on success it mirrors the result into
+ * `atlas_client_email`, because the side panel's Email row reads that storage key.
+ */
 export async function fetchAtlasClientEmailHeadless(args: FetchAtlasClientEmailArgs): Promise<string> {
+  try {
+    const email = await fetchAtlasClientEmailViaGraphql({ identityId: args.identityId });
+    await chrome.storage.local.set({
+      atlas_client_email: {
+        sourceTicketId: args.sourceTicketId || '',
+        email,
+        capturedAt: new Date().toISOString(),
+      },
+    });
+    console.info('[atlas] client email via GraphQL');
+    return email;
+  } catch (err) {
+    console.warn('[atlas] GraphQL client email failed, falling back to a background tab:', err);
+    const email = await fetchAtlasClientEmailViaTab(args);
+    console.info('[atlas] client email via background tab');
+    return email;
+  }
+}
+
+export async function fetchAtlasClientEmailViaTab(args: FetchAtlasClientEmailArgs): Promise<string> {
   const { identityId, sourceTicketId, timeoutMs = 35_000 } = args;
   if (!identityId) throw new Error('identityId is required');
   if (!sourceTicketId) throw new Error('sourceTicketId is required');
