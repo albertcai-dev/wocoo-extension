@@ -51,4 +51,19 @@ describe('parsePastedResults', () => {
   it('returns [] for empty input', () => {
     expect(parsePastedResults('  ')).toEqual([]);
   });
+  it('handles quoted CSV fields with embedded commas', () => {
+    expect(parsePastedResults('a,b\n"Smith, John",2')).toEqual([{ a: 'Smith, John', b: '2' }]);
+  });
+  it('handles escaped quotes in CSV fields (RFC 4180)', () => {
+    expect(parsePastedResults('a,b\n"say ""hi""",2')).toEqual([{ a: 'say "hi"', b: '2' }]);
+  });
+  it('strips surrounding quotes from tab-separated cells', () => {
+    expect(parsePastedResults('a\tb\n"1763"\t2')).toEqual([{ a: '1763', b: '2' }]);
+  });
+  it('throws when CSV row has too many columns', () => {
+    expect(() => parsePastedResults('a,b\n1,2,3')).toThrow(/row 1/);
+  });
+  it('throws when tab-separated row has too few columns', () => {
+    expect(() => parsePastedResults('a\tb\n1')).toThrow(/row 1/);
+  });
 });

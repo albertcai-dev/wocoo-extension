@@ -57,15 +57,59 @@ export async function runPresetSql(
   throw new Error('Preset query did not finish within 2 minutes.');
 }
 
+/** Parse CSV or tab-separated values with quote handling. */
+function parseLine(line: string, sep: string): string[] {
+  if (sep === '\t') {
+    // Tab-separated: strip surrounding quotes from each cell
+    return line.split(sep).map((cell) => {
+      const trimmed = cell.trim();
+      if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
+        return trimmed.slice(1, -1);
+      }
+      return trimmed;
+    });
+  }
+  // Comma-separated with RFC 4180 quote handling
+  const cells: string[] = [];
+  let current = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i];
+    if (char === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        // Escaped quote: "" becomes "
+        current += '"';
+        i++;
+      } else {
+        // Toggle quote state
+        inQuotes = !inQuotes;
+      }
+    } else if (char === ',' && !inQuotes) {
+      // Unquoted comma is a field separator
+      cells.push(current.trim());
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+  cells.push(current.trim());
+  return cells;
+}
+
 export function parsePastedResults(text: string): Record<string, string>[] {
   const lines = text.split(/\r?\n/).filter((l) => l.trim());
   if (lines.length < 2) return [];
   const sep = lines[0].includes('\t') ? '\t' : ',';
-  const headers = lines[0].split(sep).map((h) => h.trim());
-  return lines.slice(1).map((line) => {
-    const cells = line.split(sep);
+  const headers = parseLine(lines[0], sep);
+  return lines.slice(1).map((line, idx) => {
+    const cells = parseLine(line, sep);
+    if (cells.length !== headers.length) {
+      throw new Error(
+        `Could not parse pasted row ${idx + 1}: expected ${headers.length} columns, got ${cells.length}. Paste the tab-separated results from SQL Lab.`
+      );
+    }
     const o: Record<string, string> = {};
-    headers.forEach((h, i) => { o[h] = (cells[i] ?? '').trim(); });
+    headers.forEach((h, i) => { o[h] = cells[i]; });
     return o;
   });
 }
