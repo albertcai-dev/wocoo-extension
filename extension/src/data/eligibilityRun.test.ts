@@ -169,4 +169,89 @@ describe('resolveBatch', () => {
     const d = deps({ runSql: async () => { throw new Error('Not signed in to Preset.'); } });
     await expect(resolveBatch([req('m1')], d)).rejects.toThrow('Not signed in to Preset.');
   });
+
+  describe('warehouse card details after a live match', () => {
+    // First runSql call is the batch query (returns []); later calls are the follow-up.
+    function twoStep(follow: () => Promise<Record<string, unknown>[]>): { sqls: string[]; run: ResolveDeps['runSql'] } {
+      const sqls: string[] = [];
+      return { sqls, run: async (sql) => { sqls.push(sql); return sqls.length === 1 ? [] : follow(); } };
+    }
+    const followRow = (over: Record<string, unknown> = {}) => whRow('m1', {
+      client_email: 'real.priya@example.com', card_product: 'ws_visa_infinite_core', created_date: '03/04/2026', ...over,
+    });
+    const atlasDeps = (run: ResolveDeps['runSql']) => deps({
+      runSql: run,
+      atlasByPhone: async () => [
+        { identityId: 'identity-P', fullName: 'Priya Ramanathan', firstName: 'Priya', lastName: 'Ramanathan', email: null },
+      ],
+      atlasEmail: async () => 'real.priya@example.com',
+      i2cCards: async (email) => (email === 'real.priya@example.com' ? i2cOpen : []),
+    });
+
+    it('i2c_email match takes cards from the warehouse, keeps the method', async () => {
+      const t = twoStep(async () => [followRow({ identity_id: 'identity-A', client_email: 'priya.r1985@example.com' })]);
+      const d = deps({
+        runSql: t.run,
+        i2cCards: async (email) => (email === 'priya.r1985@example.com' ? i2cOpen : []),
+      });
+      const [r] = await resolveBatch([req('m1')], d);
+      expect(r.method).toBe('i2c_email');
+      expect(r.status).toBe('matched');
+      expect(r.cards).toEqual([{ last4: '1763', product: 'ws_visa_infinite_core', creationDate: '03/04/2026', delinquent: false }]);
+      expect(r.clientEmail).toBe('priya.r1985@example.com');
+      expect(r.identityId).toBe('identity-A');
+      expect(r.note).toContain('Card details from the warehouse.');
+      expect(t.sqls).toHaveLength(2);
+      expect(t.sqls[1]).toContain("'priya.r1985@example.com'");
+      expect(t.sqls[1]).not.toContain('wrong.address');
+      expect(t.sqls[1]).not.toContain('ramanathan');
+    });
+
+    it('atlas_phone_i2c match takes cards from the warehouse for the same identity', async () => {
+      const t = twoStep(async () => [followRow({ identity_id: 'identity-P' })]);
+      const [r] = await resolveBatch([req('m1', { emails: [] })], atlasDeps(t.run));
+      expect(r.method).toBe('atlas_phone_i2c');
+      expect(r.identityId).toBe('identity-P');
+      expect(r.clientEmail).toBe('real.priya@example.com');
+      expect(r.status).toBe('matched');
+      expect(r.cards[0].product).toBe('ws_visa_infinite_core');
+      expect(r.cards[0].creationDate).toBe('03/04/2026');
+      expect(r.note).toContain('warehouse');
+    });
+
+    it('a warehouse identity that differs from the Atlas match needs review and keeps i2c cards', async () => {
+      const t = twoStep(async () => [followRow({ identity_id: 'identity-Q' })]);
+      const [r] = await resolveBatch([req('m1', { emails: [] })], atlasDeps(t.run));
+      expect(r.status).toBe('needs_review');
+      expect(r.flags).toContain('lookup_error');
+      expect(r.identityId).toBe('identity-P');
+      expect(r.cards[0].creationDate).toBe('07/07/2026');
+      expect(r.note).toContain('Warehouse identity differs');
+    });
+
+    it('warehouse returning several clients needs review', async () => {
+      const t = twoStep(async () => [followRow({ identity_id: 'identity-P' }), followRow({ identity_id: 'identity-Q' })]);
+      const [r] = await resolveBatch([req('m1', { emails: [] })], atlasDeps(t.run));
+      expect(r.status).toBe('needs_review');
+      expect(r.flags).toContain('lookup_error');
+      expect(r.flags).not.toContain('multiple_candidates');
+      expect(r.cards[0].creationDate).toBe('07/07/2026');
+    });
+
+    it('empty follow-up keeps the i2c facts and says the card is not in the warehouse yet', async () => {
+      const t = twoStep(async () => []);
+      const [r] = await resolveBatch([req('m1', { emails: [] })], atlasDeps(t.run));
+      expect(r.method).toBe('atlas_phone_i2c');
+      expect(r.cards[0].creationDate).toBe('07/07/2026');
+      expect(r.note).toContain('Card not in the warehouse yet; using i2c details.');
+    });
+
+    it('a failing follow-up keeps the i2c facts and says warehouse details are unavailable', async () => {
+      const t = twoStep(async () => { throw new Error('Preset timed out'); });
+      const [r] = await resolveBatch([req('m1', { emails: [] })], atlasDeps(t.run));
+      expect(r.status).toBe('matched');
+      expect(r.cards[0].creationDate).toBe('07/07/2026');
+      expect(r.note).toContain('Warehouse details unavailable (Preset timed out); using i2c details.');
+    });
+  });
 });

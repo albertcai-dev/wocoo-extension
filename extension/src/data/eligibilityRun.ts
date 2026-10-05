@@ -8,7 +8,7 @@ import {
   multipleCandidates, noMatch, preflight, resolveFromI2c, resolveFromWarehouse, type I2cCardInput,
 } from './eligibilityResolve';
 import { buildEligibilitySql, toWarehouseRows } from './eligibilitySql';
-import type { EligibilityRequest, Resolution } from './eligibilityTypes';
+import type { EligibilityFlag, EligibilityRequest, Resolution } from './eligibilityTypes';
 import { parseI2cDelinquency } from './i2cCardDetailsParse';
 
 export interface ResolveDeps {
@@ -34,6 +34,42 @@ function nameMatches(req: EligibilityRequest, hit: AtlasPhoneHit): boolean {
     && (hitFull === reqFirst + ' ' + reqLast || hitFull.endsWith(' ' + reqLast));
 }
 
+/**
+ * After a live (i2c / Atlas) match, prefer the warehouse's card facts for the identified
+ * client; the i2c scrape stays as the backup (e.g. a card newer than the warehouse load).
+ */
+async function withWarehouseDetails(
+  req: EligibilityRequest, r: Resolution, deps: ResolveDeps,
+): Promise<Resolution> {
+  if (!r.clientEmail) return r;
+  const followReq: EligibilityRequest = { ...req, emails: [r.clientEmail], cardholderName: null };
+  const sql = buildEligibilitySql([followReq]);
+  if (!sql) return r;
+  let rows;
+  try {
+    rows = toWarehouseRows(await deps.runSql(sql));
+  } catch (e) {
+    return { ...r, note: `${r.note} Warehouse details unavailable (${(e as Error).message}); using i2c details.` };
+  }
+  const wh = resolveFromWarehouse(followReq, rows);
+  if (wh === null) return { ...r, note: `${r.note} Card not in the warehouse yet; using i2c details.` };
+  if (wh.flags.includes('multiple_candidates') || (r.identityId && wh.identityId !== r.identityId)) {
+    return {
+      ...r,
+      status: 'needs_review',
+      flags: [...new Set<EligibilityFlag>([...r.flags, 'lookup_error'])],
+      note: `${r.note} Warehouse identity differs from the live match — check manually.`,
+    };
+  }
+  return {
+    ...wh,
+    method: r.method,
+    identityId: r.identityId ?? wh.identityId,
+    clientEmail: r.clientEmail,
+    note: `${r.note} Card details from the warehouse.`,
+  };
+}
+
 async function resolveLive(req: EligibilityRequest, deps: ResolveDeps): Promise<Resolution> {
   const errors: string[] = [];
 
@@ -42,7 +78,7 @@ async function resolveLive(req: EligibilityRequest, deps: ResolveDeps): Promise<
     try {
       const cards = await deps.i2cCards(email, req.messageId);
       const r = resolveFromI2c(req, { email, method: 'i2c_email', identityId: null, cards, ...i2cDeps });
-      if (r) return r;
+      if (r) return await withWarehouseDetails(req, r, deps);
     } catch (e) {
       errors.push(`i2c ${email}: ${(e as Error).message}`);
     }
@@ -66,7 +102,7 @@ async function resolveLive(req: EligibilityRequest, deps: ResolveDeps): Promise<
           deps.onProgress?.(req.messageId, `i2c: ${email}`);
           const cards = await deps.i2cCards(email, req.messageId);
           const r = resolveFromI2c(req, { email, method: 'atlas_phone_i2c', identityId: hit.identityId, cards, ...i2cDeps });
-          if (r) return r;
+          if (r) return await withWarehouseDetails(req, r, deps);
         }
       }
     } catch (e) {
