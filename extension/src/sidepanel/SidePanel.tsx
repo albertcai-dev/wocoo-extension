@@ -39,6 +39,7 @@ import { detectInterestInvestigation } from '../data/interestInvestigationDetect
 import { HomeView } from './HomeView';
 import { WiresPendingPosting } from './WiresPendingPosting';
 import { WiresPendingPostingV2 } from './WiresPendingPostingV2';
+import { EligibilityTriage } from './EligibilityTriage';
 import { SettingsView } from './SettingsView';
 import { I2cCard, KohoCard } from './MessagingCards';
 import { fetchAtlasAccountIdHeadless } from '../data/atlasAccountLookup';
@@ -81,6 +82,7 @@ export function SidePanel() {
   const [settingsMode, setSettingsMode] = useState(false);
   const [wiresPendingActive, setWiresPendingActive] = useState(false);
   const [wiresPendingV2Active, setWiresPendingV2Active] = useState(false);
+  const [eligibilityActive, setEligibilityActive] = useState(false);
   const [ticket, setTicket] = useState<WocooTicket | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -143,6 +145,7 @@ export function SidePanel() {
     setSettingsMode(false);
     setWiresPendingActive(false);
     setWiresPendingV2Active(false);
+    setEligibilityActive(false);
   }, [ticketKey]);
 
   if (authState === 'checking') return <CenteredText>Checking sign-in…</CenteredText>;
@@ -162,12 +165,17 @@ export function SidePanel() {
     return <WiresPendingPostingV2 onClose={() => setWiresPendingV2Active(false)} />;
   }
 
+  if (eligibilityActive) {
+    return <EligibilityTriage onClose={() => setEligibilityActive(false)} />;
+  }
+
   if (homeMode) {
     return (
       <HomeView
         onOpenTicket={onOpenTicket}
         onOpenWiresPending={() => setWiresPendingActive(true)}
         onOpenWiresPendingV2={() => setWiresPendingV2Active(true)}
+        onOpenEligibility={() => setEligibilityActive(true)}
         header={<HomeHeader onOpenSettings={onOpenSettings} />}
       />
     );
@@ -180,6 +188,7 @@ export function SidePanel() {
         onOpenTicket={onOpenTicket}
         onOpenWiresPending={() => setWiresPendingActive(true)}
         onOpenWiresPendingV2={() => setWiresPendingV2Active(true)}
+        onOpenEligibility={() => setEligibilityActive(true)}
         header={<HomeHeader onOpenSettings={onOpenSettings} />}
       />
     );

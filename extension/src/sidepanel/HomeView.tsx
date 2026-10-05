@@ -46,7 +46,7 @@ function orderRows(rows: TicketRow[], replies: Record<string, TicketReply[]>, so
   return withKeys.map((x) => x.r);
 }
 
-export function HomeView({ onOpenTicket, onOpenWiresPending, onOpenWiresPendingV2, header }: { onOpenTicket: (ticketKey: string) => void; onOpenWiresPending: () => void; onOpenWiresPendingV2: () => void; header: React.ReactNode }) {
+export function HomeView({ onOpenTicket, onOpenWiresPending, onOpenWiresPendingV2, onOpenEligibility, header }: { onOpenTicket: (ticketKey: string) => void; onOpenWiresPending: () => void; onOpenWiresPendingV2: () => void; onOpenEligibility: () => void; header: React.ReactNode }) {
   const [state, setState] = useState<LoadState>({ kind: 'loading' });
   const [replies, setReplies] = useState<Record<string, TicketReply[]>>({});
   const [refreshing, setRefreshing] = useState(false);
@@ -266,6 +266,12 @@ export function HomeView({ onOpenTicket, onOpenWiresPending, onOpenWiresPendingV
               onClick={onOpenWiresPendingV2}
             />
             <MobileChequeValidationTile />
+            <ToolTile
+              icon="🛡️"
+              title="Insurance Eligibility Confirmation Triage"
+              subtitle="Reads unread insurer requests in creditcardoperations@, matches each client (warehouse → i2c → Atlas phone), drafts replies, then sends them all."
+              onClick={onOpenEligibility}
+            />
           </Section>
         </>
       ) : null}
