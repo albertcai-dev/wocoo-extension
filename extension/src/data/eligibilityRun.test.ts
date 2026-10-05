@@ -235,7 +235,31 @@ describe('resolveBatch', () => {
       expect(r.status).toBe('needs_review');
       expect(r.flags).toContain('lookup_error');
       expect(r.flags).not.toContain('multiple_candidates');
+      expect(r.note).toContain('Warehouse found more than one client for this email — check manually.');
       expect(r.cards[0].creationDate).toBe('07/07/2026');
+    });
+
+    it('lowercases a mixed-case Atlas email for the follow-up but keeps the original on the result', async () => {
+      const t = twoStep(async () => [followRow({ identity_id: 'identity-P' })]);
+      const d = atlasDeps(t.run);
+      d.atlasEmail = async () => 'Real.Priya@Example.com';
+      d.i2cCards = async (email) => (email === 'Real.Priya@Example.com' ? i2cOpen : []);
+      const [r] = await resolveBatch([req('m1', { emails: [] })], d);
+      expect(t.sqls).toHaveLength(2);
+      expect(t.sqls[1]).toContain("'real.priya@example.com'");
+      expect(r.clientEmail).toBe('Real.Priya@Example.com');
+      expect(r.cards[0].product).toBe('ws_visa_infinite_core');
+      expect(r.note).toContain('Card details from the warehouse.');
+    });
+
+    it('keeps live i2c delinquency when the warehouse says not delinquent', async () => {
+      const t = twoStep(async () => [followRow({ identity_id: 'identity-P', is_delinquent: false })]);
+      const d = atlasDeps(t.run);
+      d.i2cCards = async () => [{ ...i2cOpen[0], delinquencyStatus: 'Delinquent - 30 days' }];
+      const [r] = await resolveBatch([req('m1', { emails: [] })], d);
+      expect(r.cards[0]).toEqual({ last4: '1763', product: 'ws_visa_infinite_core', creationDate: '03/04/2026', delinquent: true });
+      expect(r.flags).toContain('delinquent');
+      expect(r.status).toBe('needs_review');
     });
 
     it('empty follow-up keeps the i2c facts and says the card is not in the warehouse yet', async () => {

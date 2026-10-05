@@ -42,7 +42,7 @@ async function withWarehouseDetails(
   req: EligibilityRequest, r: Resolution, deps: ResolveDeps,
 ): Promise<Resolution> {
   if (!r.clientEmail) return r;
-  const followReq: EligibilityRequest = { ...req, emails: [r.clientEmail], cardholderName: null };
+  const followReq: EligibilityRequest = { ...req, emails: [r.clientEmail.toLowerCase()], cardholderName: null };
   const sql = buildEligibilitySql([followReq]);
   if (!sql) return r;
   let rows;
@@ -53,16 +53,28 @@ async function withWarehouseDetails(
   }
   const wh = resolveFromWarehouse(followReq, rows);
   if (wh === null) return { ...r, note: `${r.note} Card not in the warehouse yet; using i2c details.` };
-  if (wh.flags.includes('multiple_candidates') || (r.identityId && wh.identityId !== r.identityId)) {
+  const several = wh.flags.includes('multiple_candidates');
+  if (several || (r.identityId && wh.identityId !== r.identityId)) {
     return {
       ...r,
       status: 'needs_review',
       flags: [...new Set<EligibilityFlag>([...r.flags, 'lookup_error'])],
-      note: `${r.note} Warehouse identity differs from the live match — check manually.`,
+      note: `${r.note} ${several
+        ? 'Warehouse found more than one client for this email — check manually.'
+        : 'Warehouse identity differs from the live match — check manually.'}`,
     };
   }
+  // i2c's live "delinquent" must never be overwritten by the warehouse's daily snapshot.
+  const liveDelinquent = new Set(r.cards.filter((c) => c.delinquent === true).map((c) => c.last4));
+  const cards = wh.cards.map((c) => (liveDelinquent.has(c.last4) ? { ...c, delinquent: true } : c));
+  const flags = cards.some((c) => c.delinquent === true) && !wh.flags.includes('delinquent')
+    ? [...wh.flags, 'delinquent' as EligibilityFlag]
+    : wh.flags;
   return {
     ...wh,
+    cards,
+    flags,
+    status: flags.length ? 'needs_review' : wh.status,
     method: r.method,
     identityId: r.identityId ?? wh.identityId,
     clientEmail: r.clientEmail,
