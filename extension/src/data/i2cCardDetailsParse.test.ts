@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseI2cDelinquency, readColumnForLast4, readLabelValue, readProgramForLast4 } from './i2cCardDetailsParse';
+import { pageSaysNoRecord, parseI2cDelinquency, readColumnForLast4, readLabelValue, readProgramForLast4 } from './i2cCardDetailsParse';
 import { mapI2cProgram } from './eligibilityProducts';
 
 const LEAVES = [
@@ -67,5 +67,18 @@ describe('mapI2cProgram', () => {
     expect(mapI2cProgram('Wealthsimple  Visa Infinite VIP 01 Physical ')).toBe('ws_visa_infinite_privilege');
     expect(mapI2cProgram('Something Else')).toBeNull();
     expect(mapI2cProgram(undefined)).toBeNull();
+  });
+});
+
+describe('pageSaysNoRecord', () => {
+  it('is true for the red banner after an unmatched search', () => {
+    expect(pageSaysNoRecord('Customer Search  No record found.  Email Address')).toBe(true);
+  });
+  it('is false on the plain search page', () => {
+    expect(pageSaysNoRecord('Customer Search Following are the different options to search for a customer')).toBe(false);
+  });
+  it('tolerates case, plural and whitespace', () => {
+    expect(pageSaysNoRecord('no records found.')).toBe(true);
+    expect(pageSaysNoRecord('NO   RECORD\n FOUND')).toBe(true);
   });
 });

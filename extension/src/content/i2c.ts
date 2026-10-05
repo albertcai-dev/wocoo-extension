@@ -4,7 +4,7 @@
 // The login form is a server-rendered JSP, so the inputs exist by document_idle. We
 // retry a few times anyway in case the form is replaced after first paint.
 
-import { readColumnForLast4, readLabelValue, readProgramForLast4 } from '../data/i2cCardDetailsParse';
+import { pageSaysNoRecord, readColumnForLast4, readLabelValue, readProgramForLast4 } from '../data/i2cCardDetailsParse';
 
 export {}; // Module-scoped so helpers don't collide with other content scripts at the TS layer.
 
@@ -1348,6 +1348,33 @@ async function tryCardDetailsScrape(): Promise<boolean> {
   return true;
 }
 
+// card_details only: an unmatched email makes i2c reload Customer Search with a red
+// "No record found." banner (email still filled in). Without this, tryEmailSearch would
+// re-submit on every reload until the caller times out. Report an empty result instead.
+let cardDetailsNoRecordRan = false;
+async function tryCardDetailsNoRecord(): Promise<boolean> {
+  if (cardDetailsNoRecordRan) return true;
+  if ((await getFlow()) !== 'card_details') return false;
+  if (!pageSaysNoRecord(document.body?.textContent || '')) return false;
+  if (pageHasMaskedPan()) return false;
+
+  const ctx = await chrome.storage.local.get('pending_i2c_source_ticket_id');
+  const sourceTicketId = typeof ctx.pending_i2c_source_ticket_id === 'string' ? ctx.pending_i2c_source_ticket_id : '';
+
+  log('  → i2c says "No record found" — reporting no cards');
+  await chrome.storage.local.set({
+    i2c_card_details: {
+      sourceTicketId,
+      cards: [],
+      noRecord: true,
+      capturedAt: new Date().toISOString(),
+    },
+  });
+  cardDetailsNoRecordRan = true;
+  await clearAllPendingKeys();
+  return true;
+}
+
 function formatMmDdYyyy(d: Date): string {
   const mm = String(d.getMonth() + 1).padStart(2, '0');
   const dd = String(d.getDate()).padStart(2, '0');
@@ -1418,6 +1445,9 @@ async function bootstrap() {
   async function pass() {
     await tryAutofill();
     await tryKillSession();
+    // Before tryEmailSearch: a "No record found." reload must end the card_details chain
+    // rather than re-submit the same search.
+    await tryCardDetailsNoRecord();
     await tryEmailSearch();
     // Before tryContinueWithCustomer: on the customer page this captures the cards and
     // clears the chain keys, so nothing downstream can navigate away.

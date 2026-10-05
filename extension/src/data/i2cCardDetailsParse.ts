@@ -33,3 +33,9 @@ export function parseI2cDelinquency(s: string | undefined): boolean | null {
   if (/delinquent/i.test(t)) return true;
   return null;
 }
+
+/** True when i2c's Customer Search page is showing its "No record found." banner
+ *  (case-insensitive; tolerant of whitespace, "records", and the trailing period). */
+export function pageSaysNoRecord(text: string): boolean {
+  return /no\s+records?\s+found/i.test(text);
+}
