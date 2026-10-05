@@ -24,6 +24,12 @@ export interface I2cCard {
   status: string;
   /** True when the status reads CLOSED — the card the refund was declined on. */
   closed: boolean;
+  /** Accounts table "Program", e.g. 'Wealthsimple Visa Infinite VIP 01 Physical'. */
+  program?: string;
+  /** Card Details "Delinquency Status". Only set when the page shows exactly one open card. */
+  delinquencyStatus?: string;
+  /** Card Details "Card Creation Date" (MM/DD/YYYY). Only set when exactly one open card. */
+  creationDate?: string;
 }
 
 export async function fetchI2cCardDetailsHeadless(args: FetchI2cCardDetailsArgs): Promise<I2cCard[]> {

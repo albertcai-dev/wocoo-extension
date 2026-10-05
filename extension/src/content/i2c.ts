@@ -4,6 +4,8 @@
 // The login form is a server-rendered JSP, so the inputs exist by document_idle. We
 // retry a few times anyway in case the form is replaced after first paint.
 
+import { readLabelValue, readProgramForLast4 } from '../data/i2cCardDetailsParse';
+
 export {}; // Module-scoped so helpers don't collide with other content scripts at the TS layer.
 
 interface StoredCreds {
@@ -1236,7 +1238,10 @@ async function tryDateRangeScrape(): Promise<boolean> {
 
 let cardDetailsScrapeRan = false;
 
-interface ScrapedCard { last4: string; status: string; closed: boolean }
+interface ScrapedCard {
+  last4: string; status: string; closed: boolean;
+  program?: string; delinquencyStatus?: string; creationDate?: string;
+}
 
 // 412650******0162 — at least 3 mask characters between the BIN and the last 4.
 const MASKED_PAN_RE = /\d{4,6}[*x\u2022]{3,}(\d{4})\b/i;
@@ -1278,11 +1283,47 @@ function readCardsFromPage(): ScrapedCard[] {
   return Array.from(byLast4.values());
 }
 
+/** Visible leaf texts in document order (elements with text but no element children). */
+function leafTextsForDetails(): string[] {
+  const out: string[] = [];
+  for (const el of Array.from(document.querySelectorAll<HTMLElement>('body *'))) {
+    if (el.children.length > 0) continue;
+    const t = (el.textContent || '').replace(/\s+/g, ' ').trim();
+    if (t) out.push(t);
+  }
+  return out;
+}
+
+/** Program per card, from whichever table has a "Program" header. */
+function enrichCards(cards: ScrapedCard[]): ScrapedCard[] {
+  let headers: string[] = [];
+  let rows: string[][] = [];
+  for (const table of Array.from(document.querySelectorAll<HTMLTableElement>('table'))) {
+    const ths = Array.from(table.querySelectorAll('th')).map((th) => (th.textContent || '').trim());
+    if (!ths.some((h) => /^program$/i.test(h))) continue;
+    headers = ths;
+    rows = Array.from(table.querySelectorAll('tr'))
+      .filter((tr) => tr.querySelectorAll('td').length > 0 && !tr.querySelector('tr'))
+      .map((tr) => Array.from(tr.querySelectorAll('td')).map((td) => (td.textContent || '').trim()));
+    break;
+  }
+  const leaves = leafTextsForDetails();
+  const open = cards.filter((c) => !c.closed);
+  const delinquencyStatus = readLabelValue(leaves, 'Delinquency Status:') ?? undefined;
+  const creationDate = readLabelValue(leaves, 'Card Creation Date:') ?? undefined;
+  return cards.map((c) => ({
+    ...c,
+    program: readProgramForLast4(headers, rows, c.last4) ?? undefined,
+    // The Card Details panel describes one card; only trust it when there is exactly one open card.
+    ...(open.length === 1 && !c.closed ? { delinquencyStatus, creationDate } : {}),
+  }));
+}
+
 async function tryCardDetailsScrape(): Promise<boolean> {
   if (cardDetailsScrapeRan) return true;
   if ((await getFlow()) !== 'card_details') return false;
 
-  const cards = readCardsFromPage();
+  const cards = enrichCards(readCardsFromPage());
   if (cards.length === 0) return false;
 
   const ctx = await chrome.storage.local.get('pending_i2c_source_ticket_id');
