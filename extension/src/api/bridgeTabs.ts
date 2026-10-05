@@ -27,8 +27,9 @@
 export const BRIDGE_URL =
   'https://script.google.com/a/macros/wealthsimple.com/s/AKfycbzWtgcWj8MgRW-MV9Yf9O5cLgDdktBsMw7vno760EJTjTMQsQKrKg9sZK7LCA73XuA-rA/exec';
 
-/** CC Ops Automation eligibility bridge — deployed as creditcardoperations@. Empty until the Apps Script is deployed (plan Task 10). */
-export const ELIGIBILITY_BRIDGE_URL = '';
+/** Eligibility bridge — standalone Apps Script "Sidekick Eligibility Bridge (POC)", deployed as creditcardoperations@. */
+export const ELIGIBILITY_BRIDGE_URL: string =
+  'https://script.google.com/a/macros/wealthsimple.com/s/AKfycbz_olUwEvQo6wnpHhhvti6DlCH5AJqr-UtNCJ0fHuKlSmLXya45WEFaeH6MEt4oQs0kwg/exec';
 
 const REGISTRY_KEY = 'bridge_open_tabs';
 
