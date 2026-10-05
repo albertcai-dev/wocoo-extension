@@ -1,6 +1,6 @@
 // Panel run-state shapes + the two rules the panel applies to every row.
 
-import type { LogStatus } from './eligibilityLog';
+import { toLogRow, type EligibilityLogRow, type LogStatus } from './eligibilityLog';
 import type { EligibilityRequest, Resolution } from './eligibilityTypes';
 
 export const RUN_STATE_KEY = 'eligibility_run_v1';
@@ -129,6 +129,48 @@ export function canRunStep3(rows: RunRow[], busy: boolean): boolean {
   if (busy) return false;
   const drafts = rows.filter((r) => r.selected && r.draftBody && !r.draftId).length;
   return drafts > 0 || unloggedCount(rows) > 0;
+}
+
+/** One entry of a `createAndLogEligibility` batch. `body` '' = log only. */
+export interface CreateAndLogItem { messageId: string; body: string; row: EligibilityLogRow }
+
+/**
+ * Step 3's batch: rows needing a draft carry the body and a DRAFTED row (the bridge fills draft_id);
+ * every other resolved, not-yet-logged row is log-only.
+ */
+export function buildCreateAndLogItems(rows: RunRow[]): CreateAndLogItem[] {
+  const items: CreateAndLogItem[] = [];
+  for (const r of rows) {
+    if (!r.res) continue;
+    if (r.selected && r.draftBody && !r.draftId) {
+      items.push({ messageId: r.req.messageId, body: r.draftBody, row: toLogRow(r.req, r.res, 'DRAFTED', '') });
+    } else if (!r.logged) {
+      items.push({ messageId: r.req.messageId, body: '', row: toLogRow(r.req, r.res, nextLogStatus(r.res, !!r.draftId), r.draftId) });
+    }
+  }
+  return items;
+}
+
+/**
+ * Greedy, order-keeping split so each chunk's summed `measure` stays within `maxChars`.
+ * Never yields an empty chunk; an item larger than `maxChars` gets a chunk of its own.
+ */
+export function chunkByEncodedSize<T>(items: T[], maxChars: number, measure: (item: T) => number): T[][] {
+  const chunks: T[][] = [];
+  let current: T[] = [];
+  let size = 0;
+  for (const item of items) {
+    const n = measure(item);
+    if (current.length && size + n > maxChars) {
+      chunks.push(current);
+      current = [];
+      size = 0;
+    }
+    current.push(item);
+    size += n;
+  }
+  if (current.length) chunks.push(current);
+  return chunks;
 }
 
 export interface RowSummary { total: number; ready: number; review: number; noMatch: number; drafted: number; sent: number; pending: number }

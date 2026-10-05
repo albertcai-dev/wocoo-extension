@@ -197,10 +197,20 @@ function callBridge(
         }
       }
 
-      function onChromeMessage(msg: unknown) {
+      // Concurrent headless calls (e.g. two Eligibility workers on the same action) all hear every
+      // forwarded reply, so only the reply from this call's own tab counts. Replies that arrive
+      // before the tab id is known are held and replayed once it is.
+      const early: { payload: Record<string, unknown>; fromTab: number }[] = [];
+
+      function onChromeMessage(msg: unknown, sender?: chrome.runtime.MessageSender) {
         if (!msg || typeof msg !== 'object') return;
         const m = msg as { source?: string; payload?: Record<string, unknown> };
         if (m.source !== 'wocoo-gas-bridge' || !m.payload) return;
+        const fromTab = sender?.tab?.id;
+        if (fromTab != null) {
+          if (tabId == null) { early.push({ payload: m.payload, fromTab }); return; }
+          if (fromTab !== tabId) return;
+        }
         console.debug('[wocoo-bridge] ← runtime.sendMessage:', m.payload);
         handlePayload(m.payload);
       }
@@ -221,6 +231,10 @@ function callBridge(
         }
         tabId = tab.id ?? null;
         if (tabId != null) void registerBridgeTab(tabId, action, timeoutMs);
+        for (const e of early.splice(0)) {
+          if (settled) break;
+          if (tabId == null || e.fromTab === tabId) handlePayload(e.payload);
+        }
       }).catch((e: any) => {
         if (settled) return;
         cleanup();
@@ -957,7 +971,8 @@ export async function listEligibilityRequestsViaBridge(): Promise<{
 }> {
   requireEligibilityBridgeUrl();
   const res = await callBridge('listEligibilityRequests', {}, 'eligibilityRequestsListed', 120_000, true, ELIGIBILITY_BRIDGE_URL);
-  const raw = Array.isArray(res.requests) ? (res.requests as Record<string, unknown>[]) : [];
+  if (res.timings) console.info('[eligibility] fetch timings', res.timings);
+  const raw =Array.isArray(res.requests) ? (res.requests as Record<string, unknown>[]) : [];
   const rawDrafted = Array.isArray(res.drafted) ? (res.drafted as Record<string, unknown>[]) : [];
   return {
     requests: raw.map(toRawEligibilityEmail),
@@ -996,4 +1011,20 @@ export async function sendEligibilityDraftsViaBridge(
 export async function logEligibilityResultViaBridge(row: EligibilityLogRow): Promise<void> {
   requireEligibilityBridgeUrl();
   await callBridge('logEligibilityResult', { row: JSON.stringify(row) }, 'eligibilityResultLogged', 60_000, true, ELIGIBILITY_BRIDGE_URL);
+}
+
+/** One web-app call for a chunk of Step 3: creates each item's draft (when `body` is set) and logs its row. */
+export async function createAndLogEligibilityViaBridge(
+  items: { messageId: string; body: string; row: EligibilityLogRow }[],
+): Promise<{ messageId: string; ok: boolean; draftId?: string; reused?: boolean; error?: string }[]> {
+  requireEligibilityBridgeUrl();
+  const res = await callBridge('createAndLogEligibility', { items: JSON.stringify(items) }, 'eligibilityBatchDone', 180_000, true, ELIGIBILITY_BRIDGE_URL);
+  const raw = Array.isArray(res.results) ? (res.results as Record<string, unknown>[]) : [];
+  return raw.map((r) => ({
+    messageId: String(r.messageId ?? ''),
+    ok: r.ok === true,
+    draftId: r.draftId ? String(r.draftId) : undefined,
+    reused: r.reused === true ? true : undefined,
+    error: r.error ? String(r.error) : undefined,
+  }));
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  canRunStep3, defaultSelected, EMPTY_RUN, earlierDraftRow, earlierRunResolution, formatSkippedLine, mergeResolutions, nextLogStatus, rowsToResolve,
+  buildCreateAndLogItems, canRunStep3, chunkByEncodedSize, defaultSelected, EMPTY_RUN, earlierDraftRow, earlierRunResolution, formatSkippedLine, mergeResolutions, nextLogStatus, rowsToResolve,
   nextAction, shouldShowClientEmail, sortSkippedNewestFirst, summarizeRows, unloggedCount, unsentDraftCount, unsentLoggedCount, type RunRow, type RunState,
 } from './eligibilityRunState';
 import type { EligibilityRequest, Resolution } from './eligibilityTypes';
@@ -201,5 +201,55 @@ describe('nextAction', () => {
   it('done when everything is sent and logged', () => {
     const rows = [row({ draftId: 'd1', sent: 'ok', logged: true, sentLogged: true })];
     expect(nextAction(run({ stage: 'sent', rows }), false, false)).toEqual({ kind: 'done', count: 0 });
+  });
+});
+
+describe('chunkByEncodedSize', () => {
+  const len = (s: string) => s.length;
+  it('returns [] for empty input', () => {
+    expect(chunkByEncodedSize([], 10, len)).toEqual([]);
+  });
+  it('packs greedily in order without exceeding the limit', () => {
+    expect(chunkByEncodedSize(['aaa', 'bbb', 'cc', 'dddd', 'e'], 6, len)).toEqual([['aaa', 'bbb'], ['cc', 'dddd'], ['e']]);
+  });
+  it('puts an item larger than the limit in its own chunk', () => {
+    expect(chunkByEncodedSize(['aa', 'xxxxxxxxxx', 'bb', 'cc'], 5, len)).toEqual([['aa'], ['xxxxxxxxxx'], ['bb', 'cc']]);
+  });
+  it('never yields an empty chunk, even when the first item is oversized', () => {
+    const out = chunkByEncodedSize(['xxxxxxxxxx', 'yyyyyyyyyy'], 5, len);
+    expect(out).toEqual([['xxxxxxxxxx'], ['yyyyyyyyyy']]);
+    expect(out.every((c) => c.length > 0)).toBe(true);
+  });
+});
+
+describe('buildCreateAndLogItems', () => {
+  const req = (messageId: string) => ({ messageId, threadId: 't-' + messageId, insurerEmail: 'ins@x.com', claimNumber: null } as EligibilityRequest);
+
+  it('sends the draft body for rows that need a draft, logged as DRAFTED with no draft id yet', () => {
+    const items = buildCreateAndLogItems([row({ req: req('a'), selected: true, draftBody: 'hello', logged: true })]);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ messageId: 'a', body: 'hello', row: { request_message_id: 'a', status: 'DRAFTED', draft_id: '' } });
+  });
+
+  it('sends log-only items for resolved rows not yet logged', () => {
+    const items = buildCreateAndLogItems([
+      row({ req: req('b'), res: noMatch }),
+      row({ req: req('c'), selected: false, draftBody: 'unticked' }),
+      row({ req: req('d'), selected: true, draftBody: 'hi', draftId: 'd1', logged: false }),
+    ]);
+    expect(items.map((i) => [i.messageId, i.body, i.row.status, i.row.draft_id])).toEqual([
+      ['b', '', 'NO_MATCH', ''],
+      ['c', '', 'NEEDS_REVIEW', ''],
+      ['d', '', 'DRAFTED', 'd1'],
+    ]);
+  });
+
+  it('skips already-logged rows, unresolved rows and earlier-run rows', () => {
+    expect(buildCreateAndLogItems([
+      row({ req: req('e'), res: noMatch, logged: true }),
+      row({ req: req('f'), selected: true, draftBody: 'hi', draftId: 'd2', logged: true }),
+      row({ req: req('g'), res: null }),
+      earlierDraftRow(req('h'), 'd3'),
+    ])).toEqual([]);
   });
 });

@@ -34,6 +34,8 @@ function doGet(e) {
         return eligReply_(eligSendDrafts_(String(p.draftIds || '').split(',').filter(String)));
       case 'logEligibilityResult':
         return eligReply_(eligLog_(JSON.parse(p.row)));
+      case 'createAndLogEligibility':
+        return eligReply_(eligCreateAndLog_(JSON.parse(p.items || '[]')));
       default:
         return eligReply_({ error: 'Unknown action: ' + p.action });
     }
@@ -127,6 +129,7 @@ function eligRequestShape_(t, latest) {
 }
 
 function eligList_() {
+  var t0 = Date.now();
   var insurers = eligLoadInsurers_();
   var insurerAddrs = Object.keys(insurers);
   var props = PropertiesService.getScriptProperties();
@@ -141,23 +144,28 @@ function eligList_() {
 
   var out = [];
   var drafted = [];
+  var timings = { totalMs: 0, insurerScanMs: 0, draftedScanMs: 0, unknownScanMs: 0 };
+  var fromGroup = '';
 
   // I4: with no insurers there is no from-clause to build — skip the insurer queries
   // entirely (an empty `{}` group would match everything).
   if (insurerAddrs.length) {
-    var fromGroup = '{' + insurerAddrs.map(function (a) { return 'from:' + a; }).join(' ') + '}';
+    fromGroup = '{' + insurerAddrs.map(function (a) { return 'from:' + a; }).join(' ') + '}';
 
+    var tIns = Date.now();
     var reqThreads = eligSearchCapped_('in:inbox is:unread -label:sidekick-drafted ' + fromGroup, ELIG_LIST_CAP).threads;
     var reqMsgs = reqThreads.length ? GmailApp.getMessagesForThreads(reqThreads) : [];
     reqThreads.forEach(function (t, i) {
       var latest = eligLatest_(reqMsgs[i]);
       if (!latest || !latest.m.isUnread()) return;
-      // Threads whose latest sender isn't an insurer are counted by the unknown-sender search below.
+      // Threads whose latest sender isn't an insurer are not offered for drafting.
       if (!insurers[eligExtractEmail_(latest.m.getFrom())]) return;
       out.push(eligRequestShape_(t, latest));
     });
+    timings.insurerScanMs = Date.now() - tIns;
 
     // I1: drafted-but-unsent threads, so a lost panel session can still send them.
+    var tDr = Date.now();
     var drThreads = eligSearchCapped_('in:inbox is:unread label:sidekick-drafted -label:sidekick-sent ' + fromGroup, ELIG_DRAFTED_CAP).threads;
     var drMsgs = drThreads.length ? GmailApp.getMessagesForThreads(drThreads) : [];
     drThreads.forEach(function (t, i) {
@@ -171,17 +179,17 @@ function eligList_() {
       row.draftId = draftId;
       drafted.push(row);
     });
+    timings.draftedScanMs = Date.now() - tDr;
   }
 
-  // I4: safety net — unread, untouched threads whose latest sender is NOT on the Insurers tab.
-  var unknown = eligSearchCapped_('in:inbox is:unread -label:sidekick-drafted -label:sidekick-sent', ELIG_UNKNOWN_CAP);
-  var unkMsgs = unknown.threads.length ? GmailApp.getMessagesForThreads(unknown.threads) : [];
-  var skipped = 0;
-  unknown.threads.forEach(function (t, i) {
-    var latest = eligLatest_(unkMsgs[i]);
-    if (!latest) return;
-    if (!insurers[eligExtractEmail_(latest.m.getFrom())]) skipped++;
-  });
+  // I4: safety net — unread, untouched threads with no message from an Insurers-tab address.
+  // Count-only: the thread search alone (paged 100 at a time, up to 200), never loading messages.
+  var tUnk = Date.now();
+  var unknownQuery = 'in:inbox is:unread -label:sidekick-drafted -label:sidekick-sent' + (fromGroup ? ' -' + fromGroup : '');
+  var unknown = eligSearchCapped_(unknownQuery, ELIG_UNKNOWN_CAP);
+  var skipped = unknown.threads.length;
+  timings.unknownScanMs = Date.now() - tUnk;
+  timings.totalMs = Date.now() - t0;
 
   var result = {
     action: 'eligibilityRequestsListed',
@@ -189,6 +197,7 @@ function eligList_() {
     drafted: drafted,
     excludedDomains: Object.keys(domains),
     skippedUnknownSender: skipped,
+    timings: timings,
   };
   if (unknown.capped) result.skippedUnknownSenderCapped = true;
   return result;
@@ -196,51 +205,105 @@ function eligList_() {
 
 function eligCreateDraft_(messageId, body) {
   if (!messageId || !body) throw new Error('messageId and body are required');
-  var msg = GmailApp.getMessageById(messageId);
-
-  // C1: Refuse unless the message's sender is an insurer.
-  var fromEmail = eligExtractEmail_(msg.getFrom());
-  if (!eligLoadInsurers_()[fromEmail]) throw new Error('Message is not from a known insurer');
+  var insurers = eligLoadInsurers_();
 
   // I2: Wrap in lock for thread safety.
   var lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
-    var thread = msg.getThread();
-    var threadId = thread.getId();
-    var props = PropertiesService.getScriptProperties();
-    var propKey = 'elig_draft_thread_' + threadId;
-
-    // I2: Check if we have a stored draft for this thread.
-    var storedDraftId = props.getProperty(propKey);
-    if (storedDraftId) {
-      var existing = null;
-      try {
-        existing = GmailApp.getDraft(storedDraftId);
-      } catch (err) {
-        existing = null;
-      }
-      if (existing) {
-        return { action: 'eligibilityDraftCreated', messageId: messageId, draftId: storedDraftId, reused: true };
-      }
-      // M5: Draft was deleted (getDraft threw or returned null); clean up stale properties.
-      props.deleteProperty(propKey);
-      props.deleteProperty('elig_draft_id_' + storedDraftId);
-    }
-
-    // Create a new draft.
-    var draft = msg.createDraftReply(body, { name: 'Cash and Card Operations' });
-    var draftId = draft.getId();
-
-    // C1/I2: Store ownership tracking properties.
-    props.setProperty(propKey, draftId);
-    props.setProperty('elig_draft_id_' + draftId, threadId);
-    thread.addLabel(eligLabel_(ELIG_LABEL_DRAFTED));
-
-    return { action: 'eligibilityDraftCreated', messageId: messageId, draftId: draftId, reused: false };
+    return eligCreateDraftCore_(messageId, body, insurers, {});
   } finally {
     lock.releaseLock();
   }
+}
+
+/**
+ * Creates (or reuses) the Sidekick draft reply on `messageId`'s thread. The caller holds the script lock and
+ * passes the preloaded insurer map; `ctx` caches the Drafted label across a batch.
+ */
+function eligCreateDraftCore_(messageId, body, insurers, ctx) {
+  if (!messageId || !body) throw new Error('messageId and body are required');
+  var msg = GmailApp.getMessageById(messageId);
+
+  // C1: Refuse unless the message's sender is an insurer.
+  var fromEmail = eligExtractEmail_(msg.getFrom());
+  if (!insurers[fromEmail]) throw new Error('Message is not from a known insurer');
+
+  var thread = msg.getThread();
+  var threadId = thread.getId();
+  var props = PropertiesService.getScriptProperties();
+  var propKey = 'elig_draft_thread_' + threadId;
+
+  // I2: Check if we have a stored draft for this thread.
+  var storedDraftId = props.getProperty(propKey);
+  if (storedDraftId) {
+    var existing = null;
+    try {
+      existing = GmailApp.getDraft(storedDraftId);
+    } catch (err) {
+      existing = null;
+    }
+    if (existing) {
+      return { action: 'eligibilityDraftCreated', messageId: messageId, draftId: storedDraftId, reused: true };
+    }
+    // M5: Draft was deleted (getDraft threw or returned null); clean up stale properties.
+    props.deleteProperty(propKey);
+    props.deleteProperty('elig_draft_id_' + storedDraftId);
+  }
+
+  // Create a new draft.
+  var draft = msg.createDraftReply(body, { name: 'Cash and Card Operations' });
+  var draftId = draft.getId();
+
+  // C1/I2: Store ownership tracking properties.
+  props.setProperty(propKey, draftId);
+  props.setProperty('elig_draft_id_' + draftId, threadId);
+  if (!ctx.draftedLabel) ctx.draftedLabel = eligLabel_(ELIG_LABEL_DRAFTED);
+  thread.addLabel(ctx.draftedLabel);
+
+  return { action: 'eligibilityDraftCreated', messageId: messageId, draftId: draftId, reused: false };
+}
+
+var ELIG_BATCH_CAP = 50;
+
+/**
+ * Batched Create drafts & log. items = [{ messageId, body ('' = log only), row }]. Config, insurers and the log
+ * sheet load once per call; each item takes the script lock for its own create+log (short holds, so two panel
+ * workers' batches interleave instead of timing out on one batch-long lock) and fails on its own.
+ */
+function eligCreateAndLog_(items) {
+  if (!Array.isArray(items)) throw new Error('items must be an array');
+  if (items.length > ELIG_BATCH_CAP) throw new Error('Too many items in one batch (max ' + ELIG_BATCH_CAP + ')');
+  var insurers = eligLoadInsurers_();
+  var sheet = eligOpenLogSheet_();
+  var ctx = {};
+
+  var results = items.map(function (item) {
+    var out = { messageId: String((item && item.messageId) || ''), ok: false };
+    try {
+      if (!item || !item.row || typeof item.row !== 'object') throw new Error('row is required');
+      var row = item.row;
+      var lock = LockService.getScriptLock();
+      lock.waitLock(30000);
+      try {
+        if (item.body) {
+          var d = eligCreateDraftCore_(out.messageId, String(item.body), insurers, ctx);
+          out.draftId = d.draftId;
+          out.reused = d.reused;
+          row.draft_id = d.draftId;
+          row.status = 'DRAFTED';
+        }
+        eligLogTo_(sheet, row);
+        out.ok = true;
+      } finally {
+        lock.releaseLock();
+      }
+    } catch (err) {
+      out.error = String((err && err.message) || err);
+    }
+    return out;
+  });
+  return { action: 'eligibilityBatchDone', results: results };
 }
 
 function eligSendDrafts_(draftIds) {
@@ -285,7 +348,8 @@ function eligSendDrafts_(draftIds) {
   return { action: 'eligibilityDraftsSent', results: results };
 }
 
-function eligLog_(row) {
+/** The Requests tab of the sheet in LOG_SHEET_ID, widened to 12 columns when needed. */
+function eligOpenLogSheet_() {
   var sheet = SpreadsheetApp.openById(eligConfig_().logSheetId).getSheetByName('Requests');
   if (!sheet) throw new Error('Requests tab not found in the sheet in LOG_SHEET_ID');
 
@@ -293,63 +357,73 @@ function eligLog_(row) {
   if (sheet.getMaxColumns() < 12) {
     sheet.insertColumnsAfter(sheet.getMaxColumns(), 12 - sheet.getMaxColumns());
   }
+  return sheet;
+}
+
+function eligLog_(row) {
+  var sheet = eligOpenLogSheet_();
 
   // I4: Wrap the scan+write in lock.
   var lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
-    var header = sheet.getRange(1, 1, 1, 12).getValues()[0];
-    ELIG_EXTRA_COLS.forEach(function (name, i) {
-      if (!header[9 + i]) sheet.getRange(1, 10 + i).setValue(name);
-    });
-
-    var values = [[
-      row.request_message_id, row.thread_id, row.insurer_email, row.client_email, row.status,
-      row.last4, row.is_delinquent, row.activation_date, row.card_product,
-      row.match_method, row.draft_id, row.notes,
-    ]];
-
-    var last = sheet.getLastRow();
-    var ids = last >= 2 ? sheet.getRange(2, 1, last - 1, 1).getValues() : [];
-    for (var i = 0; i < ids.length; i++) {
-      if (String(ids[i][0]) === String(row.request_message_id)) {
-        var targetRange = sheet.getRange(i + 2, 1, 1, 12);
-        // READ_EMAIL is logged with a minimal resolution when a draft from an earlier session is sent, so its
-        // blank fields must not wipe the DRAFTED audit values. Merge for READ_EMAIL only: any other status
-        // (e.g. NEEDS_REVIEW re-resolved to NO_MATCH) is a genuine re-resolution and must fully overwrite,
-        // otherwise stale card data would survive.
-        if (row.status === 'READ_EMAIL') {
-          var existing = targetRange.getValues()[0];
-          var merged = values[0].map(function (incoming, c) {
-            var cur = existing[c];
-            var incomingEmpty = incoming === '' || incoming === null || incoming === undefined;
-            if (incomingEmpty) return cur;
-            // notes is the last column (index 11): append when both differ.
-            if (c === 11 && cur !== '' && cur !== null && cur !== undefined && String(cur) !== String(incoming)) {
-              return cur + ' | ' + incoming;
-            }
-            return incoming;
-          });
-          values = [merged];
-        }
-        // I4: Set number format to text.
-        targetRange.setNumberFormat('@').setValues(values);
-        return { action: 'eligibilityResultLogged', rowNumber: i + 2 };
-      }
-    }
-
-    // I4: Guard row insertion.
-    var insertRow = last + 1;
-    if (insertRow > sheet.getMaxRows()) {
-      sheet.insertRowsAfter(sheet.getMaxRows(), insertRow - sheet.getMaxRows());
-    }
-    var targetRange = sheet.getRange(insertRow, 1, 1, 12);
-    // I4: Set number format to text.
-    targetRange.setNumberFormat('@').setValues(values);
-    return { action: 'eligibilityResultLogged', rowNumber: insertRow };
+    return eligLogTo_(sheet, row);
   } finally {
     lock.releaseLock();
   }
+}
+
+/** Upserts `row` by request_message_id into `sheet`. The caller holds the script lock. */
+function eligLogTo_(sheet, row) {
+  var header = sheet.getRange(1, 1, 1, 12).getValues()[0];
+  ELIG_EXTRA_COLS.forEach(function (name, i) {
+    if (!header[9 + i]) sheet.getRange(1, 10 + i).setValue(name);
+  });
+
+  var values = [[
+    row.request_message_id, row.thread_id, row.insurer_email, row.client_email, row.status,
+    row.last4, row.is_delinquent, row.activation_date, row.card_product,
+    row.match_method, row.draft_id, row.notes,
+  ]];
+
+  var last = sheet.getLastRow();
+  var ids = last >= 2 ? sheet.getRange(2, 1, last - 1, 1).getValues() : [];
+  for (var i = 0; i < ids.length; i++) {
+    if (String(ids[i][0]) === String(row.request_message_id)) {
+      var targetRange = sheet.getRange(i + 2, 1, 1, 12);
+      // READ_EMAIL is logged with a minimal resolution when a draft from an earlier session is sent, so its
+      // blank fields must not wipe the DRAFTED audit values. Merge for READ_EMAIL only: any other status
+      // (e.g. NEEDS_REVIEW re-resolved to NO_MATCH) is a genuine re-resolution and must fully overwrite,
+      // otherwise stale card data would survive.
+      if (row.status === 'READ_EMAIL') {
+        var existing = targetRange.getValues()[0];
+        var merged = values[0].map(function (incoming, c) {
+          var cur = existing[c];
+          var incomingEmpty = incoming === '' || incoming === null || incoming === undefined;
+          if (incomingEmpty) return cur;
+          // notes is the last column (index 11): append when both differ.
+          if (c === 11 && cur !== '' && cur !== null && cur !== undefined && String(cur) !== String(incoming)) {
+            return cur + ' | ' + incoming;
+          }
+          return incoming;
+        });
+        values = [merged];
+      }
+      // I4: Set number format to text.
+      targetRange.setNumberFormat('@').setValues(values);
+      return { action: 'eligibilityResultLogged', rowNumber: i + 2 };
+    }
+  }
+
+  // I4: Guard row insertion.
+  var insertRow = last + 1;
+  if (insertRow > sheet.getMaxRows()) {
+    sheet.insertRowsAfter(sheet.getMaxRows(), insertRow - sheet.getMaxRows());
+  }
+  var targetRange = sheet.getRange(insertRow, 1, 1, 12);
+  // I4: Set number format to text.
+  targetRange.setNumberFormat('@').setValues(values);
+  return { action: 'eligibilityResultLogged', rowNumber: insertRow };
 }
 
 // ---- Editor test helpers (Run ▸ from the editor; read the Execution log) ----

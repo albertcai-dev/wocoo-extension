@@ -3,7 +3,7 @@
 
 import { useEffect, useState } from 'react';
 import {
-  createEligibilityDraftViaBridge,
+  createAndLogEligibilityViaBridge,
   listEligibilityRequestsViaBridge,
   logEligibilityResultViaBridge,
   sendEligibilityDraftsViaBridge,
@@ -16,7 +16,8 @@ import { isEligibilityRequest, parseEligibilityEmail } from '../data/eligibility
 import { isDraftable } from '../data/eligibilityResolve';
 import { resolveBatch, type ResolveDeps } from '../data/eligibilityRun';
 import {
-  earlierDraftRow, earlierRunResolution, EMPTY_RUN, formatSkippedLine, mergeResolutions, nextAction, nextLogStatus, rowsToResolve, RUN_STATE_KEY,
+  buildCreateAndLogItems, chunkByEncodedSize, type CreateAndLogItem,
+  earlierDraftRow, earlierRunResolution, EMPTY_RUN, formatSkippedLine, mergeResolutions, nextAction, rowsToResolve, RUN_STATE_KEY,
   shouldShowClientEmail, sortSkippedNewestFirst, summarizeRows, type RowSummary, type SkippedEmail,
   unsentDraftCount, unsentLoggedCount, type RunRow, type RunState,
 } from '../data/eligibilityRunState';
@@ -37,6 +38,9 @@ const FLAG_TEXT: Record<string, string> = {
   lookup_error: 'A lookup failed',
   name_variant: 'First name spelled differently — confirm before drafting',
 };
+
+/** Max URL-encoded size of one createAndLogEligibility chunk (the items travel in a GET query string). */
+const CREATE_CHUNK_MAX_CHARS = 6000;
 
 function liveDeps(onProgress: (id: string, stage: string) => void): Omit<ResolveDeps, 'runSql'> {
   return {
@@ -142,28 +146,60 @@ export function EligibilityTriage({ onClose }: { onClose: () => void }) {
   }
 
   async function onCreateDrafts() {
-    setBusy('Creating drafts…'); setError('');
-    const rows = [...run.rows];
-    try {
-      for (let i = 0; i < rows.length; i++) {
-        const r = rows[i];
-        if (!r.res) continue;
-        if (r.selected && r.draftBody && !r.draftId) {
-          const draftId = await createEligibilityDraftViaBridge(r.req.messageId, r.draftBody);
-          // A new draft changes the outcome, so the row must be (re-)logged as DRAFTED.
-          rows[i] = { ...r, draftId, logged: false };
-          save({ ...run, rows });
-        }
-        if (!rows[i].logged) {
-          await logEligibilityResultViaBridge(toLogRow(r.req, r.res, nextLogStatus(r.res, !!rows[i].draftId), rows[i].draftId));
-          rows[i] = { ...rows[i], logged: true };
-          save({ ...run, rows });
+    setError('');
+    let rows = [...run.rows];
+    // One bridge call per chunk creates the drafts and logs the rows (each call cold-starts the web app).
+    const items = buildCreateAndLogItems(rows);
+    const chunks = chunkByEncodedSize(items, CREATE_CHUNK_MAX_CHARS, (it) => encodeURIComponent(JSON.stringify(it)).length);
+    const total = items.length;
+    const indexById = new Map(rows.map((r, i) => [r.req.messageId, i]));
+    const errors: string[] = [];
+    let done = 0;
+    setBusy(`Creating drafts… 0/${total}`);
+
+    const applyChunk = (chunk: CreateAndLogItem[], results: Awaited<ReturnType<typeof createAndLogEligibilityViaBridge>>) => {
+      const byId = new Map(results.map((x) => [x.messageId, x]));
+      rows = [...rows];
+      for (const item of chunk) {
+        const i = indexById.get(item.messageId);
+        if (i === undefined) continue;
+        const x = byId.get(item.messageId);
+        if (x?.ok) {
+          rows[i] = { ...rows[i], draftId: x.draftId || rows[i].draftId, logged: true };
+        } else {
+          // Left for retry. A draft created before the log failed is kept, so the retry only logs it.
+          if (x?.draftId) rows[i] = { ...rows[i], draftId: x.draftId, logged: false };
+          errors.push(x?.error || 'The bridge returned no result for this row.');
         }
       }
-      save({ ...run, stage: 'drafted', rows });
-    } catch (e) {
-      setError((e as Error).message + ' — press Create drafts again to continue; finished rows are skipped.');
-      save({ ...run, rows });
+    };
+
+    // Two workers over the chunk list — A from the front, B from the back — each claiming the next
+    // unclaimed chunk until none remain (the WiresPendingPostingV2 two-queue pattern).
+    let front = 0;
+    let back = chunks.length - 1;
+    async function worker(fromFront: boolean) {
+      while (front <= back) {
+        const chunk = fromFront ? chunks[front++] : chunks[back--];
+        try {
+          applyChunk(chunk, await createAndLogEligibilityViaBridge(chunk));
+        } catch (e) {
+          errors.push((e as Error).message);
+        }
+        done += chunk.length;
+        setBusy(`Creating drafts… ${done}/${total}`);
+        save({ ...run, rows });
+      }
+    }
+
+    try {
+      await Promise.all([worker(true), worker(false)]);
+      if (errors.length) {
+        setError(errors[0] + ' — press Create drafts again to continue; finished rows are skipped.');
+        save({ ...run, rows });
+      } else {
+        save({ ...run, stage: 'drafted', rows });
+      }
     } finally { setBusy(''); }
   }
 
