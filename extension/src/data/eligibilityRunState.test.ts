@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   canRunStep3, defaultSelected, EMPTY_RUN, earlierDraftRow, earlierRunResolution, formatSkippedLine, mergeResolutions, nextLogStatus, rowsToResolve,
-  shouldShowClientEmail, sortSkippedNewestFirst, unloggedCount, unsentDraftCount, unsentLoggedCount, type RunRow,
+  nextAction, shouldShowClientEmail, sortSkippedNewestFirst, summarizeRows, unloggedCount, unsentDraftCount, unsentLoggedCount, type RunRow, type RunState,
 } from './eligibilityRunState';
 import type { EligibilityRequest, Resolution } from './eligibilityTypes';
 
@@ -149,5 +149,57 @@ describe('shouldShowClientEmail', () => {
   it('hides it when there is none', () => {
     expect(shouldShowClientEmail({ ...base, clientEmail: null })).toBe(false);
     expect(shouldShowClientEmail({ ...base, clientEmail: '' })).toBe(false);
+  });
+});
+
+describe('summarizeRows', () => {
+  it('buckets each row exactly once', () => {
+    const rows = [
+      row({ res: base }),
+      row({ res: { ...base, status: 'needs_review', flags: ['delinquent'] } }),
+      row({ res: noMatch }),
+      row({ res: base, draftId: 'd1' }),
+      row({ res: base, draftId: 'd2', sent: 'ok' }),
+      row({ res: null, draftId: 'd3', earlier: true }),
+      row({ res: null }),
+    ];
+    expect(summarizeRows(rows)).toEqual({ total: 7, ready: 1, review: 1, noMatch: 1, drafted: 2, sent: 1, pending: 1 });
+  });
+  it('is all zeros but total for an empty list', () => {
+    expect(summarizeRows([])).toEqual({ total: 0, ready: 0, review: 0, noMatch: 0, drafted: 0, sent: 0, pending: 0 });
+  });
+});
+
+describe('nextAction', () => {
+  const run = (over: Partial<RunState>): RunState => ({ ...EMPTY_RUN, stage: 'resolved', ...over });
+  it('busy wins', () => {
+    expect(nextAction(run({ rows: [row({})] }), true, false)).toEqual({ kind: 'busy', count: 0 });
+  });
+  it('fetch while idle', () => {
+    expect(nextAction(EMPTY_RUN, false, false)).toEqual({ kind: 'fetch', count: 0 });
+  });
+  it('resolve counts unresolved rows', () => {
+    expect(nextAction(run({ stage: 'fetched', rows: [row({ res: null }), row({ res: null }), row({ res: base })] }), false, false))
+      .toEqual({ kind: 'resolve', count: 2 });
+  });
+  it('draft when drafts are waiting, counting only selected bodies', () => {
+    const rows = [row({ selected: true, draftBody: 'hi' }), row({ selected: false, draftBody: 'hi' })];
+    expect(nextAction(run({ rows }), false, false)).toEqual({ kind: 'draft', count: 1 });
+  });
+  it('draft with count 0 when only logging remains', () => {
+    expect(nextAction(run({ rows: [row({ res: noMatch })] }), false, false)).toEqual({ kind: 'draft', count: 0 });
+  });
+  it('send, then confirm, when drafts are unsent', () => {
+    const rows = [row({ draftId: 'd1', logged: true }), row({ draftId: 'd2', logged: true })];
+    expect(nextAction(run({ stage: 'drafted', rows }), false, false)).toEqual({ kind: 'send', count: 2 });
+    expect(nextAction(run({ stage: 'drafted', rows }), false, true)).toEqual({ kind: 'confirm', count: 2 });
+  });
+  it('retryLog when sent but not logged', () => {
+    const rows = [row({ draftId: 'd1', sent: 'ok', logged: true, sentLogged: false })];
+    expect(nextAction(run({ stage: 'sent', rows }), false, false)).toEqual({ kind: 'retryLog', count: 1 });
+  });
+  it('done when everything is sent and logged', () => {
+    const rows = [row({ draftId: 'd1', sent: 'ok', logged: true, sentLogged: true })];
+    expect(nextAction(run({ stage: 'sent', rows }), false, false)).toEqual({ kind: 'done', count: 0 });
   });
 });

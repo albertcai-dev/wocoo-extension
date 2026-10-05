@@ -14,6 +14,7 @@ import { WIRES_SHEET_ID, WIRES_SHEET_TAB, WIRES_SHEET_URL } from '../data/wiresC
 import { LEDGE_SPA_URL } from '../data/ledgeGraphql';
 import { readPendingWiresViaBridge, markWirePostedViaBridge } from '../api/bridge';
 import { getIssueStatusAndComments, extractJiraKeyFromUrl } from '../api/jira';
+import { errorBanner, infoCard, listItemStyle, Pill, primaryButton, ToolHeader } from './toolUi';
 
 type RunState = 'idle' | 'loading' | 'running' | 'done' | 'error';
 
@@ -187,7 +188,7 @@ export function WiresPendingPostingV2({ onClose }: { onClose: () => void }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', background: 'var(--mint-bg-page)' }}>
-      <Header onClose={onClose} />
+      <ToolHeader title="Wires Pending Posting v2" onClose={onClose} />
       <div style={{ padding: 'var(--mint-sp-3)', display: 'flex', flexDirection: 'column', gap: 'var(--mint-sp-3)' }}>
         <IntroCard />
 
@@ -272,23 +273,10 @@ function SummaryRow({ summary }: { summary: { posted: number; anomalies: number;
   );
 }
 
-function Pill({ label, tone, wrap }: { label: string; tone: 'positive' | 'warning' | 'highlight' | 'neutral'; wrap?: boolean }) {
-  const map: Record<typeof tone, React.CSSProperties> = {
-    positive:  { background: 'var(--mint-positive-bg-soft)', color: 'var(--mint-positive-fg-strong)',  border: '1px solid var(--mint-positive-fg-graphic)' },
-    warning:   { background: 'var(--mint-warning-bg-soft)',  color: 'var(--mint-warning-fg-strong)',   border: '1px solid var(--mint-warning-fg-graphic)'  },
-    highlight: { background: 'var(--mint-highlight-bg-soft)',color: 'var(--mint-highlight-fg-strong)', border: '1px solid var(--mint-highlight-fg-graphic)'},
-    neutral:   { background: 'var(--mint-bg-subtle)',        color: 'var(--mint-fg-strong)',           border: 'var(--mint-card-stroke)'                    },
-  };
-  const wrapStyle: React.CSSProperties = wrap
-    ? { display: 'inline-block', whiteSpace: 'normal', wordBreak: 'normal', overflowWrap: 'anywhere', lineHeight: 1.3, textAlign: 'left' }
-    : {};
-  return <span style={{ ...map[tone], padding: '2px 8px', borderRadius: wrap ? 12 : 9999, fontWeight: 700, ...wrapStyle }}>{label}</span>;
-}
-
 function RowItem({ result }: { result: WireRowResult }) {
   const { row, status } = result;
   return (
-    <li style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '6px 10px', background: 'var(--mint-bg-card)', border: 'var(--mint-card-stroke)', borderRadius: 'var(--mint-radius-button)' }}>
+    <li style={listItemStyle}>
       <div style={{ display: 'flex', flexDirection: 'column', flex: '0 0 auto', minWidth: 110, maxWidth: 120, gap: 2 }}>
         <span style={{ fontSize: 'var(--mint-text-nano)', color: 'var(--mint-fg-soft)' }}>Row {row.rowNumber}</span>
         <span style={{ fontSize: 'var(--mint-text-micro)', fontFamily: 'var(--mint-font-mono)', color: 'var(--mint-fg-strong)', lineHeight: 1.3 }}>
@@ -312,47 +300,3 @@ function StatusBadge({ status }: { status: WireRowStatus }) {
   if (status.kind === 'checking') return <Pill label={`… via ${status.via}`} tone="highlight" />;
   return <Pill label="pending" tone="neutral" />;
 }
-
-function Header({ onClose }: { onClose: () => void }) {
-  return (
-    <header style={{ position: 'sticky', top: 0, zIndex: 50, background: 'var(--mint-bg-card)', borderBottom: 'var(--mint-card-stroke)', padding: 'var(--mint-sp-3) var(--mint-sp-3) var(--mint-sp-2)' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <button onClick={onClose} title="Back to home" style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--mint-fg-soft)', fontSize: 16, padding: 4 }}>←</button>
-        <h2 style={{ margin: 0, fontSize: 'var(--mint-text-h-md)', fontWeight: 700, color: 'var(--mint-fg-strong)' }}>Wires Pending Posting v2</h2>
-      </div>
-    </header>
-  );
-}
-
-// ============================================================
-// styles
-// ============================================================
-
-const primaryButton: React.CSSProperties = {
-  padding: '12px 16px',
-  borderRadius: 'var(--mint-radius-button)',
-  fontWeight: 700,
-  fontSize: 'var(--mint-text-meta)',
-  border: 'none',
-  background: 'var(--mint-fg-strong)',
-  color: 'var(--mint-fg-inverted)',
-  cursor: 'pointer',
-};
-
-const infoCard: React.CSSProperties = {
-  padding: 'var(--mint-sp-3)',
-  background: 'var(--mint-bg-subtle)',
-  border: 'var(--mint-card-stroke)',
-  borderRadius: 'var(--mint-radius-card)',
-  fontSize: 'var(--mint-text-meta)',
-  color: 'var(--mint-fg-strong)',
-  textAlign: 'center',
-};
-
-const errorBanner: React.CSSProperties = {
-  padding: '8px 12px',
-  background: 'var(--mint-negative-bg-soft)',
-  color: 'var(--mint-negative-fg-strong)',
-  fontSize: 'var(--mint-text-meta)',
-  borderRadius: 'var(--mint-radius-button)',
-};

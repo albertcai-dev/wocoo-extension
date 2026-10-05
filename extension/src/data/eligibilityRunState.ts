@@ -130,3 +130,40 @@ export function canRunStep3(rows: RunRow[], busy: boolean): boolean {
   const drafts = rows.filter((r) => r.selected && r.draftBody && !r.draftId).length;
   return drafts > 0 || unloggedCount(rows) > 0;
 }
+
+export interface RowSummary { total: number; ready: number; review: number; noMatch: number; drafted: number; sent: number; pending: number }
+
+/** Per-outcome counts for the summary pills. Each row lands in exactly one bucket. */
+export function summarizeRows(rows: RunRow[]): RowSummary {
+  const s: RowSummary = { total: rows.length, ready: 0, review: 0, noMatch: 0, drafted: 0, sent: 0, pending: 0 };
+  for (const r of rows) {
+    if (r.sent === 'ok') s.sent++;
+    else if (r.draftId) s.drafted++;
+    else if (!r.res) s.pending++;
+    else if (r.res.status === 'matched') s.ready++;
+    else if (r.res.status === 'needs_review') s.review++;
+    else if (r.res.status === 'no_match') s.noMatch++;
+  }
+  return s;
+}
+
+export type NextActionKind = 'fetch' | 'resolve' | 'draft' | 'send' | 'confirm' | 'retryLog' | 'done' | 'busy';
+
+/**
+ * The one action the panel should offer next. `resolve` counts rows that have no resolution yet
+ * (a resolved row is not "to resolve" again, or the flow would never advance to drafting).
+ */
+export function nextAction(run: RunState, busy: boolean, confirmSend: boolean): { kind: NextActionKind; count: number } {
+  if (busy) return { kind: 'busy', count: 0 };
+  if (run.stage === 'idle') return { kind: 'fetch', count: 0 };
+  const unresolved = run.rows.filter((r) => !r.res && !r.draftId).length;
+  if (unresolved > 0) return { kind: 'resolve', count: unresolved };
+  if (canRunStep3(run.rows, false)) {
+    return { kind: 'draft', count: run.rows.filter((r) => r.selected && r.draftBody && !r.draftId).length };
+  }
+  const sendable = unsentDraftCount(run.rows);
+  if (sendable > 0) return { kind: confirmSend ? 'confirm' : 'send', count: sendable };
+  const unsent = unsentLoggedCount(run.rows);
+  if (unsent > 0) return { kind: 'retryLog', count: unsent };
+  return { kind: 'done', count: 0 };
+}
