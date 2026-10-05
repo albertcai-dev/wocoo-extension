@@ -1,5 +1,7 @@
 // Insurance Eligibility Confirmation Triage — bridge for Sidekick.
-// Lives in the CC Ops Automation Apps Script project, owned by creditcardoperations@.
+// Standalone Apps Script project owned by creditcardoperations@ (NOT part of the CC Ops Automation project).
+// Reads the Insurers tab of the CC Ops Automation sheet read-only (INSURERS_SHEET_ID) and logs to the
+// sheet in LOG_SHEET_ID. Both ids, plus ELIG_ALLOWED_USERS, are Script Properties — see README.
 // Deploy as a web app: Execute as = Me, Who has access = Anyone within Wealthsimple.
 // Replies postMessage to window.top (NOT window.parent — GAS's inner wrapper drops them).
 
@@ -38,6 +40,35 @@ function doGet(e) {
   } catch (err) {
     return eligReply_({ error: String((err && err.message) || err) });
   }
+}
+
+/** Sheet ids from Script Properties. Throws a clear error when one is missing. */
+function eligConfig_() {
+  var props = PropertiesService.getScriptProperties();
+  var cfg = { insurersSheetId: props.getProperty('INSURERS_SHEET_ID'), logSheetId: props.getProperty('LOG_SHEET_ID') };
+  if (!cfg.insurersSheetId) throw new Error('Script property INSURERS_SHEET_ID is not set — see README.');
+  if (!cfg.logSheetId) throw new Error('Script property LOG_SHEET_ID is not set — see README.');
+  return cfg;
+}
+
+/** "Name <x@y>" or bare address -> trimmed, lowercased address. */
+function eligExtractEmail_(fromStr) {
+  var match = String(fromStr || '').match(/<([^>]+)>/);
+  return (match ? match[1] : String(fromStr || '')).trim().toLowerCase();
+}
+
+/** Insurer addresses from the Insurers tab (column A, from row 2) of the CC Ops Automation sheet. READ-ONLY. */
+function eligLoadInsurers_() {
+  var sheet = SpreadsheetApp.openById(eligConfig_().insurersSheetId).getSheetByName('Insurers');
+  if (!sheet) throw new Error('Insurers tab not found in the sheet in INSURERS_SHEET_ID');
+  var out = {};
+  var last = sheet.getLastRow();
+  if (last < 2) return out;
+  sheet.getRange(2, 1, last - 1, 1).getValues().forEach(function (r) {
+    var email = eligExtractEmail_(r[0]);
+    if (email) out[email] = true;
+  });
+  return out;
 }
 
 function eligReply_(payload) {
@@ -87,7 +118,7 @@ function eligRequestShape_(t, latest) {
     threadId: t.getId(),
     messageId: m.getId(),
     from: m.getFrom(),
-    fromEmail: extractEmailAddress_(m.getFrom()),
+    fromEmail: eligExtractEmail_(m.getFrom()),
     subject: m.getSubject(),
     date: m.getDate().toISOString(),
     messageCount: latest.count,
@@ -96,7 +127,7 @@ function eligRequestShape_(t, latest) {
 }
 
 function eligList_() {
-  var insurers = loadInsurers_();
+  var insurers = eligLoadInsurers_();
   var insurerAddrs = Object.keys(insurers);
   var props = PropertiesService.getScriptProperties();
   // Domains from the normalised addresses. (loadInsurerDomains_ splits the raw
@@ -122,7 +153,7 @@ function eligList_() {
       var latest = eligLatest_(reqMsgs[i]);
       if (!latest || !latest.m.isUnread()) return;
       // Threads whose latest sender isn't an insurer are counted by the unknown-sender search below.
-      if (!insurers[extractEmailAddress_(latest.m.getFrom())]) return;
+      if (!insurers[eligExtractEmail_(latest.m.getFrom())]) return;
       out.push(eligRequestShape_(t, latest));
     });
 
@@ -135,7 +166,7 @@ function eligList_() {
       if (props.getProperty('elig_sent_' + draftId)) return; // Already sent; only the cleanup failed.
       var latest = eligLatest_(drMsgs[i]);
       if (!latest) return;
-      if (!insurers[extractEmailAddress_(latest.m.getFrom())]) return;
+      if (!insurers[eligExtractEmail_(latest.m.getFrom())]) return;
       var row = eligRequestShape_(t, latest);
       row.draftId = draftId;
       drafted.push(row);
@@ -149,7 +180,7 @@ function eligList_() {
   unknown.threads.forEach(function (t, i) {
     var latest = eligLatest_(unkMsgs[i]);
     if (!latest) return;
-    if (!insurers[extractEmailAddress_(latest.m.getFrom())]) skipped++;
+    if (!insurers[eligExtractEmail_(latest.m.getFrom())]) skipped++;
   });
 
   var result = {
@@ -168,8 +199,8 @@ function eligCreateDraft_(messageId, body) {
   var msg = GmailApp.getMessageById(messageId);
 
   // C1: Refuse unless the message's sender is an insurer.
-  var fromEmail = extractEmailAddress_(msg.getFrom());
-  if (!loadInsurers_()[fromEmail]) throw new Error('Message is not from a known insurer');
+  var fromEmail = eligExtractEmail_(msg.getFrom());
+  if (!eligLoadInsurers_()[fromEmail]) throw new Error('Message is not from a known insurer');
 
   // I2: Wrap in lock for thread safety.
   var lock = LockService.getScriptLock();
@@ -255,8 +286,8 @@ function eligSendDrafts_(draftIds) {
 }
 
 function eligLog_(row) {
-  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Requests');
-  if (!sheet) throw new Error('Requests sheet not found');
+  var sheet = SpreadsheetApp.openById(eligConfig_().logSheetId).getSheetByName('Requests');
+  if (!sheet) throw new Error('Requests tab not found in the sheet in LOG_SHEET_ID');
 
   // I4: Guard sheet dimensions.
   if (sheet.getMaxColumns() < 12) {
@@ -330,6 +361,7 @@ function testListEligibilityRequests() {
   r.requests.slice(0, 3).forEach(function (q) { Logger.log('%s | %s | %s', q.messageId, q.fromEmail, q.subject); });
 }
 
+// Creates and immediately deletes one test draft in the shared mailbox — optional; skip it during the read-only POC.
 /** Drafts twice on the newest listed request and checks the second call reuses the draft. Deletes the draft afterwards. */
 function testEligibilityIdempotency() {
   var r = eligList_();

@@ -1,15 +1,22 @@
-# CC Ops eligibility bridge
+# CC Ops eligibility bridge (standalone POC)
 
-Pasted into the **CC Ops Automation** Apps Script project (Extensions → Apps Script from the
-sheet), signed in as creditcardoperations@wealthsimple.com. No clasp.
+Run all of this in the **creditcardoperations@wealthsimple.com** Chrome profile. No clasp.
 
-0. Before pasting: search every file in the project for `function doGet`. If one exists, **stop** — the router must be merged into it (two `doGet`s silently override each other).
-1. Add a file `Eligibility.gs`, paste `Eligibility.gs` from this folder, Save.
-2. Run `testListEligibilityRequests` once and accept the Gmail + Sheets permission prompt.
-3. Run `testEligibilityIdempotency` (needs ≥1 unread insurer email). Expect "Idempotency OK".
-4. Deploy → New deployment → Web app. Execute as: **Me**. Who has access: **Anyone within Wealthsimple**.
-5. Project Settings → Script Properties → add `ELIG_ALLOWED_USERS` = comma-separated Wealthsimple emails allowed to use the tool (e.g. `albert.cai@wealthsimple.com`). Empty = nobody can use it.
-6. Copy the `/exec` URL into `extension/src/api/bridgeTabs.ts` → `ELIGIBILITY_BRIDGE_URL`.
-6a. In the sheet's `previous records` tab, type `match_method`, `draft_id`, `notes` into J1, K1, L1
-    (once). `Requests` gets them automatically on the first logged row.
+0. This is a standalone project. Do **not** add it to the CC Ops Automation sheet's Apps Script — that project stays unchanged for coworkers.
+1. Create the test log sheet: Google Sheets → Blank spreadsheet, name it "Eligibility POC Log"; rename the first tab to `Requests`; in row 1 put the 12 headers
+   `request_message_id, thread_id, insurer_email, client_email, status, last4, is_delinquent, activation_date, card_product, match_method, draft_id, notes` (A1:L1). Copy its id from the URL (`/d/<id>/edit`).
+2. Go to https://script.google.com → New project; name it "Sidekick Eligibility Bridge (POC)". Replace the default code with `Eligibility.gs` from this folder. Save.
+3. Project Settings (gear) → Script Properties → add:
+   - `INSURERS_SHEET_ID` = `1nkUKJw4o56agzPlfTaLq5FDonqoVNVLt3dif9dlw2Fg` (CC Ops Automation — read only)
+   - `LOG_SHEET_ID` = the test sheet id from step 1
+   - `ELIG_ALLOWED_USERS` = comma-separated emails allowed to use it (e.g. `albert.cai@wealthsimple.com`). Empty = nobody.
+4. Select `testListEligibilityRequests` → Run → accept the permission prompts (as creditcardoperations@). Execution log should show `requests=N …`.
+5. (Optional — skip for a read-only POC) `testEligibilityIdempotency` creates and deletes one test draft in the shared mailbox.
+6. Deploy → New deployment → Web app. Execute as: **Me**. Who has access: **Anyone within Wealthsimple**. Copy the `/exec` URL into `extension/src/api/bridgeTabs.ts` → `ELIGIBILITY_BRIDGE_URL`.
 7. After every later edit: Deploy → Manage deployments → Edit → Version: **New version**.
+
+## Read-only POC
+
+Fetch and Resolve in the panel write nothing (no drafts, labels or sheet rows). Only "Create drafts & log"
+and "Send all drafts" have side effects in the shared mailbox. The CC Ops Automation sheet is only ever read
+(Insurers tab); logging goes to the "Eligibility POC Log" sheet.
