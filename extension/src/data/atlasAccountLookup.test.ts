@@ -3,10 +3,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('./atlasGraphql', () => ({
   fetchAtlasAccountIdViaGraphql: vi.fn(),
   fetchAtlasClientDetailsViaGraphql: vi.fn(),
+  fetchAtlasClientEmailViaGraphql: vi.fn(),
 }));
 
-import { fetchAtlasAccountIdViaGraphql, fetchAtlasClientDetailsViaGraphql } from './atlasGraphql';
-import { fetchAtlasAccountIdHeadless, fetchAtlasClientDetailsHeadless } from './atlasAccountLookup';
+import {
+  fetchAtlasAccountIdViaGraphql,
+  fetchAtlasClientDetailsViaGraphql,
+  fetchAtlasClientEmailViaGraphql,
+} from './atlasGraphql';
+import {
+  fetchAtlasAccountIdHeadless,
+  fetchAtlasClientDetailsHeadless,
+  fetchAtlasClientEmailHeadless,
+} from './atlasAccountLookup';
 
 const GRAPHQL_RESULT = { accountNumber: 'WK6RQDY37CAD', individualTierStatus: 'Premium' };
 const TAB_RESULT = { accountNumber: 'WTABFALLBACKCAD', individualTierStatus: null };
@@ -48,6 +57,7 @@ function stubChrome() {
 beforeEach(() => {
   vi.mocked(fetchAtlasAccountIdViaGraphql).mockReset();
   vi.mocked(fetchAtlasClientDetailsViaGraphql).mockReset();
+  vi.mocked(fetchAtlasClientEmailViaGraphql).mockReset();
   vi.spyOn(console, 'info').mockImplementation(() => {});
   vi.spyOn(console, 'warn').mockImplementation(() => {});
 });
@@ -165,6 +175,45 @@ describe('fetchAtlasClientDetailsHeadless', () => {
     // resolves — a short timeout is enough to prove the fallback was entered.
     await expect(
       fetchAtlasClientDetailsHeadless({ identityId: 'identity-1', sourceTicketId: 'WOCOO-1', timeoutMs: 20 }),
+    ).rejects.toThrow(/timed out/i);
+    expect(chromeStub.tabs.create).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('fetchAtlasClientEmailHeadless', () => {
+  it('returns the GraphQL result and never opens a tab', async () => {
+    const chromeStub = stubChrome();
+    vi.mocked(fetchAtlasClientEmailViaGraphql).mockResolvedValue('client@example.com');
+
+    const out = await fetchAtlasClientEmailHeadless({ identityId: 'identity-1', sourceTicketId: 'WOCOO-1' });
+
+    expect(out).toBe('client@example.com');
+    expect(chromeStub.tabs.create).not.toHaveBeenCalled();
+    expect(fetchAtlasClientEmailViaGraphql).toHaveBeenCalledWith({ identityId: 'identity-1' });
+  });
+
+  // The side panel's Email row reads this key, not the return value.
+  it('mirrors the result into atlas_client_email', async () => {
+    const chromeStub = stubChrome();
+    vi.mocked(fetchAtlasClientEmailViaGraphql).mockResolvedValue('client@example.com');
+
+    await fetchAtlasClientEmailHeadless({ identityId: 'identity-1', sourceTicketId: 'WOCOO-1' });
+
+    const written = chromeStub.storage.local.set.mock.calls[0][0] as unknown as {
+      atlas_client_email: Record<string, unknown>;
+    };
+    expect(written.atlas_client_email).toMatchObject({ sourceTicketId: 'WOCOO-1', email: 'client@example.com' });
+    expect(String(written.atlas_client_email.capturedAt)).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
+
+  it('falls back to the background tab when GraphQL throws', async () => {
+    const chromeStub = stubChrome();
+    vi.mocked(fetchAtlasClientEmailViaGraphql).mockRejectedValue(new Error('HTTP 403'));
+
+    // The tab stub only delivers atlas_account_number, so the email tab path never
+    // resolves — a short timeout is enough to prove the fallback was entered.
+    await expect(
+      fetchAtlasClientEmailHeadless({ identityId: 'identity-1', sourceTicketId: 'WOCOO-1', timeoutMs: 20 }),
     ).rejects.toThrow(/timed out/i);
     expect(chromeStub.tabs.create).toHaveBeenCalledTimes(1);
   });

@@ -144,11 +144,82 @@ export function readIndividualTier(res: unknown): string | null {
   return 'Core';
 }
 
+// Not recorded from Atlas's traffic: assumes invest_graphql_api's `identity` node (where
+// `packages` and `email` are confirmed) also exposes the client's accounts as a
+// connection, each with its custodian accounts. A wrong guess fails validation and the
+// two-hop chain below answers instead, so it can only ever make the lookup faster.
+export const FETCH_IDENTITY_ACCOUNTS_QUERY = `query FetchIdentityAccounts($id: ID!) {
+  identity(id: $id) {
+    id
+    accounts(first: 50) {
+      edges {
+        node {
+          id
+          custodianAccounts {
+            id
+            __typename
+          }
+          __typename
+        }
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}`;
+
+/** Canonical ids of WS bank (spend) accounts, e.g. `ca-cash-msb-i_ma5GMI2g` from hop 1. */
+const SPEND_CANONICAL_ID_RE = /^ca-cash-msb-/;
+
 /**
- * The full lookup: identity → spend account → W#, with the tier fetched alongside.
+ * `FetchIdentityAccounts` → the spend account's W#, or null.
  *
- * Hops 1 and 3 both key off identityId so they run concurrently; hop 2 needs hop 1's
- * canonical id, so the total latency is two round trips, not three.
+ * Null unless exactly one W# turns up across the identity's spend accounts. Two cash
+ * accounts (say a closed one, or a joint one) means guessing which one hop 1 would
+ * have picked — the chain decides that case instead.
+ */
+export function readSpendAccountNumberFromIdentity(res: unknown): string | null {
+  const edges = asRecord(asRecord(asRecord(asRecord(res)?.data)?.identity)?.accounts)?.edges;
+  if (!Array.isArray(edges)) return null;
+  const found = new Set<string>();
+  for (const edge of edges) {
+    const node = asRecord(asRecord(edge)?.node);
+    if (typeof node?.id !== 'string' || !SPEND_CANONICAL_ID_RE.test(node.id)) continue;
+    const custodians = node.custodianAccounts;
+    if (!Array.isArray(custodians)) continue;
+    for (const custodian of custodians) {
+      const id = asRecord(custodian)?.id;
+      if (typeof id === 'string' && SPEND_ACCOUNT_RE.test(id)) found.add(id.toUpperCase());
+    }
+  }
+  return found.size === 1 ? [...found][0] : null;
+}
+
+/** The verified path: identity → spend account (hop 1) → W# (hop 2). */
+async function fetchSpendAccountNumberViaChain(identityId: string): Promise<string> {
+  const bank = await atlasGraphql('fort_knox', 'WsBankAccount', WS_BANK_ACCOUNT_QUERY, { identityId });
+  const canonicalId = readSpendAccountCanonicalId(bank);
+  if (!canonicalId) {
+    throw new Error('Atlas returned no Wealthsimple bank account for this identity');
+  }
+
+  const details = await atlasGraphql('wealthsimple', 'getAccountDetails', GET_ACCOUNT_DETAILS_QUERY, {
+    id: canonicalId,
+  });
+  const accountNumber = readSpendCustodianAccountNumber(details);
+  if (!accountNumber) {
+    throw new Error(`No spend account number (W…CAD) on ${canonicalId}`);
+  }
+  return accountNumber;
+}
+
+/**
+ * The full lookup: identity → W#, with the tier fetched alongside.
+ *
+ * The one-hop FetchIdentityAccounts guess races the verified two-hop chain; the first
+ * usable W# wins, so a working guess costs one round trip and a broken one costs the
+ * same two as before. Everything keys off identityId, so all of it starts at once.
  */
 export async function fetchAtlasAccountIdViaGraphql(
   args: { identityId: string },
@@ -165,21 +236,70 @@ export async function fetchAtlasAccountIdViaGraphql(
     .then(readIndividualTier)
     .catch(() => null);
 
-  const bank = await atlasGraphql('fort_knox', 'WsBankAccount', WS_BANK_ACCOUNT_QUERY, { identityId });
-  const canonicalId = readSpendAccountCanonicalId(bank);
-  if (!canonicalId) {
-    throw new Error('Atlas returned no Wealthsimple bank account for this identity');
-  }
+  const fast = atlasGraphql('invest_graphql_api', 'FetchIdentityAccounts', FETCH_IDENTITY_ACCOUNTS_QUERY, {
+    id: identityId,
+  })
+    .then(readSpendAccountNumberFromIdentity)
+    .catch((err: unknown) => {
+      console.info('[atlas] one-hop account lookup unavailable:', err);
+      return null;
+    });
+  const chain = fetchSpendAccountNumberViaChain(identityId);
 
-  const details = await atlasGraphql('wealthsimple', 'getAccountDetails', GET_ACCOUNT_DETAILS_QUERY, {
-    id: canonicalId,
+  // The guess is unverified, so check it against the chain whenever both answer.
+  void Promise.all([fast, chain.catch(() => null)]).then(([f, c]) => {
+    if (!f || !c) return;
+    if (f === c) console.info('[atlas] one-hop account lookup agrees with the two-hop chain:', f);
+    else console.warn('[atlas] one-hop account lookup DISAGREES with the two-hop chain:', f, 'vs', c);
   });
-  const accountNumber = readSpendCustodianAccountNumber(details);
-  if (!accountNumber) {
-    throw new Error(`No spend account number (W…CAD) on ${canonicalId}`);
-  }
+
+  const accountNumber = await new Promise<string>((resolve, reject) => {
+    let open = 2;
+    let chainError: unknown;
+    const giveUp = () => { if (--open === 0) reject(chainError); };
+    fast.then((v) => (v ? resolve(v) : giveUp()));
+    chain.then(resolve, (err: unknown) => { chainError = err; giveUp(); });
+  });
 
   return { accountNumber, individualTierStatus: await tier };
+}
+
+// -----------------------------------------------------------------------------
+// Client email — the "Email" row on Atlas's identity sidebar.
+// -----------------------------------------------------------------------------
+
+// Not recorded from Atlas's traffic like the operations above: `email` is assumed to sit
+// on the same `identity` node FetchIdentityPackages reads. If the schema disagrees, the
+// response carries a GraphQL validation error, atlasGraphql throws, and the caller falls
+// back to the sidebar scrape — so a wrong guess costs one round trip, not the email.
+export const FETCH_IDENTITY_EMAIL_QUERY = `query FetchIdentityEmail($id: ID!) {
+  identity(id: $id) {
+    id
+    email
+    __typename
+  }
+}`;
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/** `FetchIdentityEmail` → the identity's email, or null when absent or malformed. */
+export function readIdentityEmail(res: unknown): string | null {
+  const email = asRecord(asRecord(asRecord(res)?.data)?.identity)?.email;
+  if (typeof email !== 'string') return null;
+  const trimmed = email.trim();
+  return EMAIL_RE.test(trimmed) ? trimmed : null;
+}
+
+export async function fetchAtlasClientEmailViaGraphql(args: { identityId: string }): Promise<string> {
+  const { identityId } = args;
+  if (!identityId) throw new Error('identityId is required');
+
+  const res = await atlasGraphql('invest_graphql_api', 'FetchIdentityEmail', FETCH_IDENTITY_EMAIL_QUERY, {
+    id: identityId,
+  });
+  const email = readIdentityEmail(res);
+  if (!email) throw new Error('Atlas returned no email for this identity');
+  return email;
 }
 
 // -----------------------------------------------------------------------------

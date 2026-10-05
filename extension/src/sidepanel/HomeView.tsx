@@ -46,7 +46,7 @@ function orderRows(rows: TicketRow[], replies: Record<string, TicketReply[]>, so
   return withKeys.map((x) => x.r);
 }
 
-export function HomeView({ onOpenTicket, onOpenWiresPending, onOpenWiresPendingV2, onOpenEligibility, header }: { onOpenTicket: (ticketKey: string) => void; onOpenWiresPending: () => void; onOpenWiresPendingV2: () => void; onOpenEligibility: () => void; header: React.ReactNode }) {
+export function HomeView({ onOpenTicket, onOpenWiresPending, onOpenEligibility, header }: { onOpenTicket: (ticketKey: string) => void; onOpenWiresPending: () => void; onOpenEligibility: () => void; header: React.ReactNode }) {
   const [state, setState] = useState<LoadState>({ kind: 'loading' });
   const [replies, setReplies] = useState<Record<string, TicketReply[]>>({});
   const [refreshing, setRefreshing] = useState(false);
@@ -258,12 +258,6 @@ export function HomeView({ onOpenTicket, onOpenWiresPending, onOpenWiresPendingV
               title="Wires Pending Posting"
               subtitle="Auto-verify each Pending Posting wire on Ledge / Atlassian and flip the sheet to Posted."
               onClick={onOpenWiresPending}
-            />
-            <ToolTile
-              icon="⚡"
-              title="Wires Pending Posting v2"
-              subtitle="Same check against the new Ledge SPA — queries Ledge's GraphQL API instead of driving the page."
-              onClick={onOpenWiresPendingV2}
             />
             <MobileChequeValidationTile />
             <ToolTile

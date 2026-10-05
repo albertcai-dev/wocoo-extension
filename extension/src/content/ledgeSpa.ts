@@ -1,14 +1,13 @@
-// Ledge SPA content script — serves Wires Pending Posting v2.
+// Ledge SPA content script — serves Wires Pending Posting.
 //
-// Unlike `content/ledge.ts`, this script never touches the page's DOM. The new Ledge
-// SPA reads its data from a GraphQL host, so a verify job is one paginated query. What
+// This script never touches the page's DOM. The Ledge SPA reads its data from a GraphQL host, so a verify job is one paginated query. What
 // the script is here for is the Okta access token: Ledge authenticates with a Bearer
 // header, and that token lives in the page's own sessionStorage. A content script
 // shares the page's origin, so it can read the token without the side panel ever
 // holding it — and sessionStorage is per-tab, which is why the tool opens a tab at all.
 //
-// Queue protocol matches ledge.ts: the side panel writes one job to
-// chrome.storage.local, this script answers on the result key.
+// Queue protocol: the side panel writes one job to chrome.storage.local, this script
+// answers on the result key.
 
 import {
   OKTA_TOKEN_STORAGE_KEY,

@@ -2,21 +2,22 @@
 // Tools section. Drives the daily "verify each Pending Posting wire on Ledge or Atlassian,
 // then flip the row to Posted" task as a 1-click autonomous batch.
 //
-// v1 is UI-only scaffolding: shows the panel layout + idle/running/done states with
-// mock data. Google OAuth + Sheets/Ledge wiring follow in subsequent layers.
+// Ledge verification is a GraphQL query against the Ledge SPA, not a DOM drive. The tool
+// opens one Ledge tab, which exists only to hold the page's Okta session for
+// `content/ledgeSpa.ts` to read.
 
 import { useState } from 'react';
 import type { WireRow, WireRowResult, WireRowStatus } from '../data/wiresConfig';
-import {
-  WIRES_SHEET_ID,
-  WIRES_SHEET_TAB,
-  WIRES_SHEET_URL,
-  LEDGE_URL,
-} from '../data/wiresConfig';
+import { WIRES_SHEET_ID, WIRES_SHEET_TAB, WIRES_SHEET_URL } from '../data/wiresConfig';
+import { LEDGE_SPA_URL } from '../data/ledgeGraphql';
 import { readPendingWiresViaBridge, markWirePostedViaBridge } from '../api/bridge';
 import { getIssueStatusAndComments, extractJiraKeyFromUrl } from '../api/jira';
 
 type RunState = 'idle' | 'loading' | 'running' | 'done' | 'error';
+
+/** A paginated GraphQL sweep is quick, but a wire from months back can walk many
+ *  pages. 90s leaves room without letting a wedged tab hang the whole run. */
+const LEDGE_TIMEOUT_MS = 90_000;
 
 export function WiresPendingPosting({ onClose }: { onClose: () => void }) {
   const [runState, setRunState] = useState<RunState>('idle');
@@ -28,8 +29,6 @@ export function WiresPendingPosting({ onClose }: { onClose: () => void }) {
     setError(null);
     setRows([]);
     try {
-      // Apps Script bridge does the filter + hyperlink detection server-side and returns
-      // only the matching rows. No client-side OAuth required.
       const pending = await readPendingWiresViaBridge(WIRES_SHEET_ID, WIRES_SHEET_TAB);
 
       if (pending.length === 0) {
@@ -49,20 +48,17 @@ export function WiresPendingPosting({ onClose }: { onClose: () => void }) {
         wireTimestamp: p.wireTimestamp,
       }));
 
-      // Initial render — all rows in pending state. Verify each below.
       const initial: WireRowResult[] = wireRows.map((row) => ({ row, status: { kind: 'pending' } }));
       setRows(initial);
       setRunState('running');
 
-      // Verify rows sequentially. Sequential keeps things simple (no rate-limit thrash)
-      // and the UI updates per row land cleanly. Parallelism is easy to add later.
       const updated = [...initial];
       const setStatusFor = (i: number, status: WireRowStatus) => {
         updated[i] = { row: updated[i].row, status };
         setRows([...updated]);
       };
 
-      // Index of all rows that need Ledge verification (plain-text custodian, not N/A).
+      // Rows needing a Ledge lookup: plain-text custodian, not N/A.
       const ledgeIndices: number[] = [];
       updated.forEach((r, idx) => {
         if (!r.row.custodianHyperlink && !isNotApplicable(r.row.custodianRaw)) {
@@ -70,22 +66,15 @@ export function WiresPendingPosting({ onClose }: { onClose: () => void }) {
         }
       });
 
-      // Two-tab strategy: split Ledge work in half — "top" tab walks the front half
-      // ascending, "bottom" tab walks the back half descending. They meet in the
-      // middle. Halves typical run time.
-      const ledgeNeeded = ledgeIndices.length > 0;
-      if (ledgeNeeded) {
-        window.open(LEDGE_URL + '#wocoo-top', '_blank', 'noopener,noreferrer');
-        window.open(LEDGE_URL + '#wocoo-bottom', '_blank', 'noopener,noreferrer');
-        // Give both content scripts time to attach + bootstrap before queueing work.
-        await new Promise((r) => setTimeout(r, 1800));
+      if (ledgeIndices.length > 0) {
+        window.open(LEDGE_SPA_URL, '_blank', 'noopener,noreferrer');
+        // Let the content script attach and the SPA finish its Okta handshake before
+        // the first job lands — a job queued too early answers "no access token".
+        await new Promise((r) => setTimeout(r, 2500));
       }
-      const mid = Math.ceil(ledgeIndices.length / 2);
-      const topQueue = ledgeIndices.slice(0, mid);                     // ascending
-      const bottomQueue = ledgeIndices.slice(mid).reverse();           // descending
 
-      // JIRA-path rows (hyperlinked) + skipped pre-checks run on the side panel's own
-      // thread; they don't need a Ledge tab.
+      // Hyperlinked rows go to Atlassian; N/A rows are skipped. Neither needs the tab,
+      // so they run alongside the Ledge queue.
       async function runJiraAndSkipped() {
         for (let i = 0; i < updated.length; i++) {
           const row = updated[i].row;
@@ -93,7 +82,7 @@ export function WiresPendingPosting({ onClose }: { onClose: () => void }) {
             setStatusFor(i, { kind: 'skipped', reason: 'custodian_account_id is N/A — sheet stays Pending posting' });
             continue;
           }
-          if (!row.custodianHyperlink) continue; // ledge tabs handle these
+          if (!row.custodianHyperlink) continue; // the Ledge queue handles these
           try {
             setStatusFor(i, { kind: 'checking', via: 'jira' });
             const status = await verifyViaJira(row.custodianHyperlink);
@@ -109,12 +98,14 @@ export function WiresPendingPosting({ onClose }: { onClose: () => void }) {
         }
       }
 
-      async function runLedgeQueue(role: 'top' | 'bottom', indices: number[]) {
-        for (const i of indices) {
+      // One queue: the content script processes a single job at a time, and a GraphQL
+      // sweep is fast enough that splitting the work buys nothing.
+      async function runLedgeQueue() {
+        for (const i of ledgeIndices) {
           const row = updated[i].row;
           try {
             setStatusFor(i, { kind: 'checking', via: 'ledge' });
-            const status = await verifyViaLedge(row, role);
+            const status = await verifyViaLedgeSpa(row);
             if (status.kind === 'posted') {
               await markWirePostedViaBridge(WIRES_SHEET_ID, WIRES_SHEET_TAB, row.rowNumber);
               setStatusFor(i, { kind: 'posted' });
@@ -127,11 +118,7 @@ export function WiresPendingPosting({ onClose }: { onClose: () => void }) {
         }
       }
 
-      await Promise.all([
-        runJiraAndSkipped(),
-        runLedgeQueue('top', topQueue),
-        runLedgeQueue('bottom', bottomQueue),
-      ]);
+      await Promise.all([runJiraAndSkipped(), runLedgeQueue()]);
       setRunState('done');
     } catch (e: any) {
       setError(e?.message || String(e));
@@ -141,12 +128,8 @@ export function WiresPendingPosting({ onClose }: { onClose: () => void }) {
 
   // ----- per-row verifiers -----
 
-  /**
-   * Atlassian path. Extract the issue key from the cell's hyperlink, fetch the ticket's
-   * status + comments. Pass if either signal indicates the wire has been processed:
-   *   - status === "Done" (new BOSM format — no more "complete" comments)
-   *   - OR any comment contains "complete" (legacy fallback for older tickets)
-   */
+  /** Atlassian path. Passes on status Done, or a legacy comment
+   *  containing "complete". */
   async function verifyViaJira(url: string): Promise<WireRowStatus> {
     const key = extractJiraKeyFromUrl(url);
     if (!key) return { kind: 'anomaly', reason: 'Hyperlink not a wealthsimple.atlassian.net /browse URL' };
@@ -157,48 +140,44 @@ export function WiresPendingPosting({ onClose }: { onClose: () => void }) {
     return { kind: 'anomaly', reason: `${key}: not Done and no "complete" comment yet (status: ${status || 'unknown'})` };
   }
 
-  /**
-   * Ledge path. Queue a job to the role-specific Ledge content script via
-   * chrome.storage.local, wait for the matching result, translate to a WireRowStatus.
-   */
-  async function verifyViaLedge(row: WireRow, role: 'top' | 'bottom'): Promise<WireRowStatus> {
+  /** Ledge SPA path. Queue a job for `content/ledgeSpa.ts`, wait for the result whose
+   *  jobId matches, translate to a WireRowStatus. */
+  async function verifyViaLedgeSpa(row: WireRow): Promise<WireRowStatus> {
     if (!row.custodianRaw) {
       return { kind: 'anomaly', reason: 'Empty custodian_account_id' };
     }
-    const pendingKey = `pending_ledge_verify_${role}`;
-    const resultKey  = `ledge_verify_result_${role}`;
     const jobId = `j_${row.rowNumber}_${Date.now()}`;
     const job = {
       jobId,
       accountNumber: row.custodianRaw.trim(),
       amount: row.amount,
       currency: row.currency,
-      expectedSource: String(row.rowNumber),
       wireTimestamp: row.wireTimestamp || '',
     };
 
     return new Promise<WireRowStatus>((resolve) => {
-      const timeoutMs = 150_000;
       const onChange = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
-        if (area !== 'local' || !(resultKey in changes)) return;
-        const v = changes[resultKey].newValue as { jobId: string; matched: boolean; reason?: string } | undefined;
-        if (!v || v.jobId !== jobId) return; // not ours (could be a sibling tab's result)
+        if (area !== 'local' || !('ledgespa_verify_result' in changes)) return;
+        const v = changes['ledgespa_verify_result'].newValue as
+          | { jobId: string; matched: boolean; reason?: string }
+          | undefined;
+        if (!v || v.jobId !== jobId) return;
         cleanup();
         if (v.matched) resolve({ kind: 'posted' });
         else resolve({ kind: 'anomaly', reason: v.reason || 'Ledge: no match' });
       };
       const timeoutId = window.setTimeout(() => {
         cleanup();
-        resolve({ kind: 'anomaly', reason: `Ledge verification timed out after 150s (${role} tab)` });
-      }, timeoutMs);
+        resolve({ kind: 'anomaly', reason: `Ledge verification timed out after ${LEDGE_TIMEOUT_MS / 1000}s` });
+      }, LEDGE_TIMEOUT_MS);
       function cleanup() {
         chrome.storage.onChanged.removeListener(onChange);
         window.clearTimeout(timeoutId);
       }
       chrome.storage.onChanged.addListener(onChange);
-      void chrome.storage.local.remove([resultKey]).then(() =>
-        chrome.storage.local.set({ [pendingKey]: job }),
-      );
+      void chrome.storage.local
+        .remove(['ledgespa_verify_result'])
+        .then(() => chrome.storage.local.set({ pending_ledgespa_verify: job }));
     });
   }
 
@@ -210,9 +189,7 @@ export function WiresPendingPosting({ onClose }: { onClose: () => void }) {
       <div style={{ padding: 'var(--mint-sp-3)', display: 'flex', flexDirection: 'column', gap: 'var(--mint-sp-3)' }}>
         <IntroCard />
 
-        {error ? (
-          <div role="alert" style={errorBanner}>⚠ {error}</div>
-        ) : null}
+        {error ? <div role="alert" style={errorBanner}>⚠ {error}</div> : null}
 
         {runState === 'idle' ? (
           <button onClick={startRun} style={{ ...primaryButton, width: '100%' }}>
@@ -266,13 +243,17 @@ function summarize(rows: WireRowResult[]) {
 function IntroCard() {
   return (
     <div style={{ padding: 'var(--mint-sp-3)', background: 'var(--mint-bg-card)', border: 'var(--mint-card-stroke)', borderRadius: 'var(--mint-radius-card)', fontSize: 'var(--mint-text-meta)', color: 'var(--mint-fg-strong)', lineHeight: 1.5 }}>
-      For every row with <code>wire_status = Pending posting</code>, this tool:
+      For every row with{' '}
+      <code>wire_status = Pending posting</code>, this tool:
       <ol style={{ paddingLeft: '1.2em', margin: '8px 0 0' }}>
-        <li>Looks up the custodian account on Ledge → verifies a Wire-In matching column C is posted.</li>
-        <li>Or, if column H is a hyperlinked Atlassian ticket → checks for a comment containing "complete".</li>
+        <li>Queries Ledge's GraphQL API for the custodian account's transactions → looks for a <code>Wire In</code> deposit matching column C.</li>
+        <li>Or, if column H is a hyperlinked Atlassian ticket → checks status Done or a comment containing "complete".</li>
         <li>Flips column L to <code>Posted</code> on verification.</li>
         <li>Surfaces anything unclear as an anomaly for manual review (does not write to the sheet).</li>
       </ol>
+      <div style={{ marginTop: 8, color: 'var(--mint-fg-soft)', fontSize: 'var(--mint-text-nano)' }}>
+        A Ledge tab opens on the first run — it holds the Okta session the query needs. Leave it open.
+      </div>
     </div>
   );
 }

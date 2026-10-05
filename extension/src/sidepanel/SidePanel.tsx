@@ -38,11 +38,10 @@ import { detectL3Escalation } from '../data/l3EscalationDetect';
 import { detectInterestInvestigation } from '../data/interestInvestigationDetect';
 import { HomeView } from './HomeView';
 import { WiresPendingPosting } from './WiresPendingPosting';
-import { WiresPendingPostingV2 } from './WiresPendingPostingV2';
 import { EligibilityTriage } from './EligibilityTriage';
 import { SettingsView } from './SettingsView';
 import { I2cCard, KohoCard } from './MessagingCards';
-import { fetchAtlasAccountIdHeadless } from '../data/atlasAccountLookup';
+import { fetchAtlasAccountIdHeadless, fetchAtlasClientEmailHeadless } from '../data/atlasAccountLookup';
 import { isInterestRelatedWorkType, isInterestFeeInContent } from '../data/reverseFeeDetect';
 import { subscribeToTicketTransitions, emitTicketTransition, type TicketTransitionEvent } from './ticketLogEvents';
 import { logTicketViaBridge, acknowledgeReplyViaBridge, findI2cThreadViaBridge, i2cThreadUrl, emailThreadUrl, type TicketReply } from '../api/bridge';
@@ -81,7 +80,6 @@ export function SidePanel() {
   const [homeMode, setHomeMode] = useState(false);
   const [settingsMode, setSettingsMode] = useState(false);
   const [wiresPendingActive, setWiresPendingActive] = useState(false);
-  const [wiresPendingV2Active, setWiresPendingV2Active] = useState(false);
   const [eligibilityActive, setEligibilityActive] = useState(false);
   const [ticket, setTicket] = useState<WocooTicket | null>(null);
   const [loading, setLoading] = useState(false);
@@ -144,7 +142,6 @@ export function SidePanel() {
     setHomeMode(false);
     setSettingsMode(false);
     setWiresPendingActive(false);
-    setWiresPendingV2Active(false);
     setEligibilityActive(false);
   }, [ticketKey]);
 
@@ -161,9 +158,6 @@ export function SidePanel() {
     return <WiresPendingPosting onClose={() => setWiresPendingActive(false)} />;
   }
 
-  if (wiresPendingV2Active) {
-    return <WiresPendingPostingV2 onClose={() => setWiresPendingV2Active(false)} />;
-  }
 
   if (eligibilityActive) {
     return <EligibilityTriage onClose={() => setEligibilityActive(false)} />;
@@ -174,7 +168,6 @@ export function SidePanel() {
       <HomeView
         onOpenTicket={onOpenTicket}
         onOpenWiresPending={() => setWiresPendingActive(true)}
-        onOpenWiresPendingV2={() => setWiresPendingV2Active(true)}
         onOpenEligibility={() => setEligibilityActive(true)}
         header={<HomeHeader onOpenSettings={onOpenSettings} />}
       />
@@ -187,7 +180,6 @@ export function SidePanel() {
       <HomeView
         onOpenTicket={onOpenTicket}
         onOpenWiresPending={() => setWiresPendingActive(true)}
-        onOpenWiresPendingV2={() => setWiresPendingV2Active(true)}
         onOpenEligibility={() => setEligibilityActive(true)}
         header={<HomeHeader onOpenSettings={onOpenSettings} />}
       />
@@ -693,18 +685,17 @@ function ExternalToolsRow({ ticket }: { ticket: WocooTicket }) {
   // for the content script to scrape CHEQUING (SPEND), closes the tab, and resolves
   // with the captured value. The on-mount/onChanged listener below keeps the W# chip
   // in sync with the storage value regardless of which workflow triggered the fetch.
+  // The Atlas email rides along. Its GraphQL field is unverified, so it may land on the
+  // slower sidebar-scrape fallback; run concurrently so that never delays the W#.
   const [fetchPending, setFetchPending] = useState(false);
   const fetchAccountNumber = async () => {
     if (!ticket.identityId || fetchPending) return;
     setFetchPending(true);
-    try {
-      await fetchAtlasAccountIdHeadless({ identityId: ticket.identityId, sourceTicketId: ticket.id });
-      // Captured value is mirrored into `captured` state by the storage listener below.
-    } catch {
-      // timeout / tab-create failure — user can retry manually
-    } finally {
-      setFetchPending(false);
-    }
+    const args = { identityId: ticket.identityId, sourceTicketId: ticket.id };
+    // Captured values are mirrored into state by the storage listeners below; a
+    // rejection (timeout / tab-create failure) just leaves that row empty for a retry.
+    await Promise.allSettled([fetchAtlasAccountIdHeadless(args), fetchAtlasClientEmailHeadless(args)]);
+    setFetchPending(false);
   };
 
   // Listen for the captured account number + INDIVIDUAL TIERS > Status coming back from
@@ -733,7 +724,22 @@ function ExternalToolsRow({ ticket }: { ticket: WocooTicket }) {
     return () => chrome.storage.onChanged.removeListener(onChange);
   }, [ticket.id]);
 
-  const [copied, setCopied] = useState(false);
+  // Same pattern for the email the atlas.ts sidebar scrape writes back.
+  const [capturedEmail, setCapturedEmail] = useState<string | null>(null);
+  useEffect(() => {
+    const read = () => {
+      chrome.storage.local.get('atlas_client_email').then((res) => {
+        const v = res.atlas_client_email as { sourceTicketId?: string; email?: string } | undefined;
+        setCapturedEmail(v && v.sourceTicketId === ticket.id && typeof v.email === 'string' && v.email ? v.email : null);
+      });
+    };
+    read();
+    const onChange = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
+      if (area === 'local' && 'atlas_client_email' in changes) read();
+    };
+    chrome.storage.onChanged.addListener(onChange);
+    return () => chrome.storage.onChanged.removeListener(onChange);
+  }, [ticket.id]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--mint-sp-2)' }}>
@@ -747,44 +753,65 @@ function ExternalToolsRow({ ticket }: { ticket: WocooTicket }) {
         ) : null}
       </div>
       <div style={{ display: 'flex' }}>
-        <ActionButton variant="highlight" onClick={fetchAccountNumber} disabled={!ticket.identityId || fetchPending} title="Open Atlas in a background tab, click into CHEQUING (SPEND), read back the Account Number, and also capture INDIVIDUAL TIERS > Status">
-          {fetchPending ? 'Fetching…' : '↗ Fetch Account Number (W#) and Client Status'}
+        <ActionButton variant="highlight" onClick={fetchAccountNumber} disabled={!ticket.identityId || fetchPending} title="Open Atlas in a background tab, click into CHEQUING (SPEND), read back the Account Number, and also capture INDIVIDUAL TIERS > Status and the profile Email">
+          {fetchPending ? 'Fetching…' : '↗ Fetch Account Number, Email, Client Status'}
         </ActionButton>
       </div>
-      {captured ? (
+      {/* Held back while a fetch runs so W#, Email and Status appear together rather
+          than popping in one at a time as each lookup lands. */}
+      {!fetchPending && (captured || capturedEmail) ? (
         <div style={{ padding: '6px 10px', background: 'var(--mint-positive-bg-soft)', border: '1px solid var(--mint-positive-fg-graphic)', borderRadius: 'var(--mint-radius-button)', display: 'flex', flexDirection: 'column', gap: 4, fontSize: 'var(--mint-text-micro)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ color: 'var(--mint-positive-fg-strong)', fontWeight: 700, flexShrink: 0 }}>W#:</span>
-            <span style={{ fontFamily: 'var(--mint-font-mono)', color: 'var(--mint-fg-strong)', flex: 1, userSelect: 'all' }}>{captured.accountNumber}</span>
-            <button
-              onClick={() => {
-                navigator.clipboard.writeText(captured.accountNumber).then(() => { setCopied(true); window.setTimeout(() => setCopied(false), 1500); });
-              }}
-              disabled={copied}
-              style={{
-                padding: '4px 10px',
-                background: copied ? 'var(--mint-positive-fg-graphic)' : 'var(--mint-bg-card)',
-                color: copied ? '#fff' : 'var(--mint-positive-fg-strong)',
-                border: '1px solid var(--mint-positive-fg-graphic)',
-                borderRadius: 'var(--mint-radius-pill)',
-                fontSize: 'var(--mint-text-nano)',
-                fontWeight: 700,
-                cursor: copied ? 'default' : 'pointer',
-                flexShrink: 0,
-              }}
-            >
-              {copied ? 'Copied' : 'Copy'}
-            </button>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ color: 'var(--mint-positive-fg-strong)', fontWeight: 700, flexShrink: 0 }}>Status:</span>
-            <span style={{ color: 'var(--mint-fg-strong)', userSelect: 'all' }}>
-              {captured.individualTierStatus ?? <em style={{ color: 'var(--mint-fg-soft)', fontStyle: 'italic' }}>not detected</em>}
-            </span>
-          </div>
+          {captured ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ color: 'var(--mint-positive-fg-strong)', fontWeight: 700, flexShrink: 0 }}>W#:</span>
+              <span style={{ fontFamily: 'var(--mint-font-mono)', color: 'var(--mint-fg-strong)', flex: 1, userSelect: 'all' }}>{captured.accountNumber}</span>
+              <CapturedCopyButton value={captured.accountNumber} />
+            </div>
+          ) : null}
+          {capturedEmail ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ color: 'var(--mint-positive-fg-strong)', fontWeight: 700, flexShrink: 0 }}>Email:</span>
+              <span style={{ fontFamily: 'var(--mint-font-mono)', color: 'var(--mint-fg-strong)', flex: 1, minWidth: 0, overflowWrap: 'anywhere', userSelect: 'all' }}>{capturedEmail}</span>
+              <CapturedCopyButton value={capturedEmail} />
+            </div>
+          ) : null}
+          {captured ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ color: 'var(--mint-positive-fg-strong)', fontWeight: 700, flexShrink: 0 }}>Status:</span>
+              <span style={{ color: 'var(--mint-fg-strong)', userSelect: 'all' }}>
+                {captured.individualTierStatus ?? <em style={{ color: 'var(--mint-fg-soft)', fontStyle: 'italic' }}>not detected</em>}
+              </span>
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>
+  );
+}
+
+/** The pill Copy button on the captured-from-Atlas card; each row keeps its own Copied state. */
+function CapturedCopyButton({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      onClick={() => {
+        navigator.clipboard.writeText(value).then(() => { setCopied(true); window.setTimeout(() => setCopied(false), 1500); });
+      }}
+      disabled={copied}
+      style={{
+        padding: '4px 10px',
+        background: copied ? 'var(--mint-positive-fg-graphic)' : 'var(--mint-bg-card)',
+        color: copied ? '#fff' : 'var(--mint-positive-fg-strong)',
+        border: '1px solid var(--mint-positive-fg-graphic)',
+        borderRadius: 'var(--mint-radius-pill)',
+        fontSize: 'var(--mint-text-nano)',
+        fontWeight: 700,
+        cursor: copied ? 'default' : 'pointer',
+        flexShrink: 0,
+      }}
+    >
+      {copied ? 'Copied' : 'Copy'}
+    </button>
   );
 }
 
