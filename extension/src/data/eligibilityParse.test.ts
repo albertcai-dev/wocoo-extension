@@ -77,8 +77,20 @@ describe('isEligibilityRequest', () => {
   it('matches on the body alone', () => {
     expect(isEligibilityRequest(raw({ subject: 'Claim 123456', plainBody: 'Please confirm eligibility for this card.' }))).toBe(true);
   });
-  it('is false when neither mentions eligibility', () => {
-    expect(isEligibilityRequest(raw({ subject: 'Claim 123456 - Update', plainBody: 'Please call us back.' }))).toBe(false);
+  it('is false when nothing signals a request', () => {
+    expect(isEligibilityRequest(raw({ subject: 'Wealthsimple June Report', plainBody: 'Please find attached the monthly report.' }))).toBe(false);
+  });
+  it('matches a "Member Query | Claim No." subject', () => {
+    expect(isEligibilityRequest(raw({ subject: 'Member Query | Claim No. 4147796 | Claimant: Jane Example', plainBody: 'Hello' }))).toBe(true);
+  });
+  it('matches a "Member Coverage Query" subject', () => {
+    expect(isEligibilityRequest(raw({ subject: 'Member Coverage Query - 4148550 - Jane Example', plainBody: 'Hello' }))).toBe(true);
+  });
+  it('matches a "Coverage Confirmation" subject', () => {
+    expect(isEligibilityRequest(raw({ subject: 'Wealthsimple Coverage Confirmation - CA0-26-005059 - JANE EXAMPLE', plainBody: 'Hello' }))).toBe(true);
+  });
+  it('matches on a card last 4 even with no keyword', () => {
+    expect(isEligibilityRequest(raw({ subject: 'CA0-26-005087 - Jane EXAMPLE', plainBody: 'Please verify the card ending in 1234.' }))).toBe(true);
   });
 });
 

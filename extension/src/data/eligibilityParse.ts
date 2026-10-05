@@ -45,9 +45,15 @@ export function splitName(raw: string): PersonName | null {
   return { first: parts.slice(0, -1).join(' '), last: parts[parts.length - 1], raw: clean };
 }
 
-/** An insurer email is an eligibility request when its subject or body mentions eligibility. */
+const REQUEST_KEYWORD_RE = /eligib|coverage|member\s+(?:coverage\s+)?query|\bclaim\b/i;
+
+/**
+ * An insurer email is an eligibility request when its subject or body uses request wording
+ * (eligibility / coverage / member query / claim), or when a card last 4 can be found in it.
+ */
 export function isEligibilityRequest(raw: RawEligibilityEmail): boolean {
-  return /eligib/i.test(raw.subject || '') || /eligib/i.test(raw.plainBody || '');
+  if (REQUEST_KEYWORD_RE.test(raw.subject || '') || REQUEST_KEYWORD_RE.test(raw.plainBody || '')) return true;
+  return parseEligibilityEmail(raw, []).last4 !== null;
 }
 
 /** Drop quoted reply history: everything from quote markers, plus `>` lines. */
