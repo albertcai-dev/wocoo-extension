@@ -1355,7 +1355,12 @@ let cardDetailsNoRecordRan = false;
 async function tryCardDetailsNoRecord(): Promise<boolean> {
   if (cardDetailsNoRecordRan) return true;
   if ((await getFlow()) !== 'card_details') return false;
-  if (!pageSaysNoRecord(document.body?.textContent || '')) return false;
+  if (!(await chainActive())) return false;
+  // Visible text only (innerText skips <script> and hidden nodes), and only on the
+  // Customer Search page itself (Email Address box present), never a customer page
+  // whose cards haven't rendered yet.
+  if (!pageSaysNoRecord(document.body?.innerText || '')) return false;
+  if (!findEmailInput()) return false;
   if (pageHasMaskedPan()) return false;
 
   const ctx = await chrome.storage.local.get('pending_i2c_source_ticket_id');
