@@ -55,6 +55,13 @@ describe('readPhoneSearchHits', () => {
     expect(readPhoneSearchHits(resWithPhone('(416) 555-0142', { identityId: 'user-TESTx' }), '4165550142')).toEqual([]);
   });
 
+  it('yields [] when the hit phone is null or the wanted phone is empty or not 10 digits', () => {
+    expect(readPhoneSearchHits(resWithPhone(null as unknown as string), '4165550142')).toEqual([]);
+    expect(readPhoneSearchHits(resWithPhone(''), '')).toEqual([]);
+    expect(readPhoneSearchHits(fixture, '')).toEqual([]);
+    expect(readPhoneSearchHits(resWithPhone('555-0142'), '5550142')).toEqual([]);
+  });
+
   it('returns null email when none present', () => {
     expect(readPhoneSearchHits(resWithPhone('(416) 555-0142', { email: null }), '4165550142')[0].email).toBeNull();
   });

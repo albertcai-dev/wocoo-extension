@@ -59,6 +59,8 @@ export function readPhoneSearchHits(res: unknown, phone10: string): AtlasPhoneHi
   if (!Array.isArray(hits)) return [];
 
   const wanted = phoneDigits(phone10);
+  // Never match on a short or empty number: it could pair unrelated clients.
+  if (!/^\d{10}$/.test(wanted)) return [];
   const byIdentity = new Map<string, AtlasPhoneHit>();
   for (const hit of hits) {
     const source = asRecord(asRecord(hit)?.source);
@@ -85,7 +87,9 @@ export async function searchAtlasByPhone(phone10: string): Promise<AtlasPhoneHit
   const res = await atlasGraphql('', 'searchForUsers', SEARCH_FOR_USERS_QUERY, {
     term: phone10,
     indices: ['user'],
-    perIndexSize: 25,
+    // Wide page: a second matching identity ranked past a small page would be missed,
+    // letting a single candidate be auto-picked.
+    perIndexSize: 100,
     includeHighlights: false,
   });
   return readPhoneSearchHits(res, phone10);

@@ -84,6 +84,40 @@ describe('resolveBatch', () => {
     expect(r.flags).toEqual(['multiple_candidates']);
   });
 
+  describe('Atlas family-name regression (same phone, different people)', () => {
+    const hit = (identityId: string, fullName: string, email: string) => {
+      const [firstName, ...rest] = fullName.split(' ');
+      return { identityId, fullName, firstName, lastName: rest.join(' '), email };
+    };
+
+    it('only the named family member proceeds to i2c', async () => {
+      const d = deps({
+        atlasByPhone: async () => [
+          hit('identity-A', 'Arun Ramanathan', 'arun@example.com'),
+          hit('identity-P', 'Priya Ramanathan', 'priya@example.com'),
+          hit('identity-M', 'Meena Ramanathan', 'meena@example.com'),
+        ],
+        i2cCards: async (email) => { d.calls.push('i2c:' + email); return email === 'priya@example.com' ? i2cOpen : []; },
+      });
+      const [r] = await resolveBatch([req('m1', { emails: [] })], d);
+      expect(r.method).toBe('atlas_phone_i2c');
+      expect(r.identityId).toBe('identity-P');
+      expect(d.calls).toEqual(['i2c:priya@example.com']);
+    });
+
+    it('two identities with the same name are flagged, not picked', async () => {
+      const d = deps({
+        atlasByPhone: async () => [
+          hit('identity-P1', 'Priya Ramanathan', 'a@example.com'),
+          hit('identity-P2', 'Priya Ramanathan', 'b@example.com'),
+        ],
+      });
+      const [r] = await resolveBatch([req('m1', { emails: [] })], d);
+      expect(r.flags).toEqual(['multiple_candidates']);
+      expect(d.calls).toEqual([]);
+    });
+  });
+
   describe('Atlas name matching on fullName', () => {
     async function matches(first: string, last: string, fullName: string): Promise<boolean> {
       const [firstName, ...rest] = fullName.split(' ');
