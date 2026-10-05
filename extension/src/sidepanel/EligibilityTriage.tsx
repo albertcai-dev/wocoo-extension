@@ -15,7 +15,7 @@ import { toLogRow } from '../data/eligibilityLog';
 import { parseEligibilityEmail } from '../data/eligibilityParse';
 import { isDraftable } from '../data/eligibilityResolve';
 import { resolveBatch, type ResolveDeps } from '../data/eligibilityRun';
-import { defaultSelected, EMPTY_RUN, nextLogStatus, RUN_STATE_KEY, type RunState } from '../data/eligibilityRunState';
+import { canRunStep3, defaultSelected, EMPTY_RUN, nextLogStatus, RUN_STATE_KEY, unsentLoggedCount, type RunState } from '../data/eligibilityRunState';
 import { buildEligibilitySql } from '../data/eligibilitySql';
 import { fetchI2cCardDetailsHeadless } from '../data/i2cCardLookup';
 import { parsePastedResults, PRESET_DIRECT_ENABLED, PresetAuthError, runPresetSql } from '../data/presetSql';
@@ -68,7 +68,7 @@ export function EligibilityTriage({ onClose }: { onClose: () => void }) {
       const { requests, excludedDomains, skippedUnknownSender } = await listEligibilityRequestsViaBridge();
       const rows = requests.map((raw) => ({
         req: parseEligibilityEmail(raw, excludedDomains),
-        res: null, selected: false, draftId: '', draftBody: '', sent: 'no' as const, sendError: '',
+        res: null, selected: false, draftId: '', draftBody: '', sent: 'no' as const, sendError: '', logged: false, sentLogged: false,
       }));
       save({ stage: 'fetched', rows, skippedUnknownSender, sql: buildEligibilitySql(rows.map((r) => r.req)) ?? '' });
     } catch (e) {
@@ -98,7 +98,7 @@ export function EligibilityTriage({ onClose }: { onClose: () => void }) {
               requestedLast4: r.req.last4 ?? '',
             })
           : '';
-        return { ...r, res, draftBody, selected: defaultSelected(res) && !!draftBody };
+        return { ...r, res, draftBody, selected: defaultSelected(res) && !!draftBody, logged: false };
       });
       setPasteMode(false);
       save({ ...run, stage: 'resolved', rows });
@@ -116,13 +116,17 @@ export function EligibilityTriage({ onClose }: { onClose: () => void }) {
       for (let i = 0; i < rows.length; i++) {
         const r = rows[i];
         if (!r.res) continue;
-        let draftId = r.draftId;
-        if (r.selected && r.draftBody && !draftId) {
-          draftId = await createEligibilityDraftViaBridge(r.req.messageId, r.draftBody);
-          rows[i] = { ...r, draftId };
+        if (r.selected && r.draftBody && !r.draftId) {
+          const draftId = await createEligibilityDraftViaBridge(r.req.messageId, r.draftBody);
+          // A new draft changes the outcome, so the row must be (re-)logged as DRAFTED.
+          rows[i] = { ...r, draftId, logged: false };
+          save({ ...run, rows });
         }
-        await logEligibilityResultViaBridge(toLogRow(r.req, r.res, nextLogStatus(r.res, !!draftId), draftId));
-        save({ ...run, rows });
+        if (!rows[i].logged) {
+          await logEligibilityResultViaBridge(toLogRow(r.req, r.res, nextLogStatus(r.res, !!rows[i].draftId), rows[i].draftId));
+          rows[i] = { ...rows[i], logged: true };
+          save({ ...run, rows });
+        }
       }
       save({ ...run, stage: 'drafted', rows });
     } catch (e) {
@@ -134,26 +138,37 @@ export function EligibilityTriage({ onClose }: { onClose: () => void }) {
   async function onSendAll() {
     setConfirmSend(false);
     const ids = run.rows.filter((r) => r.draftId && r.sent !== 'ok').map((r) => r.draftId);
-    if (!ids.length) return;
-    setBusy(`Sending ${ids.length} drafts…`); setError('');
+    if (!ids.length && !unsentLoggedCount(run.rows)) return;
+    setBusy(ids.length ? `Sending ${ids.length} drafts…` : 'Logging sent emails…'); setError('');
+    let rows = run.rows;
     try {
-      const results = await sendEligibilityDraftsViaBridge(ids);
-      const byId = new Map(results.map((x) => [x.draftId, x]));
-      const rows = run.rows.map((r) => {
-        const x = byId.get(r.draftId);
-        return x ? { ...r, sent: x.ok ? ('ok' as const) : ('failed' as const), sendError: x.error ?? '' } : r;
-      });
-      for (const r of rows) {
-        if (r.sent === 'ok' && r.res) await logEligibilityResultViaBridge(toLogRow(r.req, r.res, 'READ_EMAIL', r.draftId));
+      if (ids.length) {
+        const results = await sendEligibilityDraftsViaBridge(ids);
+        const byId = new Map(results.map((x) => [x.draftId, x]));
+        rows = run.rows.map((r) => {
+          const x = byId.get(r.draftId);
+          return x ? { ...r, sent: x.ok ? ('ok' as const) : ('failed' as const), sendError: x.error ?? '' } : r;
+        });
+        // Persist sent status BEFORE any logging so a log failure can't lose it.
+        save({ ...run, stage: 'sent', rows });
       }
-      save({ ...run, stage: 'sent', rows });
+      for (let i = 0; i < rows.length; i++) {
+        const r = rows[i];
+        if (r.sent === 'ok' && r.res && !r.sentLogged) {
+          await logEligibilityResultViaBridge(toLogRow(r.req, r.res, 'READ_EMAIL', r.draftId));
+          rows = [...rows];
+          rows[i] = { ...r, sentLogged: true };
+          save({ ...run, stage: 'sent', rows });
+        }
+      }
     } catch (e) {
-      setError((e as Error).message);
+      setError((e as Error).message + (rows.some((r) => r.sent === 'ok' && !r.sentLogged) ? ' — sent status is saved; press Send again to retry logging.' : ''));
     } finally { setBusy(''); }
   }
 
   const draftCount = run.rows.filter((r) => r.selected && r.draftBody && !r.draftId).length;
   const sendable = run.rows.filter((r) => r.draftId && r.sent !== 'ok').length;
+  const pendingSentLogs = unsentLoggedCount(run.rows);
 
   return (
     <div style={{ padding: 'var(--mint-sp-3)', display: 'flex', flexDirection: 'column', gap: 'var(--mint-sp-3)' }}>
@@ -165,11 +180,11 @@ export function EligibilityTriage({ onClose }: { onClose: () => void }) {
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
         <button disabled={!!busy} onClick={onFetch}>1. Fetch requests</button>
         <button disabled={!!busy || run.stage === 'idle' || !run.rows.length} onClick={() => onResolve()}>2. Resolve</button>
-        <button disabled={!!busy || !draftCount} onClick={onCreateDrafts}>3. Create drafts ({draftCount})</button>
+        <button disabled={!canRunStep3(run.rows, !!busy)} onClick={onCreateDrafts}>3. Create drafts & log ({draftCount})</button>
         {confirmSend ? (
           <button disabled={!!busy} onClick={onSendAll} style={{ fontWeight: 700 }}>Confirm send {sendable}</button>
         ) : (
-          <button disabled={!!busy || !sendable} onClick={() => setConfirmSend(true)}>4. Send all drafts ({sendable})</button>
+          <button disabled={!!busy || !(sendable || pendingSentLogs)} onClick={() => (sendable ? setConfirmSend(true) : void onSendAll())}>4. {sendable || !pendingSentLogs ? `Send all drafts (${sendable})` : `Retry logging (${pendingSentLogs})`}</button>
         )}
         {run.stage !== 'idle' ? <button disabled={!!busy} onClick={() => save(EMPTY_RUN)}>Clear</button> : null}
       </div>

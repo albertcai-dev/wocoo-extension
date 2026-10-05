@@ -13,6 +13,10 @@ export interface RunRow {
   draftBody: string;
   sent: 'no' | 'ok' | 'failed';
   sendError: string;
+  /** The Requests-sheet row has been written for this row's current outcome (DRAFTED / NEEDS_REVIEW / …). */
+  logged: boolean;
+  /** READ_EMAIL has been written after a successful send. */
+  sentLogged: boolean;
 }
 
 export interface RunState {
@@ -34,4 +38,21 @@ export function nextLogStatus(res: Resolution, drafted: boolean): LogStatus {
   if (res.flags.includes('already_replied')) return 'ALREADY_HAS_ONE_REPLY';
   if (res.status === 'no_match') return 'NO_MATCH';
   return 'NEEDS_REVIEW';
+}
+
+/** Resolved rows whose current outcome hasn't reached the Requests sheet yet. */
+export function unloggedCount(rows: RunRow[]): number {
+  return rows.filter((r) => r.res && !r.logged).length;
+}
+
+/** Rows that were sent but whose READ_EMAIL log hasn't been written. */
+export function unsentLoggedCount(rows: RunRow[]): number {
+  return rows.filter((r) => r.sent === 'ok' && r.res && !r.sentLogged).length;
+}
+
+/** Step 3 (create drafts & log) is available while there are drafts to create or rows to log. */
+export function canRunStep3(rows: RunRow[], busy: boolean): boolean {
+  if (busy) return false;
+  const drafts = rows.filter((r) => r.selected && r.draftBody && !r.draftId).length;
+  return drafts > 0 || unloggedCount(rows) > 0;
 }
