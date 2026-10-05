@@ -146,9 +146,11 @@ export async function fetchI2cCardDetailsHeadless(args: FetchI2cCardDetailsArgs)
 }
 
 export interface I2cSession {
-  /** Look up one email's cards. Calls queue FIFO; only one runs at a time. */
+  /** Look up one email's cards. Calls queue FIFO; only one runs at a time. Default timeout
+   *  75 s when the lookup has to sign in a fresh tab, 60 s in an already signed-in one. */
   lookup(email: string, sourceTicketId: string, timeoutMs?: number): Promise<I2cCard[]>;
-  /** Close the shared tab and stop any in-flight wait. Later lookups reject. */
+  /** Close the shared tab, clear the pending chain keys and stop any in-flight wait.
+   *  Later lookups reject. */
   close(): Promise<void>;
 }
 
@@ -156,68 +158,105 @@ export interface I2cSession {
  *  (it does so just after writing the result) before arming the next lookup. */
 const CHAIN_IDLE_MAX_MS = 2_000;
 const CHAIN_IDLE_POLL_MS = 100;
+const FRESH_TAB_TIMEOUT_MS = 75_000;
+const SIGNED_IN_TIMEOUT_MS = 60_000;
+
+/** Every key the i2c.ts chain reads — mirrors its ALL_PENDING_KEYS. */
+const I2C_PENDING_KEYS = [
+  'pending_i2c_email',
+  'pending_i2c_source_ticket_id',
+  'pending_i2c_flow',
+  'pending_i2c_ticket_url',
+  'pending_i2c_admin_debit_amount',
+  'pending_i2c_started_at',
+  'pending_i2c_interest_stmt_attempted',
+  'qc_search_clicked',
+];
 
 export function openI2cSession(deps: I2cChromeDeps = chromeDeps()): I2cSession {
   const queue = createSerialQueue();
   let tabId: number | null = null;
   let closed = false;
   let current: CardDetailsWait | null = null;
+  let seq = 0;
 
   const closedError = () => new Error('i2c session closed');
 
   // The content script clears every pending key right after it writes i2c_card_details,
   // so the panel can hear the result first. Writing the next lookup's keys before that
   // remove lands would have them wiped and the next chain would never start.
-  async function waitForChainIdle(): Promise<void> {
+  // Returns false when the keys are still there at the limit: a chain is still live.
+  async function waitForChainIdle(): Promise<boolean> {
     for (let waited = 0; waited < CHAIN_IDLE_MAX_MS; waited += CHAIN_IDLE_POLL_MS) {
       const res = await deps.storageGet(['pending_i2c_email']);
-      if (typeof res.pending_i2c_email !== 'string') return;
+      if (typeof res.pending_i2c_email !== 'string') return true;
       await deps.sleep(CHAIN_IDLE_POLL_MS);
     }
+    return false;
   }
 
-  async function pointTabAtSearch(): Promise<void> {
+  /** Kill the tab and its chain. A chain left running there would scrape its customer
+   *  under whatever lookup's keys come next, so the next lookup must start in a new tab. */
+  async function resetTab(): Promise<void> {
+    if (tabId != null) {
+      const id = tabId;
+      tabId = null;
+      await deps.tabsRemove(id).catch(() => { /* tab may already be closed */ });
+    }
+    await deps.storageRemove(I2C_PENDING_KEYS).catch(() => { /* fine */ });
+  }
+
+  /** Returns true when it had to open a fresh tab at the login page. */
+  async function pointTabAtSearch(): Promise<boolean> {
     if (tabId != null) {
       try {
         await deps.tabsUpdate(tabId, { url: I2C_HOME_URL });
-        return;
+        return false;
       } catch {
         tabId = null; // closed by the user — sign in again in a fresh tab
       }
     }
     const tab = await deps.tabsCreate({ url: I2C_LOGIN_URL, active: false });
     tabId = tab.id ?? null;
+    return true;
   }
 
   return {
-    lookup(email, sourceTicketId, timeoutMs = 60_000) {
+    lookup(email, sourceTicketId, timeoutMs) {
       return queue.run(async () => {
         if (closed) throw closedError();
         if (!email) throw new Error('clientEmail is required');
         if (!sourceTicketId) throw new Error('sourceTicketId is required');
-        if (tabId != null) await waitForChainIdle();
-        await writePendingKeys(deps, email, sourceTicketId);
-        await pointTabAtSearch();
+        // Unique per lookup, so a late result from any earlier lookup (including another
+        // email of the same request) can never satisfy this one.
+        const routeId = `${sourceTicketId}#${++seq}`;
+        if (tabId != null && !(await waitForChainIdle())) await resetTab();
+        await writePendingKeys(deps, email, routeId);
+        const fresh = await pointTabAtSearch();
         if (closed) {
           // close() ran while the tab was opening and couldn't see its id yet.
-          if (tabId != null) void deps.tabsRemove(tabId).catch(() => {});
-          tabId = null;
+          await resetTab();
           throw closedError();
         }
-        const wait = awaitCardDetails(deps, sourceTicketId, timeoutMs, () => { current = null; });
+        const wait = awaitCardDetails(
+          deps, routeId, timeoutMs ?? (fresh ? FRESH_TAB_TIMEOUT_MS : SIGNED_IN_TIMEOUT_MS), () => { current = null; },
+        );
         current = wait;
-        return wait.result;
+        try {
+          return await wait.result;
+        } catch (e) {
+          // Timed out: the chain may still be running. Kill it before the queue moves on.
+          if (!closed) await resetTab();
+          throw e;
+        }
       });
     },
     async close() {
       closed = true;
       current?.cancel(closedError());
       current = null;
-      if (tabId != null) {
-        const id = tabId;
-        tabId = null;
-        await deps.tabsRemove(id).catch(() => { /* tab may already be closed */ });
-      }
+      // End of the batch: nothing else should pick up this session's chain keys.
+      await resetTab();
     },
   };
 }

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { I2C_HOME_URL, I2C_LOGIN_URL, openI2cSession, type I2cChromeDeps } from './i2cCardLookup';
 
 type Listener = (changes: Record<string, chrome.storage.StorageChange>, area: string) => void;
@@ -29,14 +29,20 @@ function fakeChrome() {
     sleep: async () => {},
   };
   /** Wait for the lookup to have written its keys + listener, then report cards like i2c.ts does. */
+  //  The session stamps its own per-lookup routing id (`<sourceTicketId>#<n>`) into the keys;
+  //  like i2c.ts, the scrape echoes whatever id is stored.
+  const armedFor = (sourceTicketId: string) =>
+    String(store.pending_i2c_source_ticket_id ?? '').startsWith(sourceTicketId + '#') && listeners.size > 0;
+  async function armed(sourceTicketId: string) {
+    for (let i = 0; i < 50 && !armedFor(sourceTicketId); i++) await new Promise((r) => setTimeout(r, 0));
+    return String(store.pending_i2c_source_ticket_id);
+  }
   async function scrape(sourceTicketId: string, cards: unknown[]) {
-    for (let i = 0; i < 50 && !(store.pending_i2c_source_ticket_id === sourceTicketId && listeners.size > 0); i++) {
-      await new Promise((r) => setTimeout(r, 0));
-    }
-    await deps.storageSet({ i2c_card_details: { sourceTicketId, cards, capturedAt: String(Math.random()) } });
+    const routeId = await armed(sourceTicketId);
+    await deps.storageSet({ i2c_card_details: { sourceTicketId: routeId, cards, capturedAt: String(Math.random()) } });
     await deps.storageRemove(['pending_i2c_email', 'pending_i2c_source_ticket_id', 'pending_i2c_flow', 'pending_i2c_started_at']);
   }
-  return { deps, store, listeners, tabs, calls, scrape, closeTab: (id: number) => tabs.delete(id) };
+  return { deps, store, listeners, tabs, calls, armed, scrape, closeTab: (id: number) => tabs.delete(id) };
 }
 
 const card = (last4: string) => ({ last4, status: 'ACTIVE', closed: false });
@@ -51,7 +57,7 @@ describe('openI2cSession', () => {
     for (let i = 0; i < 20 && f.listeners.size === 0; i++) await new Promise((r) => setTimeout(r, 0));
     expect(f.store.pending_i2c_email).toBe('a@example.com');
     expect(f.store.pending_i2c_flow).toBe('card_details');
-    expect(f.store.pending_i2c_source_ticket_id).toBe('elig-1');
+    expect(f.store.pending_i2c_source_ticket_id).toBe('elig-1#1');
     expect(typeof f.store.pending_i2c_started_at).toBe('number');
     expect('pending_i2c_ticket_url' in f.store).toBe(false);
     expect('pending_i2c_admin_debit_amount' in f.store).toBe(false);
@@ -104,22 +110,79 @@ describe('openI2cSession', () => {
     const a = s.lookup('a@example.com', 'elig-1');
     const b = s.lookup('b@example.com', 'elig-2');
     await new Promise((r) => setTimeout(r, 0));
-    expect(f.store.pending_i2c_source_ticket_id).toBe('elig-1');
+    expect(f.store.pending_i2c_source_ticket_id).toBe('elig-1#1');
     await f.scrape('elig-1', [card('1111')]);
     await f.scrape('elig-2', [card('2222')]);
     expect(await a).toEqual([card('1111')]);
     expect(await b).toEqual([card('2222')]);
   });
 
-  it('a timed-out lookup rejects and the next one still runs in the same tab', async () => {
+  it('a timed-out lookup kills its tab and chain keys; the next one signs in a fresh tab', async () => {
     const f = fakeChrome();
     const s = openI2cSession(f.deps);
     await expect(s.lookup('a@example.com', 'elig-1', 5)).rejects.toThrow(/timed out/);
     expect(f.listeners.size).toBe(0);
+    expect(f.tabs.size).toBe(0);
+    expect(f.store.pending_i2c_email).toBeUndefined();
+    expect(f.store.pending_i2c_source_ticket_id).toBeUndefined();
     const b = s.lookup('b@example.com', 'elig-2');
     await f.scrape('elig-2', [card('2222')]);
     expect(await b).toEqual([card('2222')]);
-    expect(f.calls).toEqual([`create:100:${I2C_LOGIN_URL}`, `update:100:${I2C_HOME_URL}`]);
+    expect(f.calls).toEqual([`create:100:${I2C_LOGIN_URL}`, 'remove:100', `create:101:${I2C_LOGIN_URL}`]);
+  });
+
+  it('a chain that never clears its keys (stale/live) gets its tab killed instead of overwritten', async () => {
+    const f = fakeChrome();
+    const s = openI2cSession(f.deps);
+    const a = s.lookup('a@example.com', 'elig-1');
+    const route1 = await f.armed('elig-1');
+    // Result arrives but the chain keeps its keys for good (still running).
+    await f.deps.storageSet({ i2c_card_details: { sourceTicketId: route1, cards: [] } });
+    await a;
+    const b = s.lookup('b@example.com', 'elig-2');
+    await f.scrape('elig-2', [card('2222')]);
+    expect(await b).toEqual([card('2222')]);
+    expect(f.calls).toEqual([`create:100:${I2C_LOGIN_URL}`, 'remove:100', `create:101:${I2C_LOGIN_URL}`]);
+  });
+
+  it('writes a different routing id per lookup, even for the same sourceTicketId', async () => {
+    const f = fakeChrome();
+    const s = openI2cSession(f.deps);
+    const a = s.lookup('first@example.com', 'elig-1');
+    const route1 = await f.armed('elig-1');
+    await f.scrape('elig-1', []);
+    expect(await a).toEqual([]);
+
+    let settled = false;
+    const b = s.lookup('second@example.com', 'elig-1').then((c) => { settled = true; return c; });
+    const route2 = await f.armed('elig-1');
+    expect(route2).not.toBe(route1);
+    expect(f.store.pending_i2c_email).toBe('second@example.com');
+    // A late scrape from the first email's chain must not satisfy the second.
+    await f.deps.storageSet({ i2c_card_details: { sourceTicketId: route1, cards: [card('1111')] } });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(settled).toBe(false);
+    await f.scrape('elig-1', [card('2222')]);
+    expect(await b).toEqual([card('2222')]);
+  });
+
+  it('defaults to 75 s in a fresh tab and 60 s in a signed-in one', async () => {
+    const f = fakeChrome();
+    const s = openI2cSession(f.deps);
+    // The lookup timers are cleared once each result lands, so real setTimeout is fine here.
+    const spy = vi.spyOn(globalThis, 'setTimeout');
+    try {
+      const a = s.lookup('a@example.com', 'elig-1');
+      await f.scrape('elig-1', []);
+      await a;
+      const b = s.lookup('b@example.com', 'elig-2');
+      await f.scrape('elig-2', []);
+      await b;
+      const delays = spy.mock.calls.map((c) => c[1]).filter((ms): ms is number => typeof ms === 'number' && ms >= 1000);
+      expect(delays).toEqual([75_000, 60_000]);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('close() removes the tab and the listener, and rejects an in-flight lookup', async () => {
@@ -166,9 +229,9 @@ describe('openI2cSession', () => {
     const f = fakeChrome();
     const s = openI2cSession(f.deps);
     const a = s.lookup('a@example.com', 'elig-1');
-    for (let i = 0; i < 20 && f.listeners.size === 0; i++) await new Promise((r) => setTimeout(r, 0));
+    const route1 = await f.armed('elig-1');
     // Report the result but leave the keys behind, as i2c.ts does for a moment before its remove lands.
-    await f.deps.storageSet({ i2c_card_details: { sourceTicketId: 'elig-1', cards: [] } });
+    await f.deps.storageSet({ i2c_card_details: { sourceTicketId: route1, cards: [] } });
     await a;
     let sleeps = 0;
     f.deps.sleep = async () => {
@@ -179,6 +242,20 @@ describe('openI2cSession', () => {
     await f.scrape('elig-2', [card('2222')]);
     expect(await b).toEqual([card('2222')]);
     expect(sleeps).toBe(2);
-    expect(f.store.pending_i2c_email).toBeUndefined();
+    // Same tab: the chain went idle in time, so nothing was killed.
+    expect(f.calls).toEqual([`create:100:${I2C_LOGIN_URL}`, `update:100:${I2C_HOME_URL}`]);
+  });
+
+  it('close() clears the pending chain keys', async () => {
+    const f = fakeChrome();
+    const s = openI2cSession(f.deps);
+    const p = s.lookup('a@example.com', 'elig-1');
+    await f.armed('elig-1');
+    f.store.qc_search_clicked = true;
+    await s.close();
+    await expect(p).rejects.toThrow(/closed/);
+    for (const k of ['pending_i2c_email', 'pending_i2c_source_ticket_id', 'pending_i2c_flow', 'pending_i2c_started_at', 'qc_search_clicked']) {
+      expect(k in f.store).toBe(false);
+    }
   });
 });
