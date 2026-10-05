@@ -7,6 +7,9 @@ import type {
 /** Products whose replies need no manual coverage note. Anything else is flagged vi_1pct. */
 export const REVIEW_FREE_PRODUCTS = ['ws_visa_infinite_privilege', 'ws_visa_infinite_plus'] as const;
 
+/** Flags that are acceptable for drafting. Others (parse_warning, unknown_product, etc.) block drafting. */
+const TICKABLE_FLAGS: readonly EligibilityFlag[] = ['delinquent', 'vi_1pct'];
+
 /** The i2c card shape this module needs (I2cCard from i2cCardLookup.ts satisfies it). */
 export interface I2cCardInput {
   last4: string;
@@ -113,6 +116,7 @@ export function isDraftable(res: Resolution): boolean {
   return (
     res.method != null &&
     res.cards.length > 0 &&
-    res.cards.every((c) => c.delinquent !== null && !!c.creationDate && !!c.product)
+    res.cards.every((c) => c.delinquent !== null && !!c.creationDate && !!c.product) &&
+    res.flags.every((f) => TICKABLE_FLAGS.includes(f))
   );
 }

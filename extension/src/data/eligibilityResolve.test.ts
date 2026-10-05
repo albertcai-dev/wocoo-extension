@@ -76,7 +76,27 @@ describe('resolveFromWarehouse', () => {
     )!;
     expect(r.status).toBe('needs_review');
     expect(r.flags.sort()).toEqual(['delinquent', 'parse_warning', 'vi_1pct']);
+    expect(isDraftable(r)).toBe(false);
+  });
+
+  it('allows drafting when only tickable flags (delinquent, vi_1pct) are present', () => {
+    const r = resolveFromWarehouse(
+      req(),
+      [row({ isDelinquent: true, cardProduct: 'ws_visa_infinite_basic' })],
+    )!;
+    expect(r.status).toBe('needs_review');
+    expect(r.flags.sort()).toEqual(['delinquent', 'vi_1pct']);
     expect(isDraftable(r)).toBe(true);
+  });
+
+  it('deduplicates cards when same identity appears under both email and name rules', () => {
+    const r = resolveFromWarehouse(req(), [
+      row({ matchRule: 'email' }),
+      row({ matchRule: 'name' }),
+    ])!;
+    expect(r.method).toBe('email_last4');
+    expect(r.cards).toHaveLength(1);
+    expect(r.cards[0].last4).toBe('1763');
   });
 });
 
