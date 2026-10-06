@@ -6,6 +6,7 @@
 
 import { gridFromRows, pageSaysNoRecord, readColumnForLast4, readLabelValue, readProgramForLast4 } from '../data/i2cCardDetailsParse';
 import { pickCreditProduct, type ProductRow } from '../data/i2cProductSelect';
+import { isSignInLabel } from '../data/i2cLogin';
 
 export {}; // Module-scoped so helpers don't collide with other content scripts at the TS layer.
 
@@ -122,8 +123,21 @@ function findSubmit(form: HTMLFormElement | null): HTMLElement | null {
     const btn = form.querySelector<HTMLElement>('input[type="submit"], button[type="submit"]');
     if (btn) return btn;
   }
-  // Fall back: any submit on the page. The i2c JSP login only has one.
-  return document.querySelector<HTMLElement>('input[type="submit"], button[type="submit"]');
+  // Any submit on the page. The old i2c JSP login had exactly one.
+  const typed = document.querySelector<HTMLElement>('input[type="submit"], button[type="submit"]');
+  if (typed) return typed;
+
+  // i2c's "C-Agent redesign" renders Sign-in as a <button> with no type attribute, which
+  // neither selector above matches — an attribute selector reads the literal attribute,
+  // not the implied default. Fall back to the label, the way tryKillSession does.
+  const candidates = Array.from(
+    document.querySelectorAll<HTMLElement>('button, input[type="button"], a'),
+  );
+  for (const el of candidates) {
+    const label = (el as HTMLInputElement).value || el.textContent || '';
+    if (isSignInLabel(label) && isVisible(el)) return el;
+  }
+  return null;
 }
 
 let filledOnce = false;
