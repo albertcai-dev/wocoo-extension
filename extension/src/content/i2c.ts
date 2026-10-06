@@ -5,6 +5,7 @@
 // retry a few times anyway in case the form is replaced after first paint.
 
 import { gridFromRows, pageSaysNoRecord, readColumnForLast4, readLabelValue, readProgramForLast4 } from '../data/i2cCardDetailsParse';
+import { pickCreditProduct, type ProductRow } from '../data/i2cProductSelect';
 
 export {}; // Module-scoped so helpers don't collide with other content scripts at the TS layer.
 
@@ -295,6 +296,68 @@ function findSectionSearchButton(emailInput: HTMLInputElement): HTMLElement | nu
     node = node.parentElement;
   }
   return null;
+}
+
+// ----- Product Search Result: click "Select Customer" on the credit row -----
+//
+// i2c shows this interstitial when the searched email matches more than one cardholder
+// product — a retail prepaid card alongside a Visa Infinite credit card, say. Without
+// this step the chain stalls here and the agent clicks through by hand every time.
+//
+// The page is fully server-rendered (no async panels), so a short settle is enough.
+const PRODUCT_SELECT_CLICK_DELAY_MS = 400;
+
+let productSelectRan = false;
+async function tryProductSearchSelect(): Promise<boolean> {
+  if (productSelectRan) return true;
+  if (!(await chainActive())) return false;
+
+  const body = document.body?.textContent || '';
+  if (!/Displays all applicable cardholder products/i.test(body)) return false;
+
+  // Header-matched rather than positional: i2c adding or reordering a column would
+  // otherwise silently shift which cell we read as the category.
+  const tables = Array.from(document.querySelectorAll('table'));
+  for (const table of tables) {
+    if (table.querySelector('table')) continue;
+    const headerCells = Array.from(table.querySelectorAll<HTMLTableCellElement>('tr:first-child th, tr:first-child td'))
+      .map((c) => (c.textContent || '').replace(/\s+/g, ' ').trim());
+    const categoryAt = headerCells.findIndex((h) => /^Program\s*Category$/i.test(h));
+    const statusAt = headerCells.findIndex((h) => /^Status$/i.test(h));
+    if (categoryAt === -1 || statusAt === -1) continue;
+
+    const bodyRows = Array.from(table.querySelectorAll('tr')).slice(1)
+      .filter((tr) => tr.querySelectorAll('td').length > Math.max(categoryAt, statusAt));
+    if (!bodyRows.length) continue;
+
+    const rows: ProductRow[] = bodyRows.map((tr) => {
+      const cells = Array.from(tr.querySelectorAll<HTMLTableCellElement>('td'));
+      return {
+        category: (cells[categoryAt]?.textContent || '').replace(/\s+/g, ' ').trim(),
+        status: (cells[statusAt]?.textContent || '').replace(/\s+/g, ' ').trim(),
+      };
+    });
+
+    const pick = pickCreditProduct(rows);
+    if (pick === null) {
+      log(`  \u2192 product search: ${rows.length} product(s), no single active credit row — leaving the choice to the agent`);
+      productSelectRan = true;
+      return true;
+    }
+
+    const link = Array.from(bodyRows[pick].querySelectorAll<HTMLElement>('a, button'))
+      .find((el) => /^Select\s+Customer$/i.test((el.textContent || '').replace(/\s+/g, ' ').trim()) && isVisible(el));
+    if (!link) {
+      log('  \u2192 product search: credit row found but no Select Customer link in it');
+      return false;
+    }
+
+    log(`  \u2192 product search: selecting the active credit product (row ${pick + 1} of ${rows.length})`);
+    productSelectRan = true;
+    setTimeout(() => link.click(), PRODUCT_SELECT_CLICK_DELAY_MS);
+    return true;
+  }
+  return false;
 }
 
 // ----- Card Details: click "Continue with this Customer" -----
@@ -1516,6 +1579,9 @@ async function bootstrap() {
     // Before tryContinueWithCustomer: on the customer page this captures the cards and
     // clears the chain keys, so nothing downstream can navigate away.
     await tryCardDetailsScrape();
+    // Before tryContinueWithCustomer: i2c's multi-product interstitial sits between the
+    // email search and the customer page.
+    await tryProductSearchSelect();
     await tryContinueWithCustomer();
     await tryAccountTransactions();
     await tryAdminServices();
