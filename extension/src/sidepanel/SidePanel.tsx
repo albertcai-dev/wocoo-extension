@@ -37,6 +37,7 @@ import { useInterestTool } from './useInterestTool';
 import { detectL3Escalation } from '../data/l3EscalationDetect';
 import { detectInterestInvestigation } from '../data/interestInvestigationDetect';
 import { HomeView } from './HomeView';
+import { CopyButton as PillCopyButton } from './toolUi';
 import { WiresPendingPosting } from './WiresPendingPosting';
 import { EligibilityTriage } from './EligibilityTriage';
 import { SettingsView } from './SettingsView';
@@ -765,14 +766,14 @@ function ExternalToolsRow({ ticket }: { ticket: WocooTicket }) {
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ color: 'var(--mint-positive-fg-strong)', fontWeight: 700, flexShrink: 0 }}>W#:</span>
               <span style={{ fontFamily: 'var(--mint-font-mono)', color: 'var(--mint-fg-strong)', flex: 1, userSelect: 'all' }}>{captured.accountNumber}</span>
-              <CapturedCopyButton value={captured.accountNumber} />
+              <PillCopyButton value={captured.accountNumber} />
             </div>
           ) : null}
           {capturedEmail ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ color: 'var(--mint-positive-fg-strong)', fontWeight: 700, flexShrink: 0 }}>Email:</span>
               <span style={{ fontFamily: 'var(--mint-font-mono)', color: 'var(--mint-fg-strong)', flex: 1, minWidth: 0, overflowWrap: 'anywhere', userSelect: 'all' }}>{capturedEmail}</span>
-              <CapturedCopyButton value={capturedEmail} />
+              <PillCopyButton value={capturedEmail} />
             </div>
           ) : null}
           {captured ? (
@@ -786,32 +787,6 @@ function ExternalToolsRow({ ticket }: { ticket: WocooTicket }) {
         </div>
       ) : null}
     </div>
-  );
-}
-
-/** The pill Copy button on the captured-from-Atlas card; each row keeps its own Copied state. */
-function CapturedCopyButton({ value }: { value: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <button
-      onClick={() => {
-        navigator.clipboard.writeText(value).then(() => { setCopied(true); window.setTimeout(() => setCopied(false), 1500); });
-      }}
-      disabled={copied}
-      style={{
-        padding: '4px 10px',
-        background: copied ? 'var(--mint-positive-fg-graphic)' : 'var(--mint-bg-card)',
-        color: copied ? '#fff' : 'var(--mint-positive-fg-strong)',
-        border: '1px solid var(--mint-positive-fg-graphic)',
-        borderRadius: 'var(--mint-radius-pill)',
-        fontSize: 'var(--mint-text-nano)',
-        fontWeight: 700,
-        cursor: copied ? 'default' : 'pointer',
-        flexShrink: 0,
-      }}
-    >
-      {copied ? 'Copied' : 'Copy'}
-    </button>
   );
 }
 

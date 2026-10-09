@@ -4,6 +4,7 @@
 import { useEffect, useState } from 'react';
 import { searchTickets, type TicketRow } from '../api/jira';
 import { MobileChequeValidationTile } from './MobileChequeValidation';
+import { FetchWireSendWTile } from './FetchWireSendW';
 import {
   backfillI2cViaBridge,
   backfillKohoTrackKeysViaBridge,
@@ -259,6 +260,7 @@ export function HomeView({ onOpenTicket, onOpenWiresPending, onOpenEligibility, 
               subtitle="Auto-verify each Pending Posting wire on Ledge / Atlassian and flip the sheet to Posted."
               onClick={onOpenWiresPending}
             />
+            <FetchWireSendWTile />
             <MobileChequeValidationTile />
             <ToolTile
               icon="🛡️"

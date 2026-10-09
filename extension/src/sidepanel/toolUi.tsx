@@ -1,6 +1,9 @@
 // Shared presentational pieces for the sidepanel "tool" screens (Wires Pending Posting v2,
 // Insurance Eligibility Triage). Moved verbatim from WiresPendingPostingV2 so every tool
-// screen looks the same. Presentation only — no behaviour lives here.
+// screen looks the same. Presentation only — the one exception is CopyButton's clipboard
+// write and its "Copied" flash.
+
+import { useState } from 'react';
 
 export function Pill({ label, tone, wrap }: { label: string; tone: 'positive' | 'warning' | 'highlight' | 'neutral'; wrap?: boolean }) {
   const map: Record<typeof tone, React.CSSProperties> = {
@@ -74,3 +77,29 @@ export const listItemStyle: React.CSSProperties = {
   border: 'var(--mint-card-stroke)',
   borderRadius: 'var(--mint-radius-button)',
 };
+
+/** Pill Copy button used on captured-value cards; each instance keeps its own Copied state. */
+export function CopyButton({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      onClick={() => {
+        navigator.clipboard.writeText(value).then(() => { setCopied(true); window.setTimeout(() => setCopied(false), 1500); });
+      }}
+      disabled={copied}
+      style={{
+        padding: '4px 10px',
+        background: copied ? 'var(--mint-positive-fg-graphic)' : 'var(--mint-bg-card)',
+        color: copied ? '#fff' : 'var(--mint-positive-fg-strong)',
+        border: '1px solid var(--mint-positive-fg-graphic)',
+        borderRadius: 'var(--mint-radius-pill)',
+        fontSize: 'var(--mint-text-nano)',
+        fontWeight: 700,
+        cursor: copied ? 'default' : 'pointer',
+        flexShrink: 0,
+      }}
+    >
+      {copied ? 'Copied' : 'Copy'}
+    </button>
+  );
+}
