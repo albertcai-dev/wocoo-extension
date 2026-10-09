@@ -70,7 +70,9 @@ Email, Client Status" chip. One wire at a time.
 3. **Atlas** — for a single matched row, call `getAccountDetails` with its `source_id` via the
    existing `atlasGraphql`. New reader `readCustodianAccountNumber(res)` returns
    `{ accountNumber, isCadSpend }`: the first `W…CAD` custodian id if any (`isCadSpend: true`),
-   otherwise the first custodian id of any shape (`isCadSpend: false`), otherwise `null`.
+   otherwise the first W-prefixed id (`isCadSpend: false`), otherwise `null`. It never returns
+   a `C…` id — that is the custodian sibling listed next to the W# (e.g. `C13BVPP28CAD` beside
+   `WK5LGP131CAD`), not the client's account number.
 
 ### UI — `extension/src/sidepanel/FetchWireSendW.tsx`
 

@@ -4,8 +4,10 @@ import {
   fetchAtlasAccountIdViaGraphql,
   fetchAtlasClientDetailsViaGraphql,
   fetchAtlasClientEmailViaGraphql,
+  fetchCustodianAccountNumber,
   GET_PROFILE_V2_QUERY,
   readClientDetails,
+  readCustodianAccountNumber,
   readIdentityEmail,
   readIndividualTier,
   readSpendAccountCanonicalId,
@@ -595,5 +597,33 @@ describe('fetchAtlasClientEmailViaGraphql', () => {
     const spy = stubFetch(() => ok(IDENTITY_EMAIL_RES));
     await expect(fetchAtlasClientEmailViaGraphql({ identityId: '' })).rejects.toThrow(/identityId is required/);
     expect(spy).not.toHaveBeenCalled();
+  });
+});
+
+describe('readCustodianAccountNumber', () => {
+  const res = (ids: string[]) => ({ data: { account: { custodianAccounts: ids.map((custodianAccountId) => ({ custodianAccountId })) } } });
+
+  it('prefers the W…CAD account over its C…CAD sibling', () => {
+    expect(readCustodianAccountNumber(res(['C13BVPP28CAD', 'WK5LGP131CAD']))).toEqual({ accountNumber: 'WK5LGP131CAD', isCadSpend: true });
+  });
+  it('falls back to a W-prefixed non-CAD account, flagged', () => {
+    expect(readCustodianAccountNumber(res(['C13BVPP28USD', 'wk5lgp131usd']))).toEqual({ accountNumber: 'WK5LGP131USD', isCadSpend: false });
+  });
+  it('never returns a C… custodian id', () => {
+    expect(readCustodianAccountNumber(res(['C13BVPP28CAD']))).toBeNull();
+  });
+  it('returns null on an empty list or unknown shape', () => {
+    expect(readCustodianAccountNumber(res([]))).toBeNull();
+    expect(readCustodianAccountNumber({ data: {} })).toBeNull();
+  });
+});
+
+describe('fetchCustodianAccountNumber', () => {
+  it('asks getAccountDetails on the wealthsimple service for the source account', async () => {
+    const spy = stubFetch(() => ok({ data: { account: { custodianAccounts: [{ custodianAccountId: 'WK5LGP131CAD' }] } } }));
+    expect(await fetchCustodianAccountNumber('ca-cash-msb-icIMc1DLuA')).toEqual({ accountNumber: 'WK5LGP131CAD', isCadSpend: true });
+    const [url, init] = spy.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('https://cs-tools-satori.wealthsimple.com/api/atlas/graphql/wealthsimple');
+    expect(JSON.parse(init.body as string)).toMatchObject({ operationName: 'getAccountDetails', variables: { id: 'ca-cash-msb-icIMc1DLuA' } });
   });
 });

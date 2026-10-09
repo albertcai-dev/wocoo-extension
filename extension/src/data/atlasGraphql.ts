@@ -118,6 +118,38 @@ export function readSpendCustodianAccountNumber(res: unknown): string | null {
   return null;
 }
 
+export interface CustodianAccount {
+  accountNumber: string;
+  /** False when the account is a W# but not W…CAD (e.g. USD) — the UI warns. */
+  isCadSpend: boolean;
+}
+
+const W_ACCOUNT_RE = /^W[A-Z0-9]+$/i;
+
+/**
+ * `getAccountDetails` → the account's W#, for any cash account (not just the client's
+ * spend account). Prefers W…CAD; otherwise any W-prefixed id, flagged. Never a C… id:
+ * that is the custodian sibling, not the client's account number.
+ */
+export function readCustodianAccountNumber(res: unknown): CustodianAccount | null {
+  const custodians = asRecord(asRecord(asRecord(res)?.data)?.account)?.custodianAccounts;
+  if (!Array.isArray(custodians)) return null;
+  const ids = custodians
+    .map((c) => asRecord(c)?.custodianAccountId)
+    .filter((id): id is string => typeof id === 'string' && id.length > 0)
+    .map((id) => id.toUpperCase());
+  const cad = ids.find((id) => SPEND_ACCOUNT_RE.test(id));
+  if (cad) return { accountNumber: cad, isCadSpend: true };
+  const other = ids.find((id) => W_ACCOUNT_RE.test(id));
+  return other ? { accountNumber: other, isCadSpend: false } : null;
+}
+
+/** An account canonical id (e.g. a wire send's `source_id`, `ca-cash-msb-…`) → its W#. */
+export async function fetchCustodianAccountNumber(accountId: string): Promise<CustodianAccount | null> {
+  const res = await atlasGraphql('wealthsimple', 'getAccountDetails', GET_ACCOUNT_DETAILS_QUERY, { id: accountId });
+  return readCustodianAccountNumber(res);
+}
+
 /**
  * `FetchIdentityPackages` → `Core` | `Premium` | `Generation`, or null.
  *
