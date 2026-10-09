@@ -118,3 +118,11 @@ Unverified: that `/api/v1/chart/data` accepts the hidden-tab request the way
 permission check). **Task 1 is a live spike** of exactly that request for the example ref. If
 it fails, fall back to approach B (hand-written SQL Lab query via `runPresetSql`) and update
 this spec before continuing.
+
+## Spike result (2026-10-09)
+
+Verified live through the shipped tile rather than a console snippet (ledger ruling):
+`POST /api/v1/chart/data` from the hidden Preset tab returns the wire send for
+AVJJXHZEBVIA53DF — `source_id` ca-cash-msb-icIMc1DLuA, 56295.89 CAD — and Atlas
+`getAccountDetails` resolves it to `WK5LGP131CAD`. `created_at` arrives as epoch ms
+(rendered `2026-10-07 01:58:55 UTC`).
