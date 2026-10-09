@@ -233,3 +233,59 @@ wrote:
     expect(r.last4).toBe('1763');
   });
 });
+
+describe('AXA bulleted format (Wealthsimple Coverage Confirmation - <name> - <claim>)', () => {
+  // Outlook's text/plain renders the <ul> as "*   " bullets; Gmail can give "•" or "-".
+  const axa = (bullet: string) => raw({
+    from: 'AA_CA_SM_operations <operations@axa-assistance.ca>',
+    fromEmail: 'operations@axa-assistance.ca',
+    subject: 'Wealthsimple Coverage Confirmation - Vishal Rajgure - CA0-26-004978',
+    plainBody: `Greetings from AXA,
+
+We have received a claim for the cardholder listed below: Vishal Rajgure
+
+${bullet}Last 4 digits of the card : 7889
+${bullet}Member ID number:/ na
+${bullet}Phone number: 416-576-3198
+${bullet}Email address: vishalrajgure@gmail.com
+______________________________
+Please confirm :
+
+${bullet}Credit card product name
+${bullet}Card activation date
+${bullet}Last 4 digits of the card
+
+Text us at 1-833-367-6220 (Only for Canada/USA) or message us on WhatsApp at 1-236-613-7948.
+`,
+  });
+
+  for (const bullet of ['  *   ', '\u2022 ', '  - ', '']) {
+    it(`reads name, phone, email and last 4 with bullet ${JSON.stringify(bullet)}`, () => {
+      const r = parseEligibilityEmail(axa(bullet), ['axa-assistance.ca', 'wealthsimple.com']);
+      expect(r.cardholderName).toEqual({ first: 'Vishal', last: 'Rajgure', raw: 'Vishal Rajgure' });
+      expect(r.phone).toBe('4165763198');
+      expect(r.emails).toEqual(['vishalrajgure@gmail.com']);
+      expect(r.last4).toBe('7889');
+      expect(r.warnings).toEqual([]);
+    });
+  }
+
+  it('takes the name from a middle subject segment when the last one is the claim number', () => {
+    const r = parseEligibilityEmail(
+      raw({ subject: 'Wealthsimple Coverage Confirmation - Vishal Rajgure - CA0-26-004978', plainBody: 'Card ending in 7889' }), EXCLUDED,
+    );
+    expect(r.cardholderName?.raw).toBe('Vishal Rajgure');
+  });
+
+  it('never takes a request-wording segment as the name', () => {
+    const r = parseEligibilityEmail(
+      raw({ subject: 'Wealthsimple Coverage Confirmation - CA0-26-004978', plainBody: 'Card ending in 7889' }), EXCLUDED,
+    );
+    expect(r.cardholderName).toBeNull();
+  });
+
+  it('ignores a "cardholder ...:" phrase that is not followed by a name', () => {
+    const r = parseEligibilityEmail(raw({ subject: 'Claim 1234567', plainBody: 'Details for the cardholder below: 7889 ending card' }), EXCLUDED);
+    expect(r.cardholderName).toBeNull();
+  });
+});

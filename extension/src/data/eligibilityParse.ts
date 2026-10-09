@@ -95,9 +95,14 @@ function stripQuoted(body: string): string {
     .join('\n');
 }
 
+/** A list bullet as Outlook / Gmail render it in text/plain (`*   `, `• `, `- `). */
+const BULLET = '(?:[-*•·▪◦]\\s*)?';
+/** A qualifier some insurers put after the label: "Phone number:", "Email address:", "Phone #:". */
+const LABEL_SUFFIX = '(?:\\s*(?:number|no\\.?|#|address))?';
+
 function labelled(body: string, labels: string[]): string | null {
   for (const label of labels) {
-    const re = new RegExp('^\\s*' + label.replace(/\s+/g, '\\s*') + '\\s*[:\\-]\\s*(.+)$', 'im');
+    const re = new RegExp('^\\s*' + BULLET + label.replace(/\s+/g, '\\s*') + LABEL_SUFFIX + '\\s*[:\\-]\\s*(.+)$', 'im');
     const m = body.match(re);
     if (m && m[1].trim()) return m[1].trim();
   }
@@ -121,10 +126,26 @@ function findLast4s(text: string): string[] {
   return seen;
 }
 
+const REQUEST_WORDING_RE = /claim|request|visa|wealthsimple|coverage|confirmation|eligib|query|member/i;
+
+function looksLikeName(s: string): boolean {
+  return SUBJECT_NAME_RE.test(s) && s.split(',').length <= 2 && !REQUEST_WORDING_RE.test(s);
+}
+
+/** The last name-like " - " segment: "Wealthsimple Coverage Confirmation - Vishal Rajgure - CA0-26-004978". */
 function subjectName(subject: string): string | null {
   const segments = subject.split(/\s[-–—]\s/).map((s) => s.trim()).filter(Boolean);
-  const last = segments[segments.length - 1];
-  return last && SUBJECT_NAME_RE.test(last) && last.split(',').length <= 2 && !/claim|request|visa|wealthsimple/i.test(last) ? last : null;
+  for (let i = segments.length - 1; i >= 0; i--) {
+    if (looksLikeName(segments[i])) return segments[i];
+  }
+  return null;
+}
+
+/** Unlabelled prose: "We have received a claim for the cardholder listed below: Vishal Rajgure". */
+function cardholderPhraseName(body: string): string | null {
+  const m = body.match(/\bcard\s*holder\b[^:\n]{0,30}:\s*(.+)$/im);
+  const name = m ? m[1].trim() : '';
+  return name && looksLikeName(name) ? name : null;
 }
 
 function senderName(from: string): string {
@@ -149,7 +170,7 @@ export function parseEligibilityEmail(raw: RawEligibilityEmail, excludedDomains:
     emails.push(e);
   }
 
-  const nameRaw = labelled(body, NAME_LABELS) ?? subjectName(raw.subject || '');
+  const nameRaw = labelled(body, NAME_LABELS) ?? cardholderPhraseName(body) ?? subjectName(raw.subject || '');
   const cardholderName = nameRaw ? splitName(nameRaw) : null;
 
   const phoneLabel = labelled(body, PHONE_LABELS);
