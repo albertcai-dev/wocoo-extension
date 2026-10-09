@@ -243,9 +243,85 @@ describe('resolveBatch', () => {
 
   it('never looks anything up for already-replied or no-last4 requests', async () => {
     const d = deps();
-    const rs = await resolveBatch([req('m1', { messageCount: 3 }), req('m2', { last4: null })], d);
+    const rs = await resolveBatch([req('m1', { messageCount: 3 }), req('m2', { last4: null, phone: null })], d);
     expect(rs.map((r) => r.flags[0])).toEqual(['already_replied', 'no_last4']);
     expect(d.calls).toEqual([]);
+  });
+
+  describe('no card last 4: Atlas phone + name instead', () => {
+    const pang = { identityId: 'identity-LIVE', fullName: 'WING YI PANG', firstName: 'WING', lastName: 'YI PANG', email: 'joycepangwy@gmail.com' };
+    const noLast4 = (over: Partial<EligibilityRequest> = {}) => req('m1', {
+      last4: null, phone: '6043288929', emails: ['joycepang98@gmail.com'],
+      cardholderName: { first: 'Wing Yi', last: 'Pang', raw: 'Wing Yi Pang' }, ...over,
+    });
+    const twoCards = [
+      { ...i2cOpen[0], last4: '4242', creationDate: '01/02/2025' },
+      { ...i2cOpen[0], last4: '9001', creationDate: '05/06/2026' },
+      { ...i2cOpen[0], last4: '7777', closed: true, status: 'CLOSED CARD' },
+    ];
+
+    it('skips the listed-email lookup and reports every open card, flagged no_last4 for review but tickable', async () => {
+      const d = deps({
+        atlasByPhone: async (phone) => { d.calls.push('atlas:' + phone); return [pang]; },
+        i2cCards: async (email) => { d.calls.push('i2c:' + email); return email === 'joycepangwy@gmail.com' ? twoCards : []; },
+      });
+      const [r] = await resolveBatch([noLast4()], d);
+      expect(d.calls).toEqual(['atlas:6043288929', 'i2c:joycepangwy@gmail.com']);
+      expect(r.method).toBe('atlas_phone_i2c');
+      expect(r.identityId).toBe('identity-LIVE');
+      expect(r.cards.map((c) => c.last4)).toEqual(['4242', '9001']);
+      expect(r.status).toBe('needs_review');
+      expect(r.flags).toContain('no_last4');
+      expect(r.note).toContain('phone + name');
+      expect(isDraftable(r)).toBe(true);
+    });
+
+    it('keeps the no_last4 flag after the warehouse follow-up, which keys on one of the client\'s own cards', async () => {
+      const sqls: string[] = [];
+      const d = deps({
+        runSql: async (sql) => {
+          // No batch query (it needs a last 4), so the only call is the follow-up.
+          sqls.push(sql);
+          return [
+            whRow('m1', { identity_id: 'identity-LIVE', client_email: 'joycepangwy@gmail.com', last4: '4242' }),
+            whRow('m1', { identity_id: 'identity-LIVE', client_email: 'joycepangwy@gmail.com', last4: '9001', created_date: '05/06/2026' }),
+          ];
+        },
+        atlasByPhone: async () => [pang],
+        i2cCards: async (email) => (email === 'joycepangwy@gmail.com' ? twoCards : []),
+      });
+      const [r] = await resolveBatch([noLast4()], d);
+      expect(sqls).toHaveLength(1);
+      expect(sqls[0]).toContain("'joycepangwy@gmail.com'");
+      expect(sqls[0]).toContain("'4242'");
+      expect(sqls[0]).not.toContain('joycepang98');
+      expect(r.note).toContain('Card details from the warehouse.');
+      expect(r.cards.map((c) => c.last4)).toEqual(['4242', '9001']);
+      expect(r.status).toBe('needs_review');
+      expect(r.flags).toContain('no_last4');
+      expect(isDraftable(r)).toBe(true);
+    });
+
+    it('stays no_last4 when the phone + name finds nobody', async () => {
+      const [r] = await resolveBatch([noLast4()], deps());
+      expect(r.method).toBeNull();
+      expect(r.flags).toEqual(['no_last4']);
+      expect(isDraftable(r)).toBe(false);
+    });
+
+    it('stays no_last4 when the matched client has no open card', async () => {
+      const d = deps({ atlasByPhone: async () => [pang], i2cCards: async () => [twoCards[2]] });
+      const [r] = await resolveBatch([noLast4()], d);
+      expect(r.flags).toEqual(['no_last4']);
+      expect(isDraftable(r)).toBe(false);
+    });
+
+    it('stays no_last4 when Atlas phone search is off', async () => {
+      const d = deps({ atlasByPhone: null });
+      const [r] = await resolveBatch([noLast4()], d);
+      expect(r.flags).toEqual(['no_last4']);
+      expect(d.calls).toEqual([]);
+    });
   });
 
   it('keeps going when one i2c lookup throws, and records the error', async () => {

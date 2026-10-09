@@ -5,7 +5,7 @@ import type { AtlasPhoneHit } from './atlasPhoneSearch';
 import { mapI2cProgram } from './eligibilityProducts';
 import { normalizeName } from './eligibilityParse';
 import {
-  multipleCandidates, noMatch, preflight, resolveFromI2c, resolveFromWarehouse, type I2cCardInput,
+  multipleCandidates, noLast4, noMatch, preflight, resolveFromI2c, resolveFromWarehouse, type I2cCardInput,
 } from './eligibilityResolve';
 import { buildEligibilitySql, toWarehouseRows } from './eligibilitySql';
 import type { EligibilityFlag, EligibilityRequest, Resolution } from './eligibilityTypes';
@@ -75,7 +75,11 @@ async function withWarehouseDetails(
   req: EligibilityRequest, r: Resolution, deps: ResolveDeps,
 ): Promise<Resolution> {
   if (!r.clientEmail) return r;
-  const followReq: EligibilityRequest = { ...req, emails: [r.clientEmail.toLowerCase()], cardholderName: null };
+  // With no last 4 in the email, key the query on one of the client's own open cards; it
+  // returns all of that client's open cards either way.
+  const followReq: EligibilityRequest = {
+    ...req, emails: [r.clientEmail.toLowerCase()], cardholderName: null, last4: req.last4 ?? r.cards[0]?.last4 ?? null,
+  };
   const sql = buildEligibilitySql([followReq]);
   if (!sql) return r;
   let rows;
@@ -102,7 +106,9 @@ async function withWarehouseDetails(
   const cards = wh.cards.map((c) => (liveDelinquent.has(c.last4) ? { ...c, delinquent: true } : c));
   const flags = cards.some((c) => c.delinquent === true) && !wh.flags.includes('delinquent')
     ? [...wh.flags, 'delinquent' as EligibilityFlag]
-    : wh.flags;
+    : [...wh.flags];
+  // The follow-up carried a stand-in last 4, so restore the request's own no_last4 flag.
+  if (!req.last4 && !flags.includes('no_last4')) flags.push('no_last4');
   return {
     ...wh,
     cards,
@@ -118,7 +124,8 @@ async function withWarehouseDetails(
 async function resolveLive(req: EligibilityRequest, deps: ResolveDeps): Promise<Resolution> {
   const errors: string[] = [];
 
-  for (const email of req.emails) {
+  // The listed-email path never checks the name, so without a last 4 nothing would confirm the client.
+  for (const email of req.last4 ? req.emails : []) {
     deps.onProgress?.(req.messageId, `i2c: ${email}`);
     try {
       const cards = await deps.i2cCards(email, req.messageId);
@@ -162,9 +169,10 @@ async function resolveLive(req: EligibilityRequest, deps: ResolveDeps): Promise<
     }
   }
 
-  return errors.length
-    ? noMatch(req, 'Lookup errors: ' + errors.join('; '), ['lookup_error'])
-    : noMatch(req, 'No client matched on email, name, or phone with this last 4.');
+  if (errors.length) {
+    return noMatch(req, 'Lookup errors: ' + errors.join('; '), req.last4 ? ['lookup_error'] : ['no_last4', 'lookup_error']);
+  }
+  return req.last4 ? noMatch(req, 'No client matched on email, name, or phone with this last 4.') : noLast4(req);
 }
 
 /**

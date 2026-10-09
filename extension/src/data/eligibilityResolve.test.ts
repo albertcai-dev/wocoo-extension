@@ -23,8 +23,12 @@ describe('preflight', () => {
   it('stops already-replied threads', () => {
     expect(preflight(req({ messageCount: 2 }))?.flags).toEqual(['already_replied']);
   });
-  it('stops requests without last4', () => {
-    const r = preflight(req({ last4: null }))!;
+  it('lets a request without last4 through when it has a phone and a name (Atlas phone path)', () => {
+    expect(preflight(req({ last4: null }))).toBeNull();
+  });
+  it('stops requests without last4 that have no phone or no name', () => {
+    expect(preflight(req({ last4: null, cardholderName: null }))?.flags).toEqual(['no_last4']);
+    const r = preflight(req({ last4: null, phone: null }))!;
     expect(r.status).toBe('needs_review');
     expect(r.flags).toEqual(['no_last4']);
   });

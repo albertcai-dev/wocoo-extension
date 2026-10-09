@@ -31,6 +31,16 @@ describe('readPhoneSearchHits', () => {
     ]);
   });
 
+  it('drops deleted Atlas accounts (deleted+…@wealthsimple.com) so the live account is the only candidate', () => {
+    const res = {
+      data: { searchForUsers: { user: { hits: [
+        { source: { fullName: 'WING YI PANG', phone: '6043288929', email: 'deleted+1346615-qewcd@wealthsimple.com', identityId: 'identity-OLD', id: 'user-1' } },
+        { source: { fullName: 'WING YI PANG', phone: '6043288929', email: 'joycepangwy@gmail.com', identityId: 'identity-LIVE', id: 'user-2' } },
+      ] } } },
+    };
+    expect(readPhoneSearchHits(res, '6043288929').map((h) => [h.identityId, h.email])).toEqual([['identity-LIVE', 'joycepangwy@gmail.com']]);
+  });
+
   it('excludes hits whose phone differs (fuzzy search noise)', () => {
     const hits = readPhoneSearchHits(fixture, '4165550142');
     expect(hits.map((h) => h.identityId)).not.toContain('identity-TESTbbbbBBBB2222');

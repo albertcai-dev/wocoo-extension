@@ -3,7 +3,8 @@
 //
 // The search is fuzzy (one phone returned total=60), and the same identity appears in
 // several hits (one per user record), so results are filtered to an exact phone match
-// and de-duplicated by identityId.
+// and de-duplicated by identityId. Deleted accounts (Atlas rewrites their email to
+// `deleted+…@wealthsimple.com`) are dropped, so a closed duplicate never shadows the live one.
 
 import { atlasGraphql } from './atlasGraphql';
 
@@ -47,6 +48,8 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>;
 }
 
+const DELETED_EMAIL_RE = /^deleted\+/;
+
 /** Digits only; an 11-digit number with a leading country code 1 is reduced to 10. */
 function phoneDigits(raw: string): string {
   const digits = raw.replace(/\D/g, '');
@@ -69,6 +72,7 @@ export function readPhoneSearchHits(res: unknown, phone10: string): AtlasPhoneHi
     if (typeof identityId !== 'string' || !identityId.startsWith('identity-')) continue;
     if (typeof source.phone !== 'string' || phoneDigits(source.phone) !== wanted) continue;
     const email = typeof source.email === 'string' && source.email.trim() ? source.email.trim().toLowerCase() : null;
+    if (email && DELETED_EMAIL_RE.test(email)) continue;
     const seen = byIdentity.get(identityId);
     if (seen) {
       // First email seen wins, but a later record may supply one the first lacked.

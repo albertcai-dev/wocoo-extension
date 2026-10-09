@@ -10,7 +10,7 @@ export const REVIEW_FREE_PRODUCTS = [
 ] as const;
 
 /** Flags that are acceptable for drafting. Others (parse_warning, unknown_product, etc.) block drafting. */
-const TICKABLE_FLAGS: readonly EligibilityFlag[] = ['delinquent', 'vi_1pct', 'name_variant'];
+const TICKABLE_FLAGS: readonly EligibilityFlag[] = ['delinquent', 'vi_1pct', 'name_variant', 'no_last4'];
 
 /** The i2c card shape this module needs (I2cCard from i2cCardLookup.ts satisfies it). */
 export interface I2cCardInput {
@@ -39,8 +39,13 @@ export function multipleCandidates(req: EligibilityRequest, candidates: Candidat
 
 export function preflight(req: EligibilityRequest): Resolution | null {
   if (req.messageCount > 1) return noMatch(req, 'Thread already has a reply.', ['already_replied']);
-  if (!req.last4) return noMatch(req, 'No card last 4 in the email — will not match on name alone.', ['no_last4']);
+  // Without a last 4, only the Atlas phone + name path can identify the client.
+  if (!req.last4 && !(req.phone && req.cardholderName)) return noLast4(req);
   return null;
+}
+
+export function noLast4(req: EligibilityRequest): Resolution {
+  return noMatch(req, 'No card last 4 in the email — will not match on name alone.', ['no_last4']);
 }
 
 function sortRequestedFirst(cards: CardFact[], last4: string): CardFact[] {
@@ -52,6 +57,7 @@ function matched(
 ): Resolution {
   const flags: EligibilityFlag[] = [];
   if (req.warnings.length) flags.push('parse_warning');
+  if (!req.last4) flags.push('no_last4');
   if (cards.some((c) => c.delinquent === true)) flags.push('delinquent');
   if (cards.some((c) => c.product && !(REVIEW_FREE_PRODUCTS as readonly string[]).includes(c.product))) flags.push('vi_1pct');
   if (cards.some((c) => !c.product)) flags.push('unknown_product');
@@ -105,7 +111,8 @@ export function resolveFromI2c(
   },
 ): Resolution | null {
   const open = args.cards.filter((c) => !c.closed);
-  if (!open.some((c) => c.last4 === req.last4)) return null;
+  // No last 4 in the email: any open card counts, and every one is reported (flagged no_last4).
+  if (req.last4 ? !open.some((c) => c.last4 === req.last4) : open.length === 0) return null;
   const cards: CardFact[] = open.map((c) => ({
     last4: c.last4,
     product: args.mapProgram(c.program) ?? '',
@@ -113,7 +120,9 @@ export function resolveFromI2c(
     creationDate: I2C_DATE_RE.test((c.creationDate ?? '').trim()) ? (c.creationDate ?? '').trim() : '',
     delinquent: args.parseDelinquency(c.delinquencyStatus),
   }));
-  const how = args.method === 'i2c_email' ? 'i2c: listed email + last 4.' : 'Atlas phone + name → i2c last 4.';
+  const how = args.method === 'i2c_email'
+    ? 'i2c: listed email + last 4.'
+    : req.last4 ? 'Atlas phone + name → i2c last 4.' : 'No card last 4 — matched on phone + name only; check before drafting.';
   return matched(req, args.method, args.identityId, args.email, cards, how);
 }
 
