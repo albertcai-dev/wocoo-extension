@@ -80,23 +80,27 @@ export async function pageRunSql(
   }
 }
 
-/** Chrome calls behind runPresetSql, injectable for tests. */
-export interface PresetSqlDeps {
+/** Chrome tab calls behind every hidden-Preset-tab request, injectable for tests. */
+export interface PresetTabDeps {
   /** Opens a background tab on `url`; resolves to its id. */
   createTab: (url: string) => Promise<number>;
   /** Resolves once the tab has finished loading (rejects after a timeout). */
   waitForComplete: (tabId: number) => Promise<void>;
   /** The tab's current URL (after any redirects). */
   getTabUrl: (tabId: number) => Promise<string>;
+  removeTab: (tabId: number) => Promise<void>;
+}
+
+/** Chrome calls behind runPresetSql, injectable for tests. */
+export interface PresetSqlDeps extends PresetTabDeps {
   /** Runs pageRunSql in the tab's page and returns its result. */
   executeScript: (tabId: number, args: [string, number, string]) => Promise<PageSqlResult | undefined>;
-  removeTab: (tabId: number) => Promise<void>;
 }
 
 const TAB_LOAD_TIMEOUT_MS = 30_000;
 const OVERALL_TIMEOUT_MS = 150_000;
 
-const chromeDeps: PresetSqlDeps = {
+export const chromeTabDeps: PresetTabDeps = {
   createTab: async (url) => {
     const tab = await chrome.tabs.create({ url, active: false });
     if (tab.id == null) throw new Error('Could not open a Preset tab.');
@@ -120,46 +124,63 @@ const chromeDeps: PresetSqlDeps = {
     chrome.tabs.get(tabId).then((t) => { if (t.status === 'complete') finish(); }, () => { /* tab gone; timeout reports */ });
   }),
   getTabUrl: async (tabId) => (await chrome.tabs.get(tabId)).url ?? '',
+  removeTab: (tabId) => chrome.tabs.remove(tabId),
+};
+
+const chromeDeps: PresetSqlDeps = {
+  ...chromeTabDeps,
   executeScript: async (tabId, args) => {
     const results = await chrome.scripting.executeScript({
       target: { tabId }, world: 'MAIN', func: pageRunSql, args,
     });
     return results?.[0]?.result as PageSqlResult | undefined;
   },
-  removeTab: (tabId) => chrome.tabs.remove(tabId),
 };
 
-async function runInTab(sql: string, deps: PresetSqlDeps, tab: { id: number | null }): Promise<Record<string, unknown>[]> {
-  tab.id = await deps.createTab(`${PRESET_BASE}/api/v1/security/csrf_token/`);
-  await deps.waitForComplete(tab.id);
-  const url = await deps.getTabUrl(tab.id);
-  let sameOrigin = false;
-  try { sameOrigin = new URL(url).origin === new URL(PRESET_BASE).origin; } catch { sameOrigin = false; }
-  if (!sameOrigin) throw new PresetAuthError('Not signed in to Preset.');
-  const result = await deps.executeScript(tab.id, [PRESET_BASE, PANTHEON_DATABASE_ID, sql]);
+/** A page function's result → rows, or the matching error. */
+export function rowsOrThrow(result: PageSqlResult | undefined): Record<string, unknown>[] {
   if (!result) throw new Error('Preset tab returned no result.');
   if (result.kind === 'rows') return result.rows;
   if (result.kind === 'auth') throw new PresetAuthError('Not signed in to Preset.');
   throw new Error(result.message);
 }
 
-export async function runPresetSql(
-  sql: string,
-  deps: PresetSqlDeps = chromeDeps,
-): Promise<Record<string, unknown>[]> {
+/**
+ * Opens a hidden tab on the Preset origin, runs `body` with its id, and always closes it.
+ * The tab loads the tiny csrf_token JSON endpoint, so requests made inside it carry a
+ * same-origin Referer and the user's session cookies.
+ */
+export async function withPresetTab<T>(deps: PresetTabDeps, body: (tabId: number) => Promise<T>): Promise<T> {
   const tab: { id: number | null } = { id: null };
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(() => reject(new Error('Preset query timed out.')), OVERALL_TIMEOUT_MS);
   });
+  const run = async (): Promise<T> => {
+    tab.id = await deps.createTab(`${PRESET_BASE}/api/v1/security/csrf_token/`);
+    await deps.waitForComplete(tab.id);
+    const url = await deps.getTabUrl(tab.id);
+    let sameOrigin = false;
+    try { sameOrigin = new URL(url).origin === new URL(PRESET_BASE).origin; } catch { sameOrigin = false; }
+    if (!sameOrigin) throw new PresetAuthError('Not signed in to Preset.');
+    return body(tab.id);
+  };
   try {
-    return await Promise.race([runInTab(sql, deps, tab), timeout]);
+    return await Promise.race([run(), timeout]);
   } finally {
     clearTimeout(timer);
     if (tab.id != null) {
       try { await deps.removeTab(tab.id); } catch { /* tab may already be closed */ }
     }
   }
+}
+
+export async function runPresetSql(
+  sql: string,
+  deps: PresetSqlDeps = chromeDeps,
+): Promise<Record<string, unknown>[]> {
+  return withPresetTab(deps, async (tabId) =>
+    rowsOrThrow(await deps.executeScript(tabId, [PRESET_BASE, PANTHEON_DATABASE_ID, sql])));
 }
 
 /** Parse CSV or tab-separated values with quote handling. */

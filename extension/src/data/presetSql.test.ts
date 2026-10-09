@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PRESET_BASE, PresetAuthError, pageRunSql, parsePastedResults, runPresetSql, type PresetSqlDeps } from './presetSql';
+import { PRESET_BASE, PresetAuthError, pageRunSql, parsePastedResults, rowsOrThrow, runPresetSql, withPresetTab, type PresetSqlDeps, type PresetTabDeps } from './presetSql';
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -204,5 +204,52 @@ describe('parsePastedResults', () => {
   });
   it('throws when tab-separated row has too few columns', () => {
     expect(() => parsePastedResults('a\tb\n1')).toThrow(/row 1/);
+  });
+});
+
+describe('withPresetTab', () => {
+  function tabDeps(over: Partial<PresetTabDeps> = {}) {
+    const removed: number[] = [];
+    const deps: PresetTabDeps = {
+      createTab: async () => 9,
+      waitForComplete: async () => {},
+      getTabUrl: async () => `${PRESET_BASE}/api/v1/security/csrf_token/`,
+      removeTab: async (id) => { removed.push(id); },
+      ...over,
+    };
+    return { deps, removed };
+  }
+
+  it('runs the body with the tab id and closes the tab', async () => {
+    const { deps, removed } = tabDeps();
+    expect(await withPresetTab(deps, async (id) => `ran in ${id}`)).toBe('ran in 9');
+    expect(removed).toEqual([9]);
+  });
+
+  it('does not run the body when the tab is off Preset', async () => {
+    const { deps, removed } = tabDeps({ getTabUrl: async () => 'https://login.okta.com/' });
+    let ran = false;
+    await expect(withPresetTab(deps, async () => { ran = true; })).rejects.toBeInstanceOf(PresetAuthError);
+    expect(ran).toBe(false);
+    expect(removed).toEqual([9]);
+  });
+
+  it('closes the tab when the body throws', async () => {
+    const { deps, removed } = tabDeps();
+    await expect(withPresetTab(deps, async () => { throw new Error('body failed'); })).rejects.toThrow('body failed');
+    expect(removed).toEqual([9]);
+  });
+});
+
+describe('rowsOrThrow', () => {
+  it('returns rows', () => {
+    expect(rowsOrThrow({ kind: 'rows', rows: [{ a: 1 }] })).toEqual([{ a: 1 }]);
+  });
+  it('throws PresetAuthError on auth', () => {
+    expect(() => rowsOrThrow({ kind: 'auth' })).toThrow(PresetAuthError);
+  });
+  it('throws the message on error, and on a missing result', () => {
+    expect(() => rowsOrThrow({ kind: 'error', message: 'bad' })).toThrow('bad');
+    expect(() => rowsOrThrow(undefined)).toThrow('Preset tab returned no result.');
   });
 });
