@@ -67,7 +67,9 @@ export async function pageFetchWireSends(
         }],
       }),
     });
-    if (res.status === 401 || res.status === 403) return { kind: 'auth' };
+    // 403 here is a datasource-access denial (signed in, no permission) — surface Preset's
+    // message rather than "sign in"; only the csrf call's 401/403 means signed out.
+    if (res.status === 401) return { kind: 'auth' };
     const body = (await res.json().catch(() => null)) as { result_url?: string } | null;
     if (res.status !== 202) return res.ok ? fromBody(body) : { kind: 'error', message: errMsg(body, res.status) };
 
@@ -78,7 +80,7 @@ export async function pageFetchWireSends(
       await sleep(2000);
       const r = await fetchImpl(`${base}${resultUrl}`, { credentials: 'include' });
       if (r.status === 404 || r.status === 410) continue;
-      if (r.status === 401 || r.status === 403) return { kind: 'auth' };
+      if (r.status === 401) return { kind: 'auth' };
       const rb = await r.json().catch(() => null);
       return r.ok ? fromBody(rb) : { kind: 'error', message: errMsg(rb, r.status) };
     }

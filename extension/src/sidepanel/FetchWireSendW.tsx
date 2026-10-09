@@ -7,7 +7,7 @@
 
 import { useState } from 'react';
 import { PresetAuthError } from '../data/presetSql';
-import { atlasTransferUrl, fetchWireSendW, type WireSendWResult } from '../data/wireSendW';
+import { atlasTransferUrl, fetchWireSendW, isResultForInput, type WireSendWResult } from '../data/wireSendW';
 import type { WireSendRow } from '../data/presetChartData';
 import { CopyButton, errorBanner, listItemStyle, Pill, primaryButton } from './toolUi';
 
@@ -57,7 +57,8 @@ export function FetchWireSendWTile() {
         {busy ? 'Fetching…' : 'Fetch W#'}
       </button>
       {error ? <div style={errorBanner}>{error}</div> : null}
-      {result ? <ResultView result={result} /> : null}
+      {/* A late answer for an earlier paste is hidden rather than shown under the new text. */}
+      {result && isResultForInput(result, input) ? <ResultView result={result} /> : null}
     </div>
   );
 }

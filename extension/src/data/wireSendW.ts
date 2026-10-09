@@ -42,6 +42,16 @@ export async function fetchWireSendW(input: string, deps: WireSendWDeps = liveDe
   }
 }
 
+/**
+ * Whether `result` still answers what is in the box. A lookup takes seconds, so the user can
+ * paste the next wire before it lands; showing its W# under the new text would invite pasting
+ * it against the wrong tracker row.
+ */
+export function isResultForInput(result: WireSendWResult, input: string): boolean {
+  const ref = parseWireRef(input);
+  return result.kind === 'no_ref' ? ref === null : result.ref === ref;
+}
+
 export function atlasTransferUrl(row: WireSendRow): string {
   return `https://atlas.wealthsimple.com/identity/${row.identityId}/transfers/${row.fundingIntentId}`;
 }

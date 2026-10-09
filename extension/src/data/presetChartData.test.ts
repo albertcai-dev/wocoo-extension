@@ -42,10 +42,23 @@ describe('pageFetchWireSends', () => {
     expect(polls).toBe(2);
   });
 
-  it('returns auth on 401/403', async () => {
+  it('returns auth on 401/403 from csrf and 401 from chart data', async () => {
     expect(await pageFetchWireSends('https://p', 1, 'R', async () => json({}, 401), noSleep)).toEqual({ kind: 'auth' });
-    const fake = async (url: string) => (url.endsWith('/csrf_token/') ? json({ result: 'tok' }) : json({}, 403));
+    expect(await pageFetchWireSends('https://p', 1, 'R', async () => json({}, 403), noSleep)).toEqual({ kind: 'auth' });
+    const fake = async (url: string) => (url.endsWith('/csrf_token/') ? json({ result: 'tok' }) : json({}, 401));
     expect(await pageFetchWireSends('https://p', 1, 'R', fake, noSleep)).toEqual({ kind: 'auth' });
+  });
+
+  it("reports a chart-data 403 as Preset's own message, not as signed out", async () => {
+    const denied = { message: 'This endpoint requires the datasource wire_sends, database or `all_datasource_access` permission' };
+    const sync = async (url: string) => (url.endsWith('/csrf_token/') ? json({ result: 'tok' }) : json(denied, 403));
+    expect(await pageFetchWireSends('https://p', 1, 'R', sync, noSleep)).toEqual({ kind: 'error', message: denied.message });
+    const queued = async (url: string) => {
+      if (url.endsWith('/csrf_token/')) return json({ result: 'tok' });
+      if (url.endsWith('/api/v1/chart/data')) return json({ result_url: '/api/v1/chart/data/k' }, 202);
+      return json(denied, 403);
+    };
+    expect(await pageFetchWireSends('https://p', 1, 'R', queued, noSleep)).toEqual({ kind: 'error', message: denied.message });
   });
 
   it('surfaces a query error and an HTTP error', async () => {

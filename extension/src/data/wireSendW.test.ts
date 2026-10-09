@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { PresetAuthError } from './presetSql';
 import type { WireSendRow } from './presetChartData';
-import { atlasTransferUrl, fetchWireSendW, type WireSendWDeps } from './wireSendW';
+import { atlasTransferUrl, fetchWireSendW, isResultForInput, type WireSendWDeps } from './wireSendW';
 
 const CELL = '/BNF/RETURN WIRE DATED 10 07 26 //REF AVJJXHZEBVIA53DF CAD56,295.89//.';
 const ROW: WireSendRow = {
@@ -68,6 +68,23 @@ describe('fetchWireSendW', () => {
   it('lets Preset errors propagate', async () => {
     const { d } = deps({ fetchRows: async () => { throw new PresetAuthError('Not signed in to Preset.'); } });
     await expect(fetchWireSendW(CELL, d)).rejects.toBeInstanceOf(PresetAuthError);
+  });
+});
+
+describe('isResultForInput', () => {
+  const found = { kind: 'found', ref: 'AVJJXHZEBVIA53DF', row: ROW, account: { accountNumber: 'WK5LGP131CAD', isCadSpend: true } } as const;
+
+  it('keeps a result while the box still holds the same REF, however it was pasted', () => {
+    expect(isResultForInput(found, CELL)).toBe(true);
+    expect(isResultForInput(found, 'avjjxhzebvia53df')).toBe(true);
+  });
+  it('drops a result once the box holds a different wire (late answer for the previous paste)', () => {
+    expect(isResultForInput(found, '//REF NG5GRDCYVM4ULSFU CAD415.00')).toBe(false);
+    expect(isResultForInput({ kind: 'none', ref: 'AVJJXHZEBVIA53DF' }, 'NG5GRDCYVM4ULSFU')).toBe(false);
+  });
+  it('keeps no_ref only while the box still has no REF', () => {
+    expect(isResultForInput({ kind: 'no_ref' }, 'hello')).toBe(true);
+    expect(isResultForInput({ kind: 'no_ref' }, CELL)).toBe(false);
   });
 });
 
