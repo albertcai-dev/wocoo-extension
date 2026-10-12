@@ -53,15 +53,20 @@ export function preflight(req: EligibilityRequest): Resolution | null {
  */
 export function withFollowUp(req: EligibilityRequest, res: Resolution): Resolution {
   if (req.messageCount <= 1) return res;
-  const why = req.priorReplyFromUs
-    ? 'Follow-up thread — creditcardoperations@ has already replied in this thread.'
-    : 'Follow-up thread.';
+  const why = req.priorReplyFromUs ? 'Follow-up — creditcardoperations@ already replied.' : 'Follow-up thread (no reply from us found).';
   return {
     ...res,
     status: 'needs_review',
     flags: [...new Set<EligibilityFlag>([...res.flags, 'already_replied'])],
     note: `${res.note} ${why}`.trim(),
   };
+}
+
+/** Panel label for the already_replied flag. */
+export function alreadyRepliedText(priorReplyFromUs: boolean | undefined): string {
+  return priorReplyFromUs
+    ? 'Follow-up — creditcardoperations@ already replied; tick Reply anyway to send'
+    : 'Follow-up thread (no reply from us found); tick Reply anyway to send';
 }
 
 export function noLast4(req: EligibilityRequest): Resolution {

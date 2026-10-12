@@ -58,6 +58,12 @@ export function isEligibilityRequest(raw: RawEligibilityEmail): boolean {
   return parseEligibilityThread(raw, []).last4 !== null;
 }
 
+/** Same person: first tokens of the first names and the full last names agree after normalisation. */
+function sameCardholder(a: PersonName, b: PersonName): boolean {
+  const first = (n: PersonName) => normalizeName(n.first).split(' ')[0];
+  return first(a) === first(b) && normalizeName(a.last) === normalizeName(b.last);
+}
+
 function isFollowUp(raw: RawEligibilityEmail): boolean {
   return raw.messageCount > 1 && !!raw.originalBody;
 }
@@ -75,12 +81,23 @@ export function parseEligibilityThread(raw: RawEligibilityEmail, excludedDomains
   if (latest.last4 && original.last4 && latest.last4 !== original.last4) {
     warnings.push(`Follow-up and original email give different last-4 values: ${latest.last4}, ${original.last4}`);
   }
+  // An insurer may reuse a thread for another cardholder: never pair the follow-up's person with the
+  // original's card. (Both parses share the subject-name fallback, so a subject-only name compares equal.)
+  const nameDiffers = !!latest.cardholderName && (!original.cardholderName || !sameCardholder(latest.cardholderName, original.cardholderName));
+  if (latest.cardholderName && original.cardholderName && nameDiffers) {
+    warnings.push(`Follow-up and original email name different cardholders: ${latest.cardholderName.raw}, ${original.cardholderName.raw}`);
+  }
+  const ownIdentity = nameDiffers
+    || latest.emails.some((e) => !original.emails.includes(e))
+    || (!!latest.phone && latest.phone !== original.phone);
+  const borrowLast4 = !(ownIdentity && !latest.last4 && original.last4);
+  if (!borrowLast4) warnings.push("Follow-up has no card last 4; not borrowing the original email's");
   return {
     ...latest,
     cardholderName: latest.cardholderName ?? original.cardholderName,
     emails: [...new Set([...latest.emails, ...original.emails])],
     phone: latest.phone ?? original.phone,
-    last4: latest.last4 ?? original.last4,
+    last4: latest.last4 ?? (borrowLast4 ? original.last4 : null),
     claimNumber: latest.claimNumber ?? original.claimNumber,
     dateOfLoss: latest.dateOfLoss ?? original.dateOfLoss,
     warnings,

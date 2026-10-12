@@ -297,6 +297,7 @@ function eligCreateAndLog_(items) {
   var insurers = eligLoadInsurers_();
   var sheet = eligOpenLogSheet_();
   var ctx = {};
+  var props = PropertiesService.getScriptProperties();
   // Opened on the first draft only (log-only batches never touch the CC Ops sheet), once per call.
   var previous = eligPreviousRecordsOpener_();
 
@@ -308,16 +309,26 @@ function eligCreateAndLog_(items) {
       var lock = LockService.getScriptLock();
       lock.waitLock(30000);
       try {
+        var needsPrevious = false;
         if (item.body) {
           var d = eligCreateDraftCore_(out.messageId, String(item.body), insurers, ctx);
           out.draftId = d.draftId;
           out.reused = d.reused;
           row.draft_id = d.draftId;
           row.status = 'DRAFTED';
+          needsPrevious = true;
+        } else if (row.draft_id && !props.getProperty('elig_prev_req_' + row.draft_id) &&
+            props.getProperty('elig_draft_id_' + row.draft_id) === String(row.thread_id || '')) {
+          // Log-only retry of an unsent Sidekick draft (on this thread) whose "previous records" row was never written.
+          needsPrevious = true;
+        }
+        if (needsPrevious) {
           // Straight after the draft, so a later log failure (retried as log-only) can't skip it.
           // Never fails the item: a problem here is only a warning.
           try {
             eligUpsertPreviousRecord_(previous(), row);
+            // The send-time READ_EMAIL flip touches only this row (never a coworker's row on the same thread).
+            props.setProperty('elig_prev_req_' + row.draft_id, String(row.request_message_id));
           } catch (prErr) {
             out.warning = 'previous records not updated: ' + String((prErr && prErr.message) || prErr);
           }
@@ -341,10 +352,22 @@ function eligSendDrafts_(draftIds) {
   var props = PropertiesService.getScriptProperties();
   var previous = eligPreviousRecordsOpener_();
 
-  /** Flips the "previous records" row to READ_EMAIL. Never changes `result.ok`; a problem is only a warning. */
-  function markPrevious(result, threadId) {
+  /**
+   * Flips this draft's own "previous records" row (recorded at create time) to READ_EMAIL, under the script lock.
+   * Never changes `result.ok`; a problem is only a warning.
+   */
+  function markPrevious(result, draftId, threadId) {
     try {
-      eligMarkPreviousRecordRead_(previous(), threadId);
+      var requestId = props.getProperty('elig_prev_req_' + draftId);
+      if (!requestId) throw new Error('no Sidekick row was recorded for this draft');
+      var lock = LockService.getScriptLock();
+      lock.waitLock(30000);
+      try {
+        eligMarkPreviousRecordRead_(previous(), requestId, threadId);
+      } finally {
+        lock.releaseLock();
+      }
+      props.deleteProperty('elig_prev_req_' + draftId);
     } catch (err) {
       var w = 'previous records not updated: ' + String((err && err.message) || err);
       result.warning = result.warning ? result.warning + '; ' + w : w;
@@ -381,9 +404,9 @@ function eligSendDrafts_(draftIds) {
       // C1: Delete both ownership properties after successful send (elig_sent_ stays).
       props.deleteProperty('elig_draft_id_' + id);
       props.deleteProperty('elig_draft_thread_' + threadId);
-      return markPrevious({ draftId: id, ok: true }, threadId);
+      return markPrevious({ draftId: id, ok: true }, id, threadId);
     } catch (err) {
-      return markPrevious({ draftId: id, ok: true, warning: 'Sent, but tidy-up failed: ' + String((err && err.message) || err) }, threadId);
+      return markPrevious({ draftId: id, ok: true, warning: 'Sent, but tidy-up failed: ' + String((err && err.message) || err) }, id, threadId);
     }
   });
   return { action: 'eligibilityDraftsSent', results: results };
@@ -492,8 +515,9 @@ function eligPreviousRecordsOpener_() {
 
 /**
  * Upserts a DRAFTED row into "previous records", keyed on column A (request_message_id). Writes A:I only: a new
- * row goes below the last row; an existing row is overwritten in A:I. Only the last4 cell (F) is set to plain
- * text (so "0123" keeps its zero); other cells keep their format. The caller holds the script lock.
+ * row goes below the last row; an existing row is overwritten in A:I. Only the id cells (A, B) and the last4 cell
+ * (F) are set to plain text (ids never parse as numbers, "0123" keeps its zero); other cells keep their format.
+ * The caller holds the script lock.
  */
 function eligUpsertPreviousRecord_(sheet, row) {
   var values = [[
@@ -515,23 +539,30 @@ function eligUpsertPreviousRecord_(sheet, row) {
     target = Math.max(last + 1, 2);
     if (target > sheet.getMaxRows()) sheet.insertRowsAfter(sheet.getMaxRows(), target - sheet.getMaxRows());
   }
+  sheet.getRange(target, 1, 1, 2).setNumberFormat('@');
   sheet.getRange(target, 6).setNumberFormat('@');
   sheet.getRange(target, 1, 1, ELIG_PREVIOUS_RECORDS_COLS).setValues(values);
   return target;
 }
 
-/** Sets column E (status) to READ_EMAIL on the newest "previous records" row whose column B is `threadId`. */
-function eligMarkPreviousRecordRead_(sheet, threadId) {
-  if (!threadId) throw new Error('no thread id for this draft');
+/**
+ * Sets column E (status) to READ_EMAIL on the Sidekick row whose column A is `requestId` AND column B is `threadId`,
+ * only while it still reads DRAFTED. Rows written by anyone else (same thread, other request id) are never touched.
+ * The caller holds the script lock.
+ */
+function eligMarkPreviousRecordRead_(sheet, requestId, threadId) {
+  if (!requestId || !threadId) throw new Error('no request/thread id for this draft');
   var last = sheet.getLastRow();
-  var threads = last >= 2 ? sheet.getRange(2, 2, last - 1, 1).getValues() : [];
-  for (var i = threads.length - 1; i >= 0; i--) {
-    if (String(threads[i][0]) === String(threadId)) {
+  var rows = last >= 2 ? sheet.getRange(2, 1, last - 1, 5).getValues() : [];
+  for (var i = 0; i < rows.length; i++) {
+    if (String(rows[i][0]) === String(requestId) && String(rows[i][1]) === String(threadId)) {
+      var status = String(rows[i][4]);
+      if (status !== 'DRAFTED') throw new Error('row ' + (i + 2) + ' status is ' + (status || 'blank') + ', not DRAFTED — left as is');
       sheet.getRange(i + 2, 5).setValue('READ_EMAIL');
       return i + 2;
     }
   }
-  throw new Error('no row for thread ' + threadId);
+  throw new Error('no Sidekick row for request ' + requestId + ' on thread ' + threadId);
 }
 
 // ---- Editor test helpers (Run ▸ from the editor; read the Execution log) ----

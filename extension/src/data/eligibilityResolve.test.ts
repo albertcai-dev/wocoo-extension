@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isDraftable, multipleCandidates, noMatch, preflight, resolveFromI2c, resolveFromWarehouse, withFollowUp } from './eligibilityResolve';
+import { alreadyRepliedText, isDraftable, multipleCandidates, noMatch, preflight, resolveFromI2c, resolveFromWarehouse, withFollowUp } from './eligibilityResolve';
 import type { EligibilityRequest, WarehouseRow } from './eligibilityTypes';
 
 function req(over: Partial<EligibilityRequest> = {}): EligibilityRequest {
@@ -182,13 +182,19 @@ describe('withFollowUp', () => {
     const r = withFollowUp(req({ messageCount: 2 }), matchedRes());
     expect(r.status).toBe('needs_review');
     expect(r.flags).toEqual(['already_replied']);
-    expect(r.note).toBe('Warehouse: email + last 4. Follow-up thread.');
+    expect(r.note).toBe('Warehouse: email + last 4. Follow-up thread (no reply from us found).');
     expect(isDraftable(r)).toBe(true);
   });
 
   it('says when creditcardoperations@ already replied', () => {
     const r = withFollowUp(req({ messageCount: 3, priorReplyFromUs: true }), matchedRes());
-    expect(r.note).toBe('Warehouse: email + last 4. Follow-up thread — creditcardoperations@ has already replied in this thread.');
+    expect(r.note).toBe('Warehouse: email + last 4. Follow-up — creditcardoperations@ already replied.');
+  });
+
+  it('labels the flag by whether we already replied', () => {
+    expect(alreadyRepliedText(true)).toBe('Follow-up — creditcardoperations@ already replied; tick Reply anyway to send');
+    expect(alreadyRepliedText(false)).toBe('Follow-up thread (no reply from us found); tick Reply anyway to send');
+    expect(alreadyRepliedText(undefined)).toBe('Follow-up thread (no reply from us found); tick Reply anyway to send');
   });
 
   it('keeps other flags, and a non-tickable one still blocks drafting', () => {

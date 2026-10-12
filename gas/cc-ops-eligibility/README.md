@@ -26,8 +26,10 @@ In the CC Ops Automation sheet (`INSURERS_SHEET_ID`) the script:
   (`request_message_id, thread_id, insurer_email, client_email, status, last4, is_delinquent, activation_date,
   card_product`). Each draft created (or reused) by "Create drafts & log" is upserted on column A — a new row
   goes below the last row, an existing row is overwritten in A–I only. The last4 cell is set to plain text so
-  leading zeros survive; other cell formats are left alone. "Send all drafts" then sets column E to
-  `READ_EMAIL` on the row whose column B is the sent thread.
+  leading zeros survive (A and B are plain text too); other cell formats are left alone. "Send all drafts" then
+  sets column E to `READ_EMAIL` on that same row only — matched on both its request id (column A, remembered per
+  draft in the `elig_prev_req_<draftId>` script property) and thread id (column B), and only while it reads
+  `DRAFTED`. Rows written by anyone else for the same thread are never touched.
 
 A failure on that tab (missing tab, no edit access, no row for the thread) never fails a draft or a send — it
 comes back as a per-row warning in the panel. The full 12-column audit row is still logged to the

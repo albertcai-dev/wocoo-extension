@@ -13,7 +13,7 @@ import { ATLAS_PHONE_SEARCH_ENABLED, searchAtlasByPhone } from '../data/atlasPho
 import { renderEligibilityDraft } from '../data/eligibilityDraft';
 import { toLogRow } from '../data/eligibilityLog';
 import { isEligibilityRequest, parseEligibilityThread } from '../data/eligibilityParse';
-import { isDraftable } from '../data/eligibilityResolve';
+import { alreadyRepliedText, isDraftable } from '../data/eligibilityResolve';
 import { resolveBatch, type ResolveDeps } from '../data/eligibilityRun';
 import {
   buildCreateAndLogItems, chunkByEncodedSize, type CreateAndLogItem,
@@ -22,6 +22,7 @@ import {
   unsentDraftCount, unsentLoggedCount, type RunRow, type RunState,
 } from '../data/eligibilityRunState';
 import { buildEligibilitySql } from '../data/eligibilitySql';
+import type { EligibilityRequest } from '../data/eligibilityTypes';
 import { openI2cSession, type I2cSession } from '../data/i2cCardLookup';
 import { createSerialQueue } from '../data/serialQueue';
 import { parsePastedResults, PRESET_DIRECT_ENABLED, PresetAuthError, runPresetSql } from '../data/presetSql';
@@ -33,12 +34,16 @@ const FLAG_TEXT: Record<string, string> = {
   vi_1pct: 'Unexpected product — add coverages by hand',
   no_last4: 'No card last 4 in the email',
   parse_warning: 'Email parsing warning',
-  already_replied: 'Follow-up — already has a reply; tick Reply anyway to send',
   unknown_product: 'i2c program not recognised',
   i2c_details_incomplete: 'i2c details incomplete',
   lookup_error: 'A lookup failed',
   name_variant: 'First name spelled differently — confirm before drafting',
 };
+
+/** Label for one flag on one row (already_replied depends on whether we replied in the thread). */
+function flagText(flag: string, req: EligibilityRequest): string {
+  return flag === 'already_replied' ? alreadyRepliedText(req.priorReplyFromUs) : FLAG_TEXT[flag] ?? flag;
+}
 
 /** Max URL-encoded size of one createAndLogEligibility chunk (the items travel in a GET query string). */
 const CREATE_CHUNK_MAX_CHARS = 6000;
@@ -179,6 +184,7 @@ export function EligibilityTriage({ onClose }: { onClose: () => void }) {
         } else {
           // Left for retry. A draft created before the log failed is kept, so the retry only logs it.
           if (x?.draftId) rows[i] = { ...rows[i], draftId: x.draftId, logged: false };
+          if (x?.warning) rows[i] = { ...rows[i], draftNote: x.warning };
           errors.push(x?.error || 'The bridge returned no result for this row.');
         }
       }
@@ -412,7 +418,7 @@ function StatusBadge({ row, progressText }: { row: RunRow; progressText?: string
   if (res?.status === 'matched') return <Pill label="✓ Ready" tone="positive" />;
   if (res?.status === 'needs_review') {
     const flag = res.flags[0];
-    return <Pill label={`⚠ ${flag ? FLAG_TEXT[flag] ?? flag : 'Needs review'}`} tone="warning" wrap />;
+    return <Pill label={`⚠ ${flag ? flagText(flag, row.req) : 'Needs review'}`} tone="warning" wrap />;
   }
   if (res?.status === 'no_match') return <Pill label="✗ No match" tone="neutral" />;
   if (progressText) return <Pill label={`… ${progressText}`} tone="highlight" />;
@@ -457,7 +463,7 @@ function RowItem({ row: r, progressText, busy, expanded, onToggle, onSelect }: {
           ) : null}
           {res && res.flags.length > 0 ? (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, fontSize: 'var(--mint-text-nano)' }}>
-              {res.flags.map((f) => <Pill key={f} label={`⚠ ${FLAG_TEXT[f] ?? f}`} tone="warning" wrap />)}
+              {res.flags.map((f) => <Pill key={f} label={`⚠ ${flagText(f, r.req)}`} tone="warning" wrap />)}
             </div>
           ) : null}
           {res && res.candidates.length > 0 ? (

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { resolveBatch, runFromBothEnds, type ResolveDeps } from './eligibilityRun';
 import { createSerialQueue } from './serialQueue';
 import { isDraftable } from './eligibilityResolve';
+import { parseEligibilityThread } from './eligibilityParse';
 import type { EligibilityRequest } from './eligibilityTypes';
 
 function req(id: string, over: Partial<EligibilityRequest> = {}): EligibilityRequest {
@@ -254,8 +255,35 @@ describe('resolveBatch', () => {
     expect(r.method).toBe('email_last4');
     expect(r.status).toBe('needs_review');
     expect(r.flags).toEqual(['already_replied']);
-    expect(r.note).toContain('Follow-up thread — creditcardoperations@ has already replied in this thread');
+    expect(r.note).toContain('Follow-up — creditcardoperations@ already replied.');
     expect(isDraftable(r)).toBe(true);
+  });
+
+  it('never drafts a reused thread whose follow-up names a different cardholder (end to end)', async () => {
+    const original = 'Claim for our insured.\nCardholder: Priya Ramanathan\nEmail: priya.r1985@example.com\nCard ending in 1763\n';
+    const latest = 'New claim on this thread.\nCardholder: Marcus Oyelaran\nEmail: marcus.o@example.com\n';
+    const parsed = parseEligibilityThread({
+      threadId: 't1', messageId: 'm1', from: 'Jane <jane@claims-co.example>', fromEmail: 'jane@claims-co.example',
+      subject: 'RE: Eligibility', date: '', messageCount: 2, plainBody: latest, originalBody: original,
+    }, ['claims-co.example']);
+    // Even a warehouse that would pair Priya's email + last 4 must not produce a draftable result.
+    const d = deps({ runSql: async () => [whRow('m1')] });
+    const [r] = await resolveBatch([parsed], d);
+    expect(parsed.last4).toBeNull();
+    expect(r.flags).toContain('already_replied');
+    expect(isDraftable(r)).toBe(false);
+  });
+
+  it('a different cardholder with its own last 4 is matched but parse_warning blocks the draft', async () => {
+    const original = 'Cardholder: Priya Ramanathan\nEmail: priya.r1985@example.com\nCard ending in 1763\n';
+    const latest = 'Cardholder: Marcus Oyelaran\nCard ending in 1763\n';
+    const parsed = parseEligibilityThread({
+      threadId: 't1', messageId: 'm1', from: 'Jane <jane@claims-co.example>', fromEmail: 'jane@claims-co.example',
+      subject: 'RE: Eligibility', date: '', messageCount: 2, plainBody: latest, originalBody: original,
+    }, ['claims-co.example']);
+    const [r] = await resolveBatch([parsed], deps({ runSql: async () => [whRow('m1')] }));
+    expect(r.flags).toEqual(['parse_warning', 'already_replied']);
+    expect(isDraftable(r)).toBe(false);
   });
 
   it('flags a live-matched follow-up after the warehouse follow-up and name-variant handling', async () => {

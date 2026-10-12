@@ -312,11 +312,59 @@ Jane Adjuster
   });
 
   it("prefers the follow-up's own values and puts its emails first, de-duplicated", () => {
-    const latest = 'Following up. Email: new.priya@example.com, priya.r1985@example.com\nPhone: 647-555-0199\n';
+    const latest = 'Following up on the card ending in 1763. Email: new.priya@example.com, priya.r1985@example.com\nPhone: 647-555-0199\n';
     const r = parseEligibilityThread(raw({ messageCount: 3, plainBody: latest, originalBody: LABELLED }), EXCLUDED);
     expect(r.phone).toBe('6475550199');
     expect(r.emails).toEqual(['new.priya@example.com', 'priya.r1985@example.com', 'wrong.address@example.com']);
     expect(r.last4).toBe('1763');
+    expect(r.warnings).toEqual([]);
+  });
+
+  it("does not borrow the original's last 4 when the follow-up brings its own email but no last 4", () => {
+    const latest = 'Following up. Email: someone.else@example.com\n';
+    const r = parseEligibilityThread(raw({ messageCount: 2, plainBody: latest, originalBody: LABELLED }), EXCLUDED);
+    expect(r.last4).toBeNull();
+    expect(r.warnings).toEqual(["Follow-up has no card last 4; not borrowing the original email's"]);
+  });
+
+  it("does not borrow the original's last 4 when the follow-up brings its own phone but no last 4", () => {
+    const r = parseEligibilityThread(raw({ messageCount: 2, plainBody: 'Phone: 647-555-0199\n', originalBody: LABELLED }), EXCLUDED);
+    expect(r.last4).toBeNull();
+    expect(r.warnings).toContain("Follow-up has no card last 4; not borrowing the original email's");
+  });
+
+  it('warns when the follow-up names a different cardholder (and borrows no last 4)', () => {
+    const latest = 'Another one for you.\nCardholder: Marcus Oyelaran\nEmail: marcus.o@example.com\n';
+    const r = parseEligibilityThread(raw({ messageCount: 2, plainBody: latest, originalBody: LABELLED }), EXCLUDED);
+    expect(r.cardholderName?.raw).toBe('Marcus Oyelaran');
+    expect(r.last4).toBeNull();
+    expect(r.warnings).toEqual([
+      'Follow-up and original email name different cardholders: Marcus Oyelaran, Priya Ramanathan',
+      "Follow-up has no card last 4; not borrowing the original email's",
+    ]);
+  });
+
+  it('warns on a different cardholder even when the follow-up has its own last 4', () => {
+    const latest = 'Cardholder: Priya Raman\nCard ending in 1763\n';
+    const r = parseEligibilityThread(raw({ messageCount: 2, plainBody: latest, originalBody: LABELLED }), EXCLUDED);
+    expect(r.last4).toBe('1763');
+    expect(r.warnings).toEqual(['Follow-up and original email name different cardholders: Priya Raman, Priya Ramanathan']);
+  });
+
+  it('treats the same cardholder written differently (case, "Last, First") as the same', () => {
+    const latest = 'Cardholder: RAMANATHAN, PRIYA\n';
+    const r = parseEligibilityThread(raw({ messageCount: 2, plainBody: latest, originalBody: LABELLED }), EXCLUDED);
+    expect(r.last4).toBe('1763');
+    expect(r.warnings).toEqual([]);
+  });
+
+  it('merges a subject-only name with no warning (both parses share the subject fallback)', () => {
+    const r = parseEligibilityThread(raw({
+      subject: 'Coverage Confirmation - Vishal Rajgure', messageCount: 2, plainBody: FOLLOW_UP, originalBody: 'Card ending in 5150\n',
+    }), EXCLUDED);
+    expect(r.cardholderName?.raw).toBe('Vishal Rajgure');
+    expect(r.last4).toBe('5150');
+    expect(r.warnings).toEqual([]);
   });
 
   it('warns when the follow-up and the original give different last 4s (keeps the follow-up\'s)', () => {
