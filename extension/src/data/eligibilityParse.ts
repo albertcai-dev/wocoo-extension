@@ -253,5 +253,6 @@ export function parseEligibilityEmail(raw: RawEligibilityEmail, excludedDomains:
     dateOfLoss: labelled(body, DOL_LABELS),
     warnings,
     ...(raw.priorReplyFromUs === true ? { priorReplyFromUs: true } : {}),
+    ...(raw.senderMatch === 'domain' ? { senderMatch: 'domain' as const } : {}),
   };
 }

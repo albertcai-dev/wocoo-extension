@@ -406,6 +406,13 @@ Jane Adjuster
     expect(parseEligibilityThread(raw({ plainBody: LABELLED }), EXCLUDED).priorReplyFromUs).toBeUndefined();
   });
 
+  it('carries senderMatch onto the request only when the sender matched by insurer domain', () => {
+    expect(parseEligibilityThread(raw({ plainBody: LABELLED, senderMatch: 'domain' }), EXCLUDED).senderMatch).toBe('domain');
+    expect(parseEligibilityEmail(raw({ plainBody: LABELLED, senderMatch: 'domain' }), EXCLUDED).senderMatch).toBe('domain');
+    expect(parseEligibilityThread(raw({ plainBody: LABELLED, senderMatch: 'listed' }), EXCLUDED).senderMatch).toBeUndefined();
+    expect(parseEligibilityThread(raw({ plainBody: LABELLED }), EXCLUDED).senderMatch).toBeUndefined();
+  });
+
   it('treats a terse follow-up as an eligibility request when the original matches', () => {
     const followUp = raw({ subject: 'RE: File 88213', messageCount: 2, plainBody: FOLLOW_UP });
     expect(isEligibilityRequest(followUp)).toBe(false);

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  buildCreateAndLogItems, canRunStep3, chunkByEncodedSize, defaultSelected, EMPTY_RUN, earlierDraftRow, earlierRunResolution, formatSkippedLine, mergeResolutions, nextLogStatus, rowsToResolve,
+  buildCreateAndLogItems, canRunStep3, chunkByEncodedSize, defaultSelected, domainOnlySenders, EMPTY_RUN, earlierDraftRow, earlierRunResolution, formatSkippedLine, mergeResolutions, nextLogStatus, rowsToResolve,
   nextAction, shouldShowClientEmail, sortSkippedNewestFirst, summarizeRows, unloggedCount, unsentDraftCount, unsentLoggedCount, type RunRow, type RunState,
 } from './eligibilityRunState';
 import type { EligibilityRequest, Resolution } from './eligibilityTypes';
@@ -253,5 +253,24 @@ describe('buildCreateAndLogItems', () => {
       row({ req: req('g'), res: null }),
       earlierDraftRow(req('h'), 'd3'),
     ])).toEqual([]);
+  });
+});
+
+describe('domainOnlySenders', () => {
+  const req = (insurerEmail: string, senderMatch?: 'listed' | 'domain') =>
+    ({ insurerEmail, ...(senderMatch ? { senderMatch } : {}) }) as EligibilityRequest;
+  it('lists distinct, lowercased, sorted senders of domain-matched rows only', () => {
+    const rows = [
+      row({ req: req('Sara.Sinclair@crawco.ca', 'domain') }),
+      row({ req: req('listed@insurer.example', 'listed') }),
+      row({ req: req('bob@crawco.ca', 'domain'), draftId: 'd-1', res: null, earlier: true }),
+      row({ req: req('sara.sinclair@crawco.ca', 'domain') }),
+      row({ req: req('legacy@insurer.example') }),
+    ];
+    expect(domainOnlySenders(rows)).toEqual(['bob@crawco.ca', 'sara.sinclair@crawco.ca']);
+  });
+  it('is empty when every sender is on the Insurers tab', () => {
+    expect(domainOnlySenders([row({ req: req('a@x.example', 'listed') }), row({ req: req('b@x.example') })])).toEqual([]);
+    expect(domainOnlySenders([])).toEqual([]);
   });
 });

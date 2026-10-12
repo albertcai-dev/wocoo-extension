@@ -16,7 +16,7 @@ import { isEligibilityRequest, parseEligibilityThread } from '../data/eligibilit
 import { alreadyRepliedText, isDraftable } from '../data/eligibilityResolve';
 import { resolveBatch, type ResolveDeps } from '../data/eligibilityRun';
 import {
-  buildCreateAndLogItems, chunkByEncodedSize, type CreateAndLogItem,
+  buildCreateAndLogItems, chunkByEncodedSize, type CreateAndLogItem, domainOnlySenders,
   earlierDraftRow, earlierRunResolution, EMPTY_RUN, formatSkippedLine, mergeResolutions, nextAction, rowsToResolve, RUN_STATE_KEY,
   shouldShowClientEmail, sortSkippedNewestFirst, summarizeRows, type RowSummary, type SkippedEmail,
   unsentDraftCount, unsentLoggedCount, type RunRow, type RunState,
@@ -258,6 +258,8 @@ export function EligibilityTriage({ onClose }: { onClose: () => void }) {
   const currentStep = stepKind === 'fetch' ? 1 : stepKind === 'resolve' ? 2 : stepKind === 'draft' ? 3
     : stepKind === 'send' || stepKind === 'confirm' || stepKind === 'retryLog' ? 4 : 0;
   const summary = summarizeRows(run.rows);
+  const domainSenders = domainOnlySenders(run.rows);
+  const domainRowCount = run.rows.filter((r) => r.req.senderMatch === 'domain').length;
   const toggleExpanded = (id: string) => setExpanded((prev) => {
     const next = new Set(prev);
     if (next.has(id)) next.delete(id); else next.add(id);
@@ -307,6 +309,12 @@ export function EligibilityTriage({ onClose }: { onClose: () => void }) {
         {run.skippedUnknownSender > 0 ? (
           <div style={skipBox}>
             {run.skippedUnknownSender}{run.skippedUnknownSenderCapped ? '+' : ''} unread email(s) from senders not on the Insurers tab were skipped. Check the inbox.
+          </div>
+        ) : null}
+        {domainSenders.length > 0 ? (
+          <div style={{ ...infoCard, textAlign: 'left', fontSize: 'var(--mint-text-nano)', wordBreak: 'break-word' }}>
+            {domainRowCount} request{domainRowCount === 1 ? '' : 's'} came from insurer-domain senders not on the Insurers tab:{' '}
+            {domainSenders.join(', ')}. Add them to the tab to keep the old CC Ops process in sync.
           </div>
         ) : null}
         {(run.skippedNotEligibility ?? 0) > 0 ? (
@@ -456,6 +464,9 @@ function RowItem({ row: r, progressText, busy, expanded, onToggle, onSelect }: {
           <div style={soft}>
             Emails: {r.req.emails.join(', ') || '—'} · Phone: {r.req.phone ?? '—'}
           </div>
+          {r.req.senderMatch === 'domain' ? (
+            <div style={soft}>Sender matched by insurer domain (not on the Insurers tab)</div>
+          ) : null}
           {res ? (
             <div style={{ fontSize: 'var(--mint-text-nano)', color: 'var(--mint-fg-strong)' }}>
               {res.method ? `Matched: ${res.method}` : 'Not matched'} — {res.note}

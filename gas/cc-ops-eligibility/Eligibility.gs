@@ -5,6 +5,9 @@
 // sheet is touched, and a failure there never fails a draft or a send (it comes back as a per-item `warning`).
 // The full 12-column audit row is still logged to the sheet in LOG_SHEET_ID.
 // Both ids, plus ELIG_ALLOWED_USERS, are Script Properties — see README.
+// Insurer senders: an address listed on the Insurers tab, OR any address on an insurer domain (the domain of a
+// listed address, e.g. every crawco.ca adjuster once one is listed). Generic/internal domains (ELIG_GENERIC_DOMAINS,
+// plus optional Script Property ELIG_EXCLUDED_DOMAINS) never count; optional ELIG_EXTRA_INSURER_DOMAINS adds more.
 // Deploy as a web app: Execute as = Me, Who has access = Anyone within Wealthsimple.
 // Replies postMessage to window.top (NOT window.parent — GAS's inner wrapper drops them).
 
@@ -79,6 +82,101 @@ function eligLoadInsurers_() {
   return out;
 }
 
+/** Domains that are never insurer domains (internal or generic mail providers), whatever the Insurers tab lists. */
+var ELIG_GENERIC_DOMAINS = [
+  'wealthsimple.com', 'gmail.com', 'googlemail.com', 'google.com', 'okta.com', 'outlook.com', 'hotmail.com',
+  'live.com', 'msn.com', 'yahoo.com', 'yahoo.ca', 'icloud.com', 'me.com', 'aol.com', 'protonmail.com', 'proton.me',
+];
+
+/** "a.com, @B.com ,," -> ['a.com', 'b.com'] (trimmed, lowercased, leading '@' dropped, blanks dropped). */
+function eligDomainList_(s) {
+  return String(s || '')
+    .split(',')
+    .map(function (d) { return d.trim().toLowerCase().replace(/^@+/, ''); })
+    .filter(String);
+}
+
+/** Lowercased part after the last '@' of a "Name <x@y>" or bare address; '' when there is none. */
+function eligDomainOf_(fromStr) {
+  var email = eligExtractEmail_(fromStr);
+  var at = email.lastIndexOf('@');
+  return at >= 0 ? email.substring(at + 1) : '';
+}
+
+/**
+ * Who counts as an insurer sender. `insurers` is the eligLoadInsurers_ map (normalised address -> true).
+ * domains = the listed addresses' domains plus ELIG_EXTRA_INSURER_DOMAINS, minus ELIG_GENERIC_DOMAINS and
+ * ELIG_EXCLUDED_DOMAINS (an excluded domain never becomes an insurer domain, even when listed as extra).
+ * match(from) -> 'listed' (exact address on the tab) | 'domain' (address on an insurer domain) | null.
+ */
+function eligInsurerMatcher_(insurers) {
+  var props = PropertiesService.getScriptProperties();
+  var excluded = {};
+  ELIG_GENERIC_DOMAINS.concat(eligDomainList_(props.getProperty('ELIG_EXCLUDED_DOMAINS'))).forEach(function (d) {
+    excluded[d] = true;
+  });
+  var set = {};
+  var add = function (d) { if (d && !excluded[d]) set[d] = true; };
+  Object.keys(insurers).forEach(function (addr) { add(eligDomainOf_(addr)); });
+  eligDomainList_(props.getProperty('ELIG_EXTRA_INSURER_DOMAINS')).forEach(add);
+  return {
+    domains: Object.keys(set),
+    match: function (fromStr) {
+      var email = eligExtractEmail_(fromStr);
+      if (!email) return null;
+      if (insurers[email]) return 'listed';
+      var d = eligDomainOf_(email);
+      return d && set[d] ? 'domain' : null;
+    },
+  };
+}
+
+/** Gmail search queries are kept under this many characters; a longer from-group is split across searches. */
+var ELIG_QUERY_MAX = 1500;
+
+/**
+ * `from:` terms grouped into `{…}` clauses so that `longestBase + ' -' + group` stays within ELIG_QUERY_MAX.
+ * A single term too long to share a group gets one of its own. No terms -> [] (never an empty `{}`, which
+ * would match everything).
+ */
+function eligFromGroups_(terms, longestBase) {
+  var room = ELIG_QUERY_MAX - String(longestBase).length - 4; // ' -{' + '}'
+  var groups = [];
+  var cur = [];
+  var len = 0;
+  terms.forEach(function (term) {
+    var add = (cur.length ? 1 : 0) + term.length;
+    if (cur.length && len + add > room) {
+      groups.push(cur);
+      cur = [];
+      len = 0;
+      add = term.length;
+    }
+    cur.push(term);
+    len += add;
+  });
+  if (cur.length) groups.push(cur);
+  return groups.map(function (g) { return '{' + g.join(' ') + '}'; });
+}
+
+/** One capped search per group (`base + ' ' + group`), threads unioned by id in order. Returns { threads, capped }. */
+function eligSearchGroups_(base, groups, cap) {
+  var seen = {};
+  var threads = [];
+  var capped = false;
+  groups.forEach(function (g) {
+    var r = eligSearchCapped_(base + ' ' + g, cap);
+    if (r.capped) capped = true;
+    r.threads.forEach(function (t) {
+      var id = t.getId();
+      if (seen[id]) return;
+      seen[id] = true;
+      threads.push(t);
+    });
+  });
+  return { threads: threads, capped: capped };
+}
+
 function eligReply_(payload) {
   var json = JSON.stringify(payload).replace(/</g, '\\u003c');
   var html = '<!doctype html><html><body><script>window.top.postMessage(' + json + ', "https://script.google.com");</script></body></html>';
@@ -124,13 +222,14 @@ function eligLatest_(msgs) {
  * The panel's view of a thread. Follow-up threads (more than one non-draft message) also carry `originalBody`,
  * the body of the first insurer message (else the first message), so a terse follow-up can be matched on the
  * original request; `priorReplyFromUs` says whether the script owner (creditcardoperations@) already replied.
+ * `matcher` is eligInsurerMatcher_'s; `senderMatch` says how the latest sender was recognised ('listed' | 'domain').
  */
-function eligRequestShape_(t, latest, insurers, owner) {
+function eligRequestShape_(t, latest, matcher, owner) {
   var m = latest.m;
   var real = latest.real || [m];
   var originalBody = '';
   if (real.length > 1) {
-    var first = real.filter(function (x) { return insurers[eligExtractEmail_(x.getFrom())]; })[0] || real[0];
+    var first = real.filter(function (x) { return matcher.match(x.getFrom()); })[0] || real[0];
     originalBody = (first.getPlainBody() || '').substring(0, ELIG_BODY_CAP);
   }
   return {
@@ -144,49 +243,58 @@ function eligRequestShape_(t, latest, insurers, owner) {
     plainBody: (m.getPlainBody() || '').substring(0, ELIG_BODY_CAP),
     originalBody: originalBody,
     priorReplyFromUs: !!owner && real.some(function (x) { return eligExtractEmail_(x.getFrom()) === owner; }),
+    senderMatch: matcher.match(m.getFrom()) || 'listed',
   };
 }
 
 function eligList_() {
   var t0 = Date.now();
   var insurers = eligLoadInsurers_();
+  var matcher = eligInsurerMatcher_(insurers);
   var insurerAddrs = Object.keys(insurers);
   var props = PropertiesService.getScriptProperties();
   var owner = String(Session.getEffectiveUser().getEmail() || '').toLowerCase();
-  // Domains from the normalised addresses. (loadInsurerDomains_ splits the raw
-  // "Name <x@y>" string and yields "y>", so it never matches — don't reuse it.)
+  // Addresses on these domains are never the client's: the insurer domains plus our own.
+  // (Built from the normalised addresses — loadInsurerDomains_ splits the raw "Name <x@y>" string and yields
+  // "y>", so it never matches; don't reuse it.)
   var domains = {};
-  insurerAddrs.forEach(function (addr) {
-    var d = addr.split('@')[1];
-    if (d) domains[d.toLowerCase()] = true;
-  });
+  matcher.domains.forEach(function (d) { domains[d] = true; });
   domains['wealthsimple.com'] = true;
 
   var out = [];
   var drafted = [];
   var timings = { totalMs: 0, insurerScanMs: 0, draftedScanMs: 0, unknownScanMs: 0 };
-  var fromGroup = '';
+  var reqBase = 'in:inbox is:unread -label:sidekick-drafted';
+  var drBase = 'in:inbox is:unread label:sidekick-drafted -label:sidekick-sent';
+  var unkBase = 'in:inbox is:unread -label:sidekick-drafted -label:sidekick-sent';
+  // Every listed address and every insurer domain (Gmail's `from:` matches a bare domain), split into groups
+  // that keep each query within ELIG_QUERY_MAX.
+  var terms = insurerAddrs.concat(matcher.domains).map(function (a) { return 'from:' + a; });
+  var groups = eligFromGroups_(terms, unkBase.length >= drBase.length ? unkBase : drBase);
+  var insurerThreadIds = {};
+  var insurerScanCapped = false;
 
   // I4: with no insurers there is no from-clause to build — skip the insurer queries
   // entirely (an empty `{}` group would match everything).
-  if (insurerAddrs.length) {
-    fromGroup = '{' + insurerAddrs.map(function (a) { return 'from:' + a; }).join(' ') + '}';
-
+  if (groups.length) {
     var tIns = Date.now();
-    var reqThreads = eligSearchCapped_('in:inbox is:unread -label:sidekick-drafted ' + fromGroup, ELIG_LIST_CAP).threads;
+    var reqSearch = eligSearchGroups_(reqBase, groups, ELIG_LIST_CAP);
+    insurerScanCapped = reqSearch.capped;
+    var reqThreads = reqSearch.threads;
+    reqThreads.forEach(function (t) { insurerThreadIds[t.getId()] = true; });
     var reqMsgs = reqThreads.length ? GmailApp.getMessagesForThreads(reqThreads) : [];
     reqThreads.forEach(function (t, i) {
       var latest = eligLatest_(reqMsgs[i]);
       if (!latest || !latest.m.isUnread()) return;
-      // Threads whose latest sender isn't an insurer are not offered for drafting.
-      if (!insurers[eligExtractEmail_(latest.m.getFrom())]) return;
-      out.push(eligRequestShape_(t, latest, insurers, owner));
+      // Threads whose latest sender isn't an insurer (listed or on an insurer domain) are not offered for drafting.
+      if (!matcher.match(latest.m.getFrom())) return;
+      out.push(eligRequestShape_(t, latest, matcher, owner));
     });
     timings.insurerScanMs = Date.now() - tIns;
 
     // I1: drafted-but-unsent threads, so a lost panel session can still send them.
     var tDr = Date.now();
-    var drThreads = eligSearchCapped_('in:inbox is:unread label:sidekick-drafted -label:sidekick-sent ' + fromGroup, ELIG_DRAFTED_CAP).threads;
+    var drThreads = eligSearchGroups_(drBase, groups, ELIG_DRAFTED_CAP).threads;
     var drMsgs = drThreads.length ? GmailApp.getMessagesForThreads(drThreads) : [];
     drThreads.forEach(function (t, i) {
       var draftId = props.getProperty('elig_draft_thread_' + t.getId());
@@ -194,19 +302,31 @@ function eligList_() {
       if (props.getProperty('elig_sent_' + draftId)) return; // Already sent; only the cleanup failed.
       var latest = eligLatest_(drMsgs[i]);
       if (!latest) return;
-      if (!insurers[eligExtractEmail_(latest.m.getFrom())]) return;
-      var row = eligRequestShape_(t, latest, insurers, owner);
+      if (!matcher.match(latest.m.getFrom())) return;
+      var row = eligRequestShape_(t, latest, matcher, owner);
       row.draftId = draftId;
       drafted.push(row);
     });
     timings.draftedScanMs = Date.now() - tDr;
   }
 
-  // I4: safety net — unread, untouched threads with no message from an Insurers-tab address.
+  // I4: safety net — unread, untouched threads with no message from an insurer (listed address or insurer domain).
   // Count-only: the thread search alone (paged 100 at a time, up to 200), never loading messages.
   var tUnk = Date.now();
-  var unknownQuery = 'in:inbox is:unread -label:sidekick-drafted -label:sidekick-sent' + (fromGroup ? ' -' + fromGroup : '');
-  var unknown = eligSearchCapped_(unknownQuery, ELIG_UNKNOWN_CAP);
+  var unknown;
+  if (groups.length <= 1) {
+    unknown = eligSearchCapped_(unkBase + (groups.length ? ' -' + groups[0] : ''), ELIG_UNKNOWN_CAP);
+  } else {
+    // Too many senders for one query: exclude the first group in the query, then drop the threads the insurer
+    // scan already found for the other groups (it covers every unread, not-drafted insurer thread).
+    var known = Object.keys(insurerThreadIds).length;
+    var cand = eligSearchCapped_(unkBase + ' -' + groups[0], ELIG_UNKNOWN_CAP + known);
+    var rest = cand.threads.filter(function (t) { return !insurerThreadIds[t.getId()]; });
+    unknown = {
+      threads: rest.slice(0, ELIG_UNKNOWN_CAP),
+      capped: cand.capped || insurerScanCapped || rest.length >= ELIG_UNKNOWN_CAP,
+    };
+  }
   var skipped = unknown.threads.length;
   timings.unknownScanMs = Date.now() - tUnk;
   timings.totalMs = Date.now() - t0;
@@ -225,13 +345,13 @@ function eligList_() {
 
 function eligCreateDraft_(messageId, body) {
   if (!messageId || !body) throw new Error('messageId and body are required');
-  var insurers = eligLoadInsurers_();
+  var matcher = eligInsurerMatcher_(eligLoadInsurers_());
 
   // I2: Wrap in lock for thread safety.
   var lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
-    return eligCreateDraftCore_(messageId, body, insurers, {});
+    return eligCreateDraftCore_(messageId, body, matcher, {});
   } finally {
     lock.releaseLock();
   }
@@ -239,15 +359,14 @@ function eligCreateDraft_(messageId, body) {
 
 /**
  * Creates (or reuses) the Sidekick draft reply on `messageId`'s thread. The caller holds the script lock and
- * passes the preloaded insurer map; `ctx` caches the Drafted label across a batch.
+ * passes the preloaded eligInsurerMatcher_; `ctx` caches the Drafted label across a batch.
  */
-function eligCreateDraftCore_(messageId, body, insurers, ctx) {
+function eligCreateDraftCore_(messageId, body, matcher, ctx) {
   if (!messageId || !body) throw new Error('messageId and body are required');
   var msg = GmailApp.getMessageById(messageId);
 
-  // C1: Refuse unless the message's sender is an insurer.
-  var fromEmail = eligExtractEmail_(msg.getFrom());
-  if (!insurers[fromEmail]) throw new Error('Message is not from a known insurer');
+  // C1: Refuse unless the message's sender is an insurer (listed on the Insurers tab, or on an insurer domain).
+  if (!matcher.match(msg.getFrom())) throw new Error('Message is not from a known insurer');
 
   var thread = msg.getThread();
   var threadId = thread.getId();
@@ -294,7 +413,7 @@ var ELIG_BATCH_CAP = 50;
 function eligCreateAndLog_(items) {
   if (!Array.isArray(items)) throw new Error('items must be an array');
   if (items.length > ELIG_BATCH_CAP) throw new Error('Too many items in one batch (max ' + ELIG_BATCH_CAP + ')');
-  var insurers = eligLoadInsurers_();
+  var matcher = eligInsurerMatcher_(eligLoadInsurers_());
   var sheet = eligOpenLogSheet_();
   var ctx = {};
   var props = PropertiesService.getScriptProperties();
@@ -311,7 +430,7 @@ function eligCreateAndLog_(items) {
       try {
         var needsPrevious = false;
         if (item.body) {
-          var d = eligCreateDraftCore_(out.messageId, String(item.body), insurers, ctx);
+          var d = eligCreateDraftCore_(out.messageId, String(item.body), matcher, ctx);
           out.draftId = d.draftId;
           out.reused = d.reused;
           row.draft_id = d.draftId;
@@ -571,7 +690,9 @@ function testListEligibilityRequests() {
   var r = eligList_();
   Logger.log('requests=%s drafted=%s skippedUnknownSender=%s%s domains=%s', r.requests.length, r.drafted.length,
     r.skippedUnknownSender, r.skippedUnknownSenderCapped ? '+' : '', r.excludedDomains.join(','));
-  r.requests.slice(0, 3).forEach(function (q) { Logger.log('%s | %s | %s', q.messageId, q.fromEmail, q.subject); });
+  r.requests.slice(0, 3).forEach(function (q) { Logger.log('%s | %s | %s | %s', q.messageId, q.fromEmail, q.senderMatch, q.subject); });
+  var byDomain = r.requests.filter(function (q) { return q.senderMatch === 'domain'; });
+  if (byDomain.length) Logger.log('matched by insurer domain only (not on the Insurers tab): %s', byDomain.map(function (q) { return q.fromEmail; }).join(', '));
 }
 
 // Creates and immediately deletes one test draft in the shared mailbox — optional; skip it during the read-only POC.

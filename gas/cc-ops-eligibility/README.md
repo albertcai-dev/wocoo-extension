@@ -10,6 +10,8 @@ Run all of this in the **creditcardoperations@wealthsimple.com** Chrome profile.
    - `INSURERS_SHEET_ID` = `1nkUKJw4o56agzPlfTaLq5FDonqoVNVLt3dif9dlw2Fg` (CC Ops Automation — reads the Insurers tab; writes only the "previous records" tab, columns A–I)
    - `LOG_SHEET_ID` = the test sheet id from step 1
    - `ELIG_ALLOWED_USERS` = comma-separated emails allowed to use it (e.g. `albert.cai@wealthsimple.com`). Empty = nobody.
+   - Optional `ELIG_EXCLUDED_DOMAINS` = comma-separated domains that must never count as insurer domains (added to the built-in generic list — see "Insurer senders" below).
+   - Optional `ELIG_EXTRA_INSURER_DOMAINS` = comma-separated domains to treat as insurer domains even though no address on them is on the Insurers tab.
 4. Select `testListEligibilityRequests` → Run → accept the permission prompts (as creditcardoperations@). Execution log should show `requests=N …`.
 5. (Optional — skip for a read-only POC) `testEligibilityIdempotency` creates and deletes one test draft in the shared mailbox.
 6. Deploy → New deployment → Web app. Execute as: **Me**. Who has access: **Anyone within Wealthsimple**. Copy the `/exec` URL into `extension/src/api/bridgeTabs.ts` → `ELIGIBILITY_BRIDGE_URL`.
@@ -37,6 +39,26 @@ comes back as a per-row warning in the panel. The full 12-column audit row is st
 
 The account that owns the script (creditcardoperations@) needs **edit** access to the CC Ops Automation sheet
 for the "previous records" write.
+
+## Insurer senders
+
+A sender counts as an insurer when either:
+- **listed** — the exact address is on the Insurers tab (column A); or
+- **domain** — the address is on an *insurer domain*: the domain of any listed address (e.g. once one
+  `@crawco.ca` adjuster is listed, every `@crawco.ca` adjuster counts), plus any in `ELIG_EXTRA_INSURER_DOMAINS`.
+
+Generic and internal domains never become insurer domains, even when a listed address (or
+`ELIG_EXTRA_INSURER_DOMAINS`) uses one: `wealthsimple.com, gmail.com, googlemail.com, google.com, okta.com,
+outlook.com, hotmail.com, live.com, msn.com, yahoo.com, yahoo.ca, icloud.com, me.com, aol.com, protonmail.com,
+proton.me`, plus anything in `ELIG_EXCLUDED_DOMAINS`. A listed address on one of those domains still matches as
+**listed**.
+
+Fetch searches for every listed address and every insurer domain (`from:` matches a bare domain), and the
+"unknown sender" count leaves both out. When there are too many for one Gmail query (over ~1,500 characters) the
+search is split into several and the results are merged. Each request carries `senderMatch` (`listed` / `domain`);
+the panel lists the domain-only senders so they can be added to the Insurers tab (the old CC Ops process only knows
+listed addresses). "Create drafts" accepts both and still refuses any other sender. Addresses on insurer domains
+(and `wealthsimple.com`) are never taken as the client's email.
 
 ## Follow-up threads
 

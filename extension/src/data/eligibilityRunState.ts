@@ -104,6 +104,18 @@ export function earlierRunResolution(requestId: string): Resolution {
   };
 }
 
+/**
+ * Senders matched only by insurer domain (not on the Insurers tab): distinct, lowercased, sorted.
+ * The panel asks for them to be added to the tab so the old CC Ops process stays in sync.
+ */
+export function domainOnlySenders(rows: RunRow[]): string[] {
+  const out = new Set<string>();
+  for (const r of rows) {
+    if (r.req.senderMatch === 'domain' && r.req.insurerEmail) out.add(r.req.insurerEmail.toLowerCase());
+  }
+  return [...out].sort();
+}
+
 /** Rows Resolve may (re-)resolve: anything already drafted is left alone. */
 export function rowsToResolve(rows: RunRow[]): RunRow[] {
   return rows.filter((r) => !r.draftId);

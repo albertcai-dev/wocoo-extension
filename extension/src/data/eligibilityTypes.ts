@@ -22,7 +22,14 @@ export interface RawEligibilityEmail {
   originalBody?: string;
   /** A non-draft message in the thread was sent by the bridge owner (creditcardoperations@). */
   priorReplyFromUs?: boolean;
+  /**
+   * How the bridge recognised the sender as an insurer: `listed` = the exact address is on the Insurers tab,
+   * `domain` = only its domain is (another address on that domain is listed). Absent = `listed`.
+   */
+  senderMatch?: SenderMatch;
 }
+
+export type SenderMatch = 'listed' | 'domain';
 
 export interface PersonName {
   /** Everything before the last token, as written. */
@@ -51,6 +58,8 @@ export interface EligibilityRequest {
   warnings: string[];
   /** Follow-up thread in which creditcardoperations@ already replied. Absent when not known to be true. */
   priorReplyFromUs?: boolean;
+  /** `domain`: the sender isn't on the Insurers tab, only its domain is. Absent for a listed sender. */
+  senderMatch?: SenderMatch;
 }
 
 export interface CardFact {

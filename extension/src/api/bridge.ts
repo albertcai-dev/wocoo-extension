@@ -959,6 +959,8 @@ function toRawEligibilityEmail(o: Record<string, unknown>): RawEligibilityEmail 
     plainBody: String(o.plainBody ?? ''),
     originalBody: typeof o.originalBody === 'string' ? o.originalBody : '',
     priorReplyFromUs: o.priorReplyFromUs === true,
+    // An older bridge sends no senderMatch: every sender it returned was listed.
+    senderMatch: o.senderMatch === 'domain' ? 'domain' : 'listed',
   };
 }
 
