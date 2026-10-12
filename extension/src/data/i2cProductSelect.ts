@@ -11,6 +11,31 @@
 // — so any name pattern would be guessing at i2c's naming scheme. Category is a closed
 // vocabulary: Credit or Debit.
 
+/** Collapse whitespace so a header wrapped across lines still matches. */
+function norm(cell: string): string {
+  return (cell || '').replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Locate the header row and the two columns we read, given every row's cell text.
+ *
+ * The header is *searched for*, not assumed to be first: i2c renders a grouping row
+ * above it ("Product Information" / "Customer Information"), and assuming row 0 meant
+ * the columns were never found and the table was skipped on every pass. Same reason
+ * `gridFromRows` in i2cCardDetailsParse.ts searches by header name.
+ */
+export function locateProductColumns(
+  rowCells: string[][],
+): { headerAt: number; categoryAt: number; statusAt: number } | null {
+  for (let i = 0; i < rowCells.length; i++) {
+    const cells = rowCells[i].map(norm);
+    const categoryAt = cells.findIndex((c) => /^Program Category$/i.test(c));
+    const statusAt = cells.findIndex((c) => /^Status$/i.test(c));
+    if (categoryAt !== -1 && statusAt !== -1) return { headerAt: i, categoryAt, statusAt };
+  }
+  return null;
+}
+
 export interface ProductRow {
   /** The Program Category cell: "Credit" or "Debit". */
   category: string;
