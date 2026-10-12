@@ -957,6 +957,8 @@ function toRawEligibilityEmail(o: Record<string, unknown>): RawEligibilityEmail 
     date: String(o.date ?? ''),
     messageCount: Number(o.messageCount ?? 1),
     plainBody: String(o.plainBody ?? ''),
+    originalBody: typeof o.originalBody === 'string' ? o.originalBody : '',
+    priorReplyFromUs: o.priorReplyFromUs === true,
   };
 }
 
@@ -1016,7 +1018,7 @@ export async function logEligibilityResultViaBridge(row: EligibilityLogRow): Pro
 /** One web-app call for a chunk of Step 3: creates each item's draft (when `body` is set) and logs its row. */
 export async function createAndLogEligibilityViaBridge(
   items: { messageId: string; body: string; row: EligibilityLogRow }[],
-): Promise<{ messageId: string; ok: boolean; draftId?: string; reused?: boolean; error?: string }[]> {
+): Promise<{ messageId: string; ok: boolean; draftId?: string; reused?: boolean; error?: string; warning?: string }[]> {
   requireEligibilityBridgeUrl();
   const res = await callBridge('createAndLogEligibility', { items: JSON.stringify(items) }, 'eligibilityBatchDone', 180_000, true, ELIGIBILITY_BRIDGE_URL);
   const raw = Array.isArray(res.results) ? (res.results as Record<string, unknown>[]) : [];
@@ -1026,5 +1028,6 @@ export async function createAndLogEligibilityViaBridge(
     draftId: r.draftId ? String(r.draftId) : undefined,
     reused: r.reused === true ? true : undefined,
     error: r.error ? String(r.error) : undefined,
+    warning: r.warning ? String(r.warning) : undefined,
   }));
 }

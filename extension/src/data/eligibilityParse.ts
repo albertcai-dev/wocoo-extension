@@ -53,7 +53,38 @@ const REQUEST_KEYWORD_RE = /eligib|coverage|member\s+(?:coverage\s+)?query|\bcla
  */
 export function isEligibilityRequest(raw: RawEligibilityEmail): boolean {
   if (REQUEST_KEYWORD_RE.test(raw.subject || '') || REQUEST_KEYWORD_RE.test(raw.plainBody || '')) return true;
-  return parseEligibilityEmail(raw, []).last4 !== null;
+  // A terse follow-up ("just checking in on the below") counts when the original request does.
+  if (isFollowUp(raw) && REQUEST_KEYWORD_RE.test(raw.originalBody || '')) return true;
+  return parseEligibilityThread(raw, []).last4 !== null;
+}
+
+function isFollowUp(raw: RawEligibilityEmail): boolean {
+  return raw.messageCount > 1 && !!raw.originalBody;
+}
+
+/**
+ * Like parseEligibilityEmail, but for a follow-up thread (more than one message, original body
+ * supplied) the latest message and the original request are parsed separately and merged: the
+ * latest message's values win, the original fills the gaps.
+ */
+export function parseEligibilityThread(raw: RawEligibilityEmail, excludedDomains: string[]): EligibilityRequest {
+  const latest = parseEligibilityEmail(raw, excludedDomains);
+  if (!isFollowUp(raw)) return latest;
+  const original = parseEligibilityEmail({ ...raw, plainBody: raw.originalBody ?? '' }, excludedDomains);
+  const warnings = [...latest.warnings, ...original.warnings];
+  if (latest.last4 && original.last4 && latest.last4 !== original.last4) {
+    warnings.push(`Follow-up and original email give different last-4 values: ${latest.last4}, ${original.last4}`);
+  }
+  return {
+    ...latest,
+    cardholderName: latest.cardholderName ?? original.cardholderName,
+    emails: [...new Set([...latest.emails, ...original.emails])],
+    phone: latest.phone ?? original.phone,
+    last4: latest.last4 ?? original.last4,
+    claimNumber: latest.claimNumber ?? original.claimNumber,
+    dateOfLoss: latest.dateOfLoss ?? original.dateOfLoss,
+    warnings,
+  };
 }
 
 /** Drop quoted reply history: everything from quote markers, plus `>` lines. */
@@ -196,5 +227,6 @@ export function parseEligibilityEmail(raw: RawEligibilityEmail, excludedDomains:
     claimNumber: claim ? claim[1] : null,
     dateOfLoss: labelled(body, DOL_LABELS),
     warnings,
+    ...(raw.priorReplyFromUs === true ? { priorReplyFromUs: true } : {}),
   };
 }

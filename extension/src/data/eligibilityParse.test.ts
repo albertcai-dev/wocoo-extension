@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isEligibilityRequest, normalizeName, parseEligibilityEmail, splitName } from './eligibilityParse';
+import { isEligibilityRequest, normalizeName, parseEligibilityEmail, parseEligibilityThread, splitName } from './eligibilityParse';
 import type { RawEligibilityEmail } from './eligibilityTypes';
 
 function raw(over: Partial<RawEligibilityEmail>): RawEligibilityEmail {
@@ -287,5 +287,60 @@ Text us at 1-833-367-6220 (Only for Canada/USA) or message us on WhatsApp at 1-2
   it('ignores a "cardholder ...:" phrase that is not followed by a name', () => {
     const r = parseEligibilityEmail(raw({ subject: 'Claim 1234567', plainBody: 'Details for the cardholder below: 7889 ending card' }), EXCLUDED);
     expect(r.cardholderName).toBeNull();
+  });
+});
+
+describe('parseEligibilityThread (follow-up threads)', () => {
+  const FOLLOW_UP = `Hi team,
+
+Just following up on the below — could you please confirm?
+
+Thanks,
+Jane Adjuster
+`;
+
+  it('fills fields the terse follow-up lacks from the original message', () => {
+    const r = parseEligibilityThread(raw({ messageCount: 2, plainBody: FOLLOW_UP, originalBody: LABELLED }), EXCLUDED);
+    expect(r.messageId).toBe('m1');
+    expect(r.messageCount).toBe(2);
+    expect(r.last4).toBe('1763');
+    expect(r.phone).toBe('4165550142');
+    expect(r.dateOfLoss).toBe('August 15, 2026');
+    expect(r.cardholderName).toEqual({ first: 'Priya', last: 'Ramanathan', raw: 'Priya Ramanathan' });
+    expect(r.emails).toEqual(['wrong.address@example.com', 'priya.r1985@example.com']);
+    expect(r.warnings).toEqual([]);
+  });
+
+  it("prefers the follow-up's own values and puts its emails first, de-duplicated", () => {
+    const latest = 'Following up. Email: new.priya@example.com, priya.r1985@example.com\nPhone: 647-555-0199\n';
+    const r = parseEligibilityThread(raw({ messageCount: 3, plainBody: latest, originalBody: LABELLED }), EXCLUDED);
+    expect(r.phone).toBe('6475550199');
+    expect(r.emails).toEqual(['new.priya@example.com', 'priya.r1985@example.com', 'wrong.address@example.com']);
+    expect(r.last4).toBe('1763');
+  });
+
+  it('warns when the follow-up and the original give different last 4s (keeps the follow-up\'s)', () => {
+    const latest = 'Sorry, the correct card is ending in 4242.\n';
+    const r = parseEligibilityThread(raw({ messageCount: 2, plainBody: latest, originalBody: LABELLED }), EXCLUDED);
+    expect(r.last4).toBe('4242');
+    expect(r.warnings).toContain('Follow-up and original email give different last-4 values: 4242, 1763');
+  });
+
+  it('leaves a single-message thread exactly as parseEligibilityEmail parses it', () => {
+    const one = raw({ plainBody: LABELLED, originalBody: 'Card ending in 9999' });
+    expect(parseEligibilityThread(one, EXCLUDED)).toEqual(parseEligibilityEmail(one, EXCLUDED));
+  });
+
+  it('carries priorReplyFromUs onto the request', () => {
+    const r = parseEligibilityThread(raw({ messageCount: 2, plainBody: FOLLOW_UP, originalBody: LABELLED, priorReplyFromUs: true }), EXCLUDED);
+    expect(r.priorReplyFromUs).toBe(true);
+    expect(parseEligibilityThread(raw({ plainBody: LABELLED }), EXCLUDED).priorReplyFromUs).toBeUndefined();
+  });
+
+  it('treats a terse follow-up as an eligibility request when the original matches', () => {
+    const followUp = raw({ subject: 'RE: File 88213', messageCount: 2, plainBody: FOLLOW_UP });
+    expect(isEligibilityRequest(followUp)).toBe(false);
+    expect(isEligibilityRequest({ ...followUp, originalBody: 'Card ending in 1763, please confirm.' })).toBe(true);
+    expect(isEligibilityRequest({ ...followUp, originalBody: 'Please confirm eligibility for our insured.' })).toBe(true);
   });
 });

@@ -21,6 +21,8 @@ export interface RunRow {
   earlier?: boolean;
   /** Informational note on a successful send (already sent earlier / tidy-up warning). */
   sendNote?: string;
+  /** Informational note on a successful create & log (e.g. the "previous records" tab wasn't updated). */
+  draftNote?: string;
 }
 
 /** An insurer email dropped as a non-eligibility request. Metadata only — never the body. */

@@ -1,11 +1,12 @@
 // Runs the spec's resolution order over a batch: preflight → warehouse → i2c by listed
-// email → Atlas phone + name → i2c. All I/O is injected so the order is unit-tested.
+// email → Atlas phone + name → i2c, then flags follow-up threads. All I/O is injected so the
+// order is unit-tested.
 
 import type { AtlasPhoneHit } from './atlasPhoneSearch';
 import { mapI2cProgram } from './eligibilityProducts';
 import { normalizeName } from './eligibilityParse';
 import {
-  multipleCandidates, noLast4, noMatch, preflight, resolveFromI2c, resolveFromWarehouse, type I2cCardInput,
+  multipleCandidates, noLast4, noMatch, preflight, resolveFromI2c, resolveFromWarehouse, withFollowUp, type I2cCardInput,
 } from './eligibilityResolve';
 import { buildEligibilitySql, toWarehouseRows } from './eligibilitySql';
 import type { EligibilityFlag, EligibilityRequest, Resolution } from './eligibilityTypes';
@@ -219,5 +220,6 @@ export async function resolveBatch(
   await runFromBothEnds(live, opts.concurrency ?? 2, async (r) => {
     out.set(r.messageId, await resolveLive(r, deps));
   });
-  return reqs.map((r) => out.get(r.messageId)!);
+  // Follow-up threads are flagged last, on the final outcome of whichever path resolved them.
+  return reqs.map((r) => withFollowUp(r, out.get(r.messageId)!));
 }

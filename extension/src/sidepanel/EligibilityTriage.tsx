@@ -12,7 +12,7 @@ import { fetchAtlasClientEmailHeadless } from '../data/atlasAccountLookup';
 import { ATLAS_PHONE_SEARCH_ENABLED, searchAtlasByPhone } from '../data/atlasPhoneSearch';
 import { renderEligibilityDraft } from '../data/eligibilityDraft';
 import { toLogRow } from '../data/eligibilityLog';
-import { isEligibilityRequest, parseEligibilityEmail } from '../data/eligibilityParse';
+import { isEligibilityRequest, parseEligibilityThread } from '../data/eligibilityParse';
 import { isDraftable } from '../data/eligibilityResolve';
 import { resolveBatch, type ResolveDeps } from '../data/eligibilityRun';
 import {
@@ -33,7 +33,7 @@ const FLAG_TEXT: Record<string, string> = {
   vi_1pct: 'Unexpected product — add coverages by hand',
   no_last4: 'No card last 4 in the email',
   parse_warning: 'Email parsing warning',
-  already_replied: 'Thread already has a reply',
+  already_replied: 'Follow-up — already has a reply; tick Reply anyway to send',
   unknown_product: 'i2c program not recognised',
   i2c_details_incomplete: 'i2c details incomplete',
   lookup_error: 'A lookup failed',
@@ -99,14 +99,14 @@ export function EligibilityTriage({ onClose }: { onClose: () => void }) {
         ...drafted.filter((r) => !isEligibilityRequest(r)),
       ].map((r) => ({ subject: r.subject || '', from: r.fromEmail, date: r.date || '' }));
       const fresh: RunRow[] = eligible.map((raw) => ({
-        req: parseEligibilityEmail(raw, excludedDomains),
+        req: parseEligibilityThread(raw, excludedDomains),
         res: null, selected: false, draftId: '', draftBody: '', sent: 'no' as const, sendError: '', logged: false, sentLogged: false,
       }));
       // I1: drafts from an earlier run (panel state lost) come back so they can still be sent.
       const seen = new Set(fresh.map((r) => r.req.messageId));
       const earlier = eligibleDrafted
         .filter((d) => !seen.has(d.messageId))
-        .map(({ draftId, ...raw }) => earlierDraftRow(parseEligibilityEmail(raw, excludedDomains), draftId));
+        .map(({ draftId, ...raw }) => earlierDraftRow(parseEligibilityThread(raw, excludedDomains), draftId));
       const rows = [...fresh, ...earlier];
       save({
         stage: 'fetched', rows, skippedUnknownSender, skippedUnknownSenderCapped, skippedNotEligibility, skippedNotEligibilityList,
@@ -175,7 +175,7 @@ export function EligibilityTriage({ onClose }: { onClose: () => void }) {
         if (i === undefined) continue;
         const x = byId.get(item.messageId);
         if (x?.ok) {
-          rows[i] = { ...rows[i], draftId: x.draftId || rows[i].draftId, logged: true };
+          rows[i] = { ...rows[i], draftId: x.draftId || rows[i].draftId, logged: true, draftNote: x.warning ?? '' };
         } else {
           // Left for retry. A draft created before the log failed is kept, so the retry only logs it.
           if (x?.draftId) rows[i] = { ...rows[i], draftId: x.draftId, logged: false };
@@ -368,7 +368,7 @@ const skipBox: React.CSSProperties = {
 const INTRO_STEPS: Array<{ title: string; text: string }> = [
   { title: 'Fetch requests', text: 'reads unread insurer emails and pulls out name, emails, phone and card last 4.' },
   { title: 'Resolve', text: 'finds each client (warehouse → i2c → Atlas phone) and previews the reply.' },
-  { title: 'Create drafts & log', text: 'drafts the ticked replies in creditcardoperations@ and logs every request to the POC sheet.' },
+  { title: 'Create drafts & log', text: 'drafts the ticked replies in creditcardoperations@, logs every request to the POC sheet and adds drafted ones to CC Ops “previous records”.' },
   { title: 'Send all drafts', text: 'sends this run’s drafts after you confirm.' },
 ];
 
@@ -440,7 +440,7 @@ function RowItem({ row: r, progressText, busy, expanded, onToggle, onSelect }: {
         {r.draftBody && !r.draftId ? (
           <label onClick={(e) => e.stopPropagation()} style={{ display: 'flex', gap: 6, alignItems: 'center', ...soft }}>
             <input type="checkbox" checked={r.selected} disabled={busy} onChange={(e) => onSelect(e.target.checked)} />
-            Include in drafts
+            {res?.flags.includes('already_replied') ? 'Reply anyway' : 'Include in drafts'}
           </label>
         ) : null}
       </div>
@@ -471,6 +471,7 @@ function RowItem({ row: r, progressText, busy, expanded, onToggle, onSelect }: {
           {r.sent === 'failed' ? (
             <div style={{ fontSize: 'var(--mint-text-nano)', color: 'var(--mint-negative-fg-strong)' }}>Send failed: {r.sendError}</div>
           ) : null}
+          {r.draftNote ? <div style={soft}>{r.draftNote}</div> : null}
           {r.sent === 'ok' && r.sendNote ? <div style={soft}>{r.sendNote}</div> : null}
         </div>
       ) : null}

@@ -1,7 +1,10 @@
 // Insurance Eligibility Confirmation Triage — bridge for Sidekick.
 // Standalone Apps Script project owned by creditcardoperations@ (NOT part of the CC Ops Automation project).
-// Reads the Insurers tab of the CC Ops Automation sheet read-only (INSURERS_SHEET_ID) and logs to the
-// sheet in LOG_SHEET_ID. Both ids, plus ELIG_ALLOWED_USERS, are Script Properties — see README.
+// CC Ops Automation sheet (INSURERS_SHEET_ID): READS the Insurers tab, and WRITES only the "previous records"
+// tab, only columns A–I (one row per drafted request; status flipped to READ_EMAIL on send). Nothing else in that
+// sheet is touched, and a failure there never fails a draft or a send (it comes back as a per-item `warning`).
+// The full 12-column audit row is still logged to the sheet in LOG_SHEET_ID.
+// Both ids, plus ELIG_ALLOWED_USERS, are Script Properties — see README.
 // Deploy as a web app: Execute as = Me, Who has access = Anyone within Wealthsimple.
 // Replies postMessage to window.top (NOT window.parent — GAS's inner wrapper drops them).
 
@@ -9,6 +12,9 @@ var ELIG_LABEL_DRAFTED = 'Sidekick/Drafted';
 var ELIG_LABEL_SENT = 'Sidekick/Sent';
 var ELIG_BODY_CAP = 20000;
 var ELIG_EXTRA_COLS = ['match_method', 'draft_id', 'notes'];
+/** Tab of the CC Ops Automation sheet (INSURERS_SHEET_ID) that gets one row per drafted request. Columns A–I only. */
+var ELIG_PREVIOUS_RECORDS_TAB = 'previous records';
+var ELIG_PREVIOUS_RECORDS_COLS = 9;
 
 function doGet(e) {
   var p = (e && e.parameter) || {};
@@ -107,15 +113,26 @@ function eligSearchCapped_(query, cap) {
   return { threads: out, capped: out.length >= cap };
 }
 
-/** Latest non-draft message of a thread, plus the non-draft count; null when the thread is all drafts. */
+/** Latest non-draft message of a thread, plus the non-draft count and list; null when the thread is all drafts. */
 function eligLatest_(msgs) {
   var real = msgs.filter(function (m) { return !m.isDraft(); });
   if (!real.length) return null;
-  return { m: real[real.length - 1], count: real.length };
+  return { m: real[real.length - 1], count: real.length, real: real };
 }
 
-function eligRequestShape_(t, latest) {
+/**
+ * The panel's view of a thread. Follow-up threads (more than one non-draft message) also carry `originalBody`,
+ * the body of the first insurer message (else the first message), so a terse follow-up can be matched on the
+ * original request; `priorReplyFromUs` says whether the script owner (creditcardoperations@) already replied.
+ */
+function eligRequestShape_(t, latest, insurers, owner) {
   var m = latest.m;
+  var real = latest.real || [m];
+  var originalBody = '';
+  if (real.length > 1) {
+    var first = real.filter(function (x) { return insurers[eligExtractEmail_(x.getFrom())]; })[0] || real[0];
+    originalBody = (first.getPlainBody() || '').substring(0, ELIG_BODY_CAP);
+  }
   return {
     threadId: t.getId(),
     messageId: m.getId(),
@@ -125,6 +142,8 @@ function eligRequestShape_(t, latest) {
     date: m.getDate().toISOString(),
     messageCount: latest.count,
     plainBody: (m.getPlainBody() || '').substring(0, ELIG_BODY_CAP),
+    originalBody: originalBody,
+    priorReplyFromUs: !!owner && real.some(function (x) { return eligExtractEmail_(x.getFrom()) === owner; }),
   };
 }
 
@@ -133,6 +152,7 @@ function eligList_() {
   var insurers = eligLoadInsurers_();
   var insurerAddrs = Object.keys(insurers);
   var props = PropertiesService.getScriptProperties();
+  var owner = String(Session.getEffectiveUser().getEmail() || '').toLowerCase();
   // Domains from the normalised addresses. (loadInsurerDomains_ splits the raw
   // "Name <x@y>" string and yields "y>", so it never matches — don't reuse it.)
   var domains = {};
@@ -160,7 +180,7 @@ function eligList_() {
       if (!latest || !latest.m.isUnread()) return;
       // Threads whose latest sender isn't an insurer are not offered for drafting.
       if (!insurers[eligExtractEmail_(latest.m.getFrom())]) return;
-      out.push(eligRequestShape_(t, latest));
+      out.push(eligRequestShape_(t, latest, insurers, owner));
     });
     timings.insurerScanMs = Date.now() - tIns;
 
@@ -175,7 +195,7 @@ function eligList_() {
       var latest = eligLatest_(drMsgs[i]);
       if (!latest) return;
       if (!insurers[eligExtractEmail_(latest.m.getFrom())]) return;
-      var row = eligRequestShape_(t, latest);
+      var row = eligRequestShape_(t, latest, insurers, owner);
       row.draftId = draftId;
       drafted.push(row);
     });
@@ -277,6 +297,8 @@ function eligCreateAndLog_(items) {
   var insurers = eligLoadInsurers_();
   var sheet = eligOpenLogSheet_();
   var ctx = {};
+  // Opened on the first draft only (log-only batches never touch the CC Ops sheet), once per call.
+  var previous = eligPreviousRecordsOpener_();
 
   var results = items.map(function (item) {
     var out = { messageId: String((item && item.messageId) || ''), ok: false };
@@ -292,6 +314,13 @@ function eligCreateAndLog_(items) {
           out.reused = d.reused;
           row.draft_id = d.draftId;
           row.status = 'DRAFTED';
+          // Straight after the draft, so a later log failure (retried as log-only) can't skip it.
+          // Never fails the item: a problem here is only a warning.
+          try {
+            eligUpsertPreviousRecord_(previous(), row);
+          } catch (prErr) {
+            out.warning = 'previous records not updated: ' + String((prErr && prErr.message) || prErr);
+          }
         }
         eligLogTo_(sheet, row);
         out.ok = true;
@@ -310,6 +339,18 @@ function eligSendDrafts_(draftIds) {
   var drafted = eligLabel_(ELIG_LABEL_DRAFTED);
   var sentLabel = eligLabel_(ELIG_LABEL_SENT);
   var props = PropertiesService.getScriptProperties();
+  var previous = eligPreviousRecordsOpener_();
+
+  /** Flips the "previous records" row to READ_EMAIL. Never changes `result.ok`; a problem is only a warning. */
+  function markPrevious(result, threadId) {
+    try {
+      eligMarkPreviousRecordRead_(previous(), threadId);
+    } catch (err) {
+      var w = 'previous records not updated: ' + String((err && err.message) || err);
+      result.warning = result.warning ? result.warning + '; ' + w : w;
+    }
+    return result;
+  }
 
   var results = draftIds.map(function (id) {
     try {
@@ -340,9 +381,9 @@ function eligSendDrafts_(draftIds) {
       // C1: Delete both ownership properties after successful send (elig_sent_ stays).
       props.deleteProperty('elig_draft_id_' + id);
       props.deleteProperty('elig_draft_thread_' + threadId);
-      return { draftId: id, ok: true };
+      return markPrevious({ draftId: id, ok: true }, threadId);
     } catch (err) {
-      return { draftId: id, ok: true, warning: 'Sent, but tidy-up failed: ' + String((err && err.message) || err) };
+      return markPrevious({ draftId: id, ok: true, warning: 'Sent, but tidy-up failed: ' + String((err && err.message) || err) }, threadId);
     }
   });
   return { action: 'eligibilityDraftsSent', results: results };
@@ -424,6 +465,73 @@ function eligLogTo_(sheet, row) {
   // I4: Set number format to text.
   targetRange.setNumberFormat('@').setValues(values);
   return { action: 'eligibilityResultLogged', rowNumber: insertRow };
+}
+
+// ---- CC Ops Automation "previous records" tab (columns A–I only) ----
+
+/**
+ * Returns a function that opens the "previous records" tab on its first call and returns the same sheet
+ * (or rethrows the same error) on every later call, so a batch opens the spreadsheet at most once.
+ */
+function eligPreviousRecordsOpener_() {
+  var state = null;
+  return function () {
+    if (!state) {
+      try {
+        var tab = SpreadsheetApp.openById(eligConfig_().insurersSheetId).getSheetByName(ELIG_PREVIOUS_RECORDS_TAB);
+        if (!tab) throw new Error('"' + ELIG_PREVIOUS_RECORDS_TAB + '" tab not found in the sheet in INSURERS_SHEET_ID');
+        state = { sheet: tab };
+      } catch (err) {
+        state = { error: err };
+      }
+    }
+    if (state.error) throw state.error;
+    return state.sheet;
+  };
+}
+
+/**
+ * Upserts a DRAFTED row into "previous records", keyed on column A (request_message_id). Writes A:I only: a new
+ * row goes below the last row; an existing row is overwritten in A:I. Only the last4 cell (F) is set to plain
+ * text (so "0123" keeps its zero); other cells keep their format. The caller holds the script lock.
+ */
+function eligUpsertPreviousRecord_(sheet, row) {
+  var values = [[
+    row.request_message_id, row.thread_id, row.insurer_email, row.client_email, 'DRAFTED',
+    row.last4, row.is_delinquent, row.activation_date, row.card_product,
+  ]];
+  var id = String(row.request_message_id || '');
+  if (!id) throw new Error('request_message_id is required');
+
+  var last = sheet.getLastRow();
+  var target = 0;
+  if (last >= 2) {
+    var ids = sheet.getRange(2, 1, last - 1, 1).getValues();
+    for (var i = 0; i < ids.length; i++) {
+      if (String(ids[i][0]) === id) { target = i + 2; break; }
+    }
+  }
+  if (!target) {
+    target = Math.max(last + 1, 2);
+    if (target > sheet.getMaxRows()) sheet.insertRowsAfter(sheet.getMaxRows(), target - sheet.getMaxRows());
+  }
+  sheet.getRange(target, 6).setNumberFormat('@');
+  sheet.getRange(target, 1, 1, ELIG_PREVIOUS_RECORDS_COLS).setValues(values);
+  return target;
+}
+
+/** Sets column E (status) to READ_EMAIL on the newest "previous records" row whose column B is `threadId`. */
+function eligMarkPreviousRecordRead_(sheet, threadId) {
+  if (!threadId) throw new Error('no thread id for this draft');
+  var last = sheet.getLastRow();
+  var threads = last >= 2 ? sheet.getRange(2, 2, last - 1, 1).getValues() : [];
+  for (var i = threads.length - 1; i >= 0; i--) {
+    if (String(threads[i][0]) === String(threadId)) {
+      sheet.getRange(i + 2, 5).setValue('READ_EMAIL');
+      return i + 2;
+    }
+  }
+  throw new Error('no row for thread ' + threadId);
 }
 
 // ---- Editor test helpers (Run ▸ from the editor; read the Execution log) ----

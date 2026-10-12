@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isDraftable, noMatch, preflight, resolveFromI2c, resolveFromWarehouse } from './eligibilityResolve';
+import { isDraftable, multipleCandidates, noMatch, preflight, resolveFromI2c, resolveFromWarehouse, withFollowUp } from './eligibilityResolve';
 import type { EligibilityRequest, WarehouseRow } from './eligibilityTypes';
 
 function req(over: Partial<EligibilityRequest> = {}): EligibilityRequest {
@@ -20,8 +20,8 @@ function row(over: Partial<WarehouseRow> = {}): WarehouseRow {
 }
 
 describe('preflight', () => {
-  it('stops already-replied threads', () => {
-    expect(preflight(req({ messageCount: 2 }))?.flags).toEqual(['already_replied']);
+  it('lets follow-up threads through to the lookups', () => {
+    expect(preflight(req({ messageCount: 2 }))).toBeNull();
   });
   it('lets a request without last4 through when it has a phone and a name (Atlas phone path)', () => {
     expect(preflight(req({ last4: null }))).toBeNull();
@@ -167,5 +167,37 @@ describe('noMatch', () => {
     const r = noMatch(req(), 'Nothing found');
     expect(r.status).toBe('no_match');
     expect(r.cards).toEqual([]);
+  });
+});
+
+describe('withFollowUp', () => {
+  const matchedRes = () => resolveFromWarehouse(req(), [row()])!;
+
+  it('leaves single-message threads alone', () => {
+    const r = matchedRes();
+    expect(withFollowUp(req(), r)).toEqual(r);
+  });
+
+  it('marks a matched follow-up for review but keeps it draftable (Reply anyway)', () => {
+    const r = withFollowUp(req({ messageCount: 2 }), matchedRes());
+    expect(r.status).toBe('needs_review');
+    expect(r.flags).toEqual(['already_replied']);
+    expect(r.note).toBe('Warehouse: email + last 4. Follow-up thread.');
+    expect(isDraftable(r)).toBe(true);
+  });
+
+  it('says when creditcardoperations@ already replied', () => {
+    const r = withFollowUp(req({ messageCount: 3, priorReplyFromUs: true }), matchedRes());
+    expect(r.note).toBe('Warehouse: email + last 4. Follow-up thread — creditcardoperations@ has already replied in this thread.');
+  });
+
+  it('keeps other flags, and a non-tickable one still blocks drafting', () => {
+    const several = multipleCandidates(req(), [], '2 clients match on email + last 4.');
+    const r = withFollowUp(req({ messageCount: 2 }), several);
+    expect(r.flags).toEqual(['multiple_candidates', 'already_replied']);
+    expect(isDraftable(r)).toBe(false);
+    const nm = withFollowUp(req({ messageCount: 2 }), noMatch(req(), 'No client matched.'));
+    expect(nm.status).toBe('needs_review');
+    expect(nm.flags).toEqual(['already_replied']);
   });
 });

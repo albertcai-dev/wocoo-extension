@@ -241,11 +241,32 @@ describe('resolveBatch', () => {
     });
   });
 
-  it('never looks anything up for already-replied or no-last4 requests', async () => {
+  it('never looks anything up for no-last4 requests without a phone, follow-up or not', async () => {
     const d = deps();
-    const rs = await resolveBatch([req('m1', { messageCount: 3 }), req('m2', { last4: null, phone: null })], d);
-    expect(rs.map((r) => r.flags[0])).toEqual(['already_replied', 'no_last4']);
+    const rs = await resolveBatch([req('m1', { messageCount: 3, last4: null, phone: null }), req('m2', { last4: null, phone: null })], d);
+    expect(rs.map((r) => r.flags)).toEqual([['no_last4', 'already_replied'], ['no_last4']]);
     expect(d.calls).toEqual([]);
+  });
+
+  it('resolves a follow-up thread, then flags it already_replied (draftable only once ticked)', async () => {
+    const d = deps({ runSql: async () => [whRow('m1')] });
+    const [r] = await resolveBatch([req('m1', { messageCount: 2, priorReplyFromUs: true })], d);
+    expect(r.method).toBe('email_last4');
+    expect(r.status).toBe('needs_review');
+    expect(r.flags).toEqual(['already_replied']);
+    expect(r.note).toContain('Follow-up thread — creditcardoperations@ has already replied in this thread');
+    expect(isDraftable(r)).toBe(true);
+  });
+
+  it('flags a live-matched follow-up after the warehouse follow-up and name-variant handling', async () => {
+    const d = deps({
+      atlasByPhone: async () => [{ identityId: 'identity-P', fullName: 'Priyaa Ramanathan', firstName: 'Priyaa', lastName: 'Ramanathan', email: 'p@example.com' }],
+      i2cCards: async (email) => (email === 'p@example.com' ? i2cOpen : []),
+    });
+    const [r] = await resolveBatch([req('m1', { messageCount: 2, emails: [] })], d);
+    expect(r.method).toBe('atlas_phone_i2c');
+    expect(r.flags).toEqual(['name_variant', 'already_replied']);
+    expect(isDraftable(r)).toBe(true);
   });
 
   describe('no card last 4: Atlas phone + name instead', () => {

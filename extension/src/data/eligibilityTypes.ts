@@ -15,6 +15,13 @@ export interface RawEligibilityEmail {
   /** Messages in the thread; > 1 means someone already replied. */
   messageCount: number;
   plainBody: string;
+  /**
+   * Follow-up threads only: the plain body of the thread's first insurer message (the original
+   * request); '' or absent for a single-message thread.
+   */
+  originalBody?: string;
+  /** A non-draft message in the thread was sent by the bridge owner (creditcardoperations@). */
+  priorReplyFromUs?: boolean;
 }
 
 export interface PersonName {
@@ -42,6 +49,8 @@ export interface EligibilityRequest {
   claimNumber: string | null;
   dateOfLoss: string | null;
   warnings: string[];
+  /** Follow-up thread in which creditcardoperations@ already replied. Absent when not known to be true. */
+  priorReplyFromUs?: boolean;
 }
 
 export interface CardFact {

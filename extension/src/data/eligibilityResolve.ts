@@ -9,8 +9,11 @@ export const REVIEW_FREE_PRODUCTS = [
   'ws_visa_infinite_privilege', 'ws_visa_infinite_plus', 'ws_visa_infinite_basic', 'ws_visa_infinite_core',
 ] as const;
 
-/** Flags that are acceptable for drafting. Others (parse_warning, unknown_product, etc.) block drafting. */
-const TICKABLE_FLAGS: readonly EligibilityFlag[] = ['delinquent', 'vi_1pct', 'name_variant', 'no_last4'];
+/**
+ * Flags that are acceptable for drafting once the user ticks the row (needs_review is never pre-ticked).
+ * Others (parse_warning, unknown_product, etc.) block drafting.
+ */
+const TICKABLE_FLAGS: readonly EligibilityFlag[] = ['delinquent', 'vi_1pct', 'name_variant', 'no_last4', 'already_replied'];
 
 /** The i2c card shape this module needs (I2cCard from i2cCardLookup.ts satisfies it). */
 export interface I2cCardInput {
@@ -38,10 +41,27 @@ export function multipleCandidates(req: EligibilityRequest, candidates: Candidat
 }
 
 export function preflight(req: EligibilityRequest): Resolution | null {
-  if (req.messageCount > 1) return noMatch(req, 'Thread already has a reply.', ['already_replied']);
+  // Follow-up threads are resolved like any other request; withFollowUp flags them afterwards.
   // Without a last 4, only the Atlas phone + name path can identify the client.
   if (!req.last4 && !(req.phone && req.cardholderName)) return noLast4(req);
   return null;
+}
+
+/**
+ * Applied to every final Resolution: a thread with more than one message is a follow-up, so it is
+ * flagged already_replied for review (the user may still tick "Reply anyway"). Other flags are kept.
+ */
+export function withFollowUp(req: EligibilityRequest, res: Resolution): Resolution {
+  if (req.messageCount <= 1) return res;
+  const why = req.priorReplyFromUs
+    ? 'Follow-up thread — creditcardoperations@ has already replied in this thread.'
+    : 'Follow-up thread.';
+  return {
+    ...res,
+    status: 'needs_review',
+    flags: [...new Set<EligibilityFlag>([...res.flags, 'already_replied'])],
+    note: `${res.note} ${why}`.trim(),
+  };
 }
 
 export function noLast4(req: EligibilityRequest): Resolution {

@@ -16,6 +16,7 @@ describe('defaultSelected', () => {
     expect(defaultSelected(base)).toBe(true);
     expect(defaultSelected({ ...base, status: 'needs_review', flags: ['vi_1pct'] })).toBe(false);
     expect(defaultSelected({ ...base, status: 'no_match', method: null, cards: [] })).toBe(false);
+    expect(defaultSelected({ ...base, status: 'needs_review', flags: ['already_replied'] })).toBe(false);
   });
 });
 
@@ -23,6 +24,7 @@ describe('nextLogStatus', () => {
   it('maps outcomes to Requests statuses', () => {
     expect(nextLogStatus(base, true)).toBe('DRAFTED');
     expect(nextLogStatus({ ...base, status: 'needs_review', flags: ['already_replied'] }, false)).toBe('ALREADY_HAS_ONE_REPLY');
+    expect(nextLogStatus({ ...base, status: 'needs_review', flags: ['already_replied'] }, true)).toBe('DRAFTED');
     expect(nextLogStatus({ ...base, status: 'needs_review', flags: ['delinquent'] }, false)).toBe('NEEDS_REVIEW');
     expect(nextLogStatus({ ...base, status: 'needs_review', flags: ['delinquent'] }, true)).toBe('DRAFTED');
     expect(nextLogStatus({ ...base, status: 'no_match', method: null, cards: [] }, false)).toBe('NO_MATCH');
