@@ -33,4 +33,11 @@ describe('toLogRow', () => {
     expect(row.is_delinquent).toBe('');
     expect(row.notes).toBe('Nothing found. Claim 123456.');
   });
+
+  it('appends parse warnings so the sheet shows why a row was blocked', () => {
+    const warned = { ...req, warnings: ['Multiple last-4 values found: 1763, 4242', "Follow-up has no card last 4; not borrowing the original email's"] };
+    expect(toLogRow(warned, { ...res, flags: ['parse_warning'] }, 'NEEDS_REVIEW', '').notes).toBe(
+      "Warehouse: name + last 4. Flags: parse_warning. Warnings: Multiple last-4 values found: 1763, 4242; Follow-up has no card last 4; not borrowing the original email's. Claim 123456.",
+    );
+  });
 });

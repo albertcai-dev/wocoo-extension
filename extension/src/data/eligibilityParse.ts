@@ -87,16 +87,24 @@ export function parseEligibilityThread(raw: RawEligibilityEmail, excludedDomains
   if (latest.cardholderName && original.cardholderName && nameDiffers) {
     warnings.push(`Follow-up and original email name different cardholders: ${latest.cardholderName.raw}, ${original.cardholderName.raw}`);
   }
-  const ownIdentity = nameDiffers
-    || latest.emails.some((e) => !original.emails.includes(e))
-    || (!!latest.phone && latest.phone !== original.phone);
+  // Emails and phones count as the follow-up's own only when the original body never mentions them
+  // anywhere (an adjuster's signature phone or address usually appears in both messages).
+  const originalBody = raw.originalBody ?? '';
+  const originalEmails = new Set((originalBody.match(EMAIL_RE) ?? []).map((e) => e.toLowerCase()));
+  const originalPhones = new Set(
+    [...originalBody.matchAll(new RegExp(PHONE_RE.source, 'g'))].map((m) => normalizePhone(m[0])).filter(Boolean),
+  );
+  const newPhone = !!latest.phone && !originalPhones.has(latest.phone);
+  const ownIdentity = nameDiffers || latest.emails.some((e) => !originalEmails.has(e)) || newPhone;
   const borrowLast4 = !(ownIdentity && !latest.last4 && original.last4);
   if (!borrowLast4) warnings.push("Follow-up has no card last 4; not borrowing the original email's");
   return {
     ...latest,
-    cardholderName: latest.cardholderName ?? original.cardholderName,
+    // With its own identity signal the follow-up may be about someone else: borrow no name either.
+    cardholderName: latest.cardholderName ?? (ownIdentity ? null : original.cardholderName),
     emails: [...new Set([...latest.emails, ...original.emails])],
-    phone: latest.phone ?? original.phone,
+    // A phone the original already had (e.g. the signature) is not the client's: prefer the original's.
+    phone: newPhone ? latest.phone : original.phone ?? latest.phone,
     last4: latest.last4 ?? (borrowLast4 ? original.last4 : null),
     claimNumber: latest.claimNumber ?? original.claimNumber,
     dateOfLoss: latest.dateOfLoss ?? original.dateOfLoss,

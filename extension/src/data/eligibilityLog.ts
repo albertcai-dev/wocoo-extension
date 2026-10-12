@@ -16,6 +16,7 @@ export function toLogRow(req: EligibilityRequest, res: Resolution, status: LogSt
   const notes = [
     res.note,
     res.flags.length ? `Flags: ${res.flags.join(', ')}.` : '',
+    req.warnings?.length ? `Warnings: ${req.warnings.join('; ')}.` : '',
     req.claimNumber ? `Claim ${req.claimNumber}.` : '',
   ].filter(Boolean).join(' ');
   return {

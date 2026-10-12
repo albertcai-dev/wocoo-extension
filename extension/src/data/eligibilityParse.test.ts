@@ -327,10 +327,31 @@ Jane Adjuster
     expect(r.warnings).toEqual(["Follow-up has no card last 4; not borrowing the original email's"]);
   });
 
-  it("does not borrow the original's last 4 when the follow-up brings its own phone but no last 4", () => {
+  it("does not borrow the original's last 4 (or name) when the follow-up brings a new client phone but no last 4", () => {
     const r = parseEligibilityThread(raw({ messageCount: 2, plainBody: 'Phone: 647-555-0199\n', originalBody: LABELLED }), EXCLUDED);
     expect(r.last4).toBeNull();
+    expect(r.cardholderName).toBeNull();
+    expect(r.phone).toBe('6475550199');
     expect(r.warnings).toContain("Follow-up has no card last 4; not borrowing the original email's");
+  });
+
+  it("an adjuster's signature phone that also appears in the original is not the follow-up's own identity", () => {
+    const original = LABELLED + 'Toll free: 1-800-555-0100\n';
+    const latest = 'Hi team, just following up on the below.\n\nJane Adjuster\nPhone: 1-800-555-0100\n';
+    const r = parseEligibilityThread(raw({ messageCount: 2, plainBody: latest, originalBody: original }), EXCLUDED);
+    expect(r.last4).toBe('1763');
+    expect(r.cardholderName?.raw).toBe('Priya Ramanathan');
+    // The client's phone from the original, not the adjuster's.
+    expect(r.phone).toBe('4165550142');
+    expect(r.warnings).toEqual([]);
+  });
+
+  it('an email the original body mentions anywhere (even in its signature) is not new identity', () => {
+    const original = LABELLED + 'Reply to: claims.desk@adjusting-partner.example\n';
+    const latest = 'Following up — cc claims.desk@adjusting-partner.example\n';
+    const r = parseEligibilityThread(raw({ messageCount: 2, plainBody: latest, originalBody: original }), EXCLUDED);
+    expect(r.last4).toBe('1763');
+    expect(r.warnings).toEqual([]);
   });
 
   it('warns when the follow-up names a different cardholder (and borrows no last 4)', () => {

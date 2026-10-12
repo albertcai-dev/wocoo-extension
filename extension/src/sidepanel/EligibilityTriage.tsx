@@ -461,6 +461,11 @@ function RowItem({ row: r, progressText, busy, expanded, onToggle, onSelect }: {
               {res.method ? `Matched: ${res.method}` : 'Not matched'} — {res.note}
             </div>
           ) : null}
+          {r.req.warnings?.length ? (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, fontSize: 'var(--mint-text-nano)' }}>
+              {r.req.warnings.map((w, k) => <Pill key={k} label={`⚠ ${w}`} tone="warning" wrap />)}
+            </div>
+          ) : null}
           {res && res.flags.length > 0 ? (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, fontSize: 'var(--mint-text-nano)' }}>
               {res.flags.map((f) => <Pill key={f} label={`⚠ ${flagText(f, r.req)}`} tone="warning" wrap />)}
