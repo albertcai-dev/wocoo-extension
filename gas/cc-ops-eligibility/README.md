@@ -50,12 +50,15 @@ A sender counts as an insurer when either:
 Generic and internal domains never become insurer domains, even when a listed address (or
 `ELIG_EXTRA_INSURER_DOMAINS`) uses one: `wealthsimple.com, gmail.com, googlemail.com, google.com, okta.com,
 outlook.com, hotmail.com, live.com, msn.com, yahoo.com, yahoo.ca, icloud.com, me.com, aol.com, protonmail.com,
-proton.me`, plus anything in `ELIG_EXCLUDED_DOMAINS`. A listed address on one of those domains still matches as
-**listed**.
+proton.me`, plus anything in `ELIG_EXCLUDED_DOMAINS` — **and their subdomains** (so `docs.google.com`,
+`wealthsimple.okta.com` and `mail.wealthsimple.com` never count either). A listed address on one of those domains
+still matches as **listed**. Domain matching itself is exact: `@us.crawco.ca` is not covered by `crawco.ca`.
 
-Fetch searches for every listed address and every insurer domain (`from:` matches a bare domain), and the
-"unknown sender" count leaves both out. When there are too many for one Gmail query (over ~1,500 characters) the
-search is split into several and the results are merged. Each request carries `senderMatch` (`listed` / `domain`);
+Fetch searches for every insurer domain (`from:` matches a bare domain) plus each listed address not already covered
+by one, and the "unknown sender" count leaves those out. A thread the search returns whose latest unread sender
+doesn't match after all (a subdomain or look-alike that Gmail's `from:` caught) is added to the unknown-sender count
+rather than dropped. When there are too many for one Gmail query (over ~1,500 characters) the search is split into
+several and the results are merged. Each request carries `senderMatch` (`listed` / `domain`);
 the panel lists the domain-only senders so they can be added to the Insurers tab (the old CC Ops process only knows
 listed addresses). "Create drafts" accepts both and still refuses any other sender. Addresses on insurer domains
 (and `wealthsimple.com`) are never taken as the client's email.
