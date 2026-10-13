@@ -34,6 +34,7 @@ import {
 } from '../api/jira';
 import type { ReimbApproverKey } from '../api/jira';
 import { fetchAtlasAccountIdHeadless } from '../data/atlasAccountLookup';
+import { needsWNumberLookup } from '../data/reimbConfig';
 import { stagePresetIdentity as stageIdentityForPreset } from '../data/presetIdentity';
 
 const TRANSITION_TO_DONE_ID = '251';
@@ -194,6 +195,10 @@ export function OverpaymentTriage({ ticket, onClose, onTicketUpdate }: { ticket:
   const effectiveTier: WocooTicket['tier'] = state.tierOverride || ticket.tier;
   const effectiveAccountId = (state.accountIdOverride || ticket.accountId || '').trim().toUpperCase();
   const accountIdValid = /^[CHWN][0-9A-Z]{7,}$/i.test(effectiveAccountId);
+  // A C# is structurally valid but is the credit-card account; a REIMB must name the
+  // W# (chequing/SPEND). Kept separate from accountIdValid so the inline "invalid"
+  // badge doesn't start claiming a well-formed C# is malformed.
+  const needsWLookup = needsWNumberLookup(effectiveAccountId);
   const meetsMinimum = !!state.amount && state.amount >= 1000;
   const fmtAmt = state.amount != null ? `$${state.amount.toFixed(2)}` : '—';
   const overFraudThreshold = !!state.amount && state.amount > FRAUD_AMOUNT_THRESHOLD;
@@ -265,6 +270,20 @@ export function OverpaymentTriage({ ticket, onClose, onTicketUpdate }: { ticket:
     }
   }
 
+  // On reaching the REIMB step with a C-prefixed account, fetch the W# without being
+  // asked. The attempt is recorded per ticket+account because a failed lookup leaves the
+  // C# in place, so the condition below stays true — without the ref this would reopen a
+  // background Atlas tab on every render. Changing the value via Override yields a new
+  // key and so earns a fresh attempt.
+  const wLookupAttempted = useRef<string | null>(null);
+  useEffect(() => {
+    if (state.step !== 3 || !needsWLookup || accountIdFetchPending || !ticket.identityId) return;
+    const key = `${ticket.id}::${effectiveAccountId}`;
+    if (wLookupAttempted.current === key) return;
+    wLookupAttempted.current = key;
+    void fetchAccountIdFromAtlas();
+  }, [state.step, needsWLookup, accountIdFetchPending, ticket.id, ticket.identityId, effectiveAccountId]);
+
   function toggleAccountIdEdit(open: boolean) {
     // When opening: seed the staged input with the current override so the user can edit
     // an existing value rather than start from blank. When closing without applying: don't
@@ -285,6 +304,10 @@ export function OverpaymentTriage({ ticket, onClose, onTicketUpdate }: { ticket:
   async function doCreateReimb() {
     if (!ticket.identityId) { setS({ error: 'Source ticket is missing Identity ID.' }); return; }
     if (!accountIdValid) { setS({ error: 'Account ID is missing or invalid. Use the override.' }); return; }
+    if (needsWLookup) {
+      setS({ error: `${effectiveAccountId} is a credit-card account. The W# lookup did not complete — enter the W# via Override.` });
+      return;
+    }
     if (!state.amount || state.amount <= 0) { setS({ error: 'Amount is not set.' }); return; }
     setS({ busy: true, error: null });
     try {
@@ -526,6 +549,7 @@ export function OverpaymentTriage({ ticket, onClose, onTicketUpdate }: { ticket:
           effectiveTier={effectiveTier}
           effectiveAccountId={effectiveAccountId}
           accountIdValid={accountIdValid}
+          needsWLookup={needsWLookup}
           approverKey={approverKey}
           approverName={approver.name}
           amountEditOpen={state.amountEditOpen}
@@ -1144,6 +1168,7 @@ function Step4Body(props: {
   effectiveTier: WocooTicket['tier'];
   effectiveAccountId: string;
   accountIdValid: boolean;
+  needsWLookup: boolean;
   approverKey: ReimbApproverKey;
   approverName: string;
   amountEditOpen: boolean;
@@ -1172,6 +1197,10 @@ function Step4Body(props: {
   onCreate: () => void;
 }) {
   const summary = `Credit card overpayment reimbursement for ${props.ticket.id}`;
+  // A C-prefixed account ID blocks creation outright: the W# lookup is either still
+  // running or it failed, and filing a REIMB against the credit-card account is the
+  // mistake this guard exists to prevent. Override remains available to unblock it.
+  const createBlocked = props.busy || !props.accountIdValid || props.needsWLookup || props.accountIdFetchPending;
   return (
     <div style={{ background: 'var(--mint-bg-subtle)', border: 'var(--mint-card-stroke)', borderRadius: 'var(--mint-radius-card)', padding: 'var(--mint-sp-3)' }}>
       <div style={{ fontSize: 'var(--mint-text-nano)', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--mint-fg-soft)', fontWeight: 700, marginBottom: 6 }}>Summary</div>
@@ -1248,6 +1277,11 @@ function Step4Body(props: {
                 {!props.accountIdValid && props.effectiveAccountId ? (
                   <span style={{ color: 'var(--mint-negative-fg-strong)', fontSize: 'var(--mint-text-nano)', marginLeft: 6, fontFamily: 'var(--mint-font-family)' }}>invalid</span>
                 ) : null}
+                {props.needsWLookup && props.accountIdFetchPending ? (
+                  <span style={{ color: 'var(--mint-fg-subdued-title)', fontSize: 'var(--mint-text-nano)', marginLeft: 6, fontFamily: 'var(--mint-font-family)' }}>fetching W# from Atlas…</span>
+                ) : props.needsWLookup ? (
+                  <span style={{ color: 'var(--mint-negative-fg-strong)', fontSize: 'var(--mint-text-nano)', marginLeft: 6, fontFamily: 'var(--mint-font-family)' }}>credit-card account — W# required</span>
+                ) : null}
               </FieldRow>
               {inputOpen ? (
                 <InlineEditCard label={accountIdMissing ? "Account ID missing — enter manually" : 'Override account ID'}>
@@ -1301,8 +1335,8 @@ function Step4Body(props: {
 
       {props.showActionButton && !props.alreadyCreated ? (
         <div style={{ marginTop: 'var(--mint-sp-3)' }}>
-          <button onClick={props.onCreate} disabled={props.busy || !props.accountIdValid} style={{ ...primaryButton, background: 'var(--mint-positive-fg-graphic)', width: '100%', opacity: (props.busy || !props.accountIdValid) ? 0.6 : 1, cursor: (props.busy || !props.accountIdValid) ? 'not-allowed' : 'pointer' }}>
-            {props.busy ? 'Creating…' : '✓ Create REIMB ticket'}
+          <button onClick={props.onCreate} disabled={createBlocked} style={{ ...primaryButton, background: 'var(--mint-positive-fg-graphic)', width: '100%', opacity: createBlocked ? 0.6 : 1, cursor: createBlocked ? 'not-allowed' : 'pointer' }}>
+            {props.busy ? 'Creating…' : props.needsWLookup && props.accountIdFetchPending ? 'Fetching W#…' : '✓ Create REIMB ticket'}
           </button>
         </div>
       ) : null}

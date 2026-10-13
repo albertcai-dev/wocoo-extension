@@ -5,7 +5,7 @@
 // retry a few times anyway in case the form is replaced after first paint.
 
 import { gridFromRows, pageSaysNoRecord, readColumnForLast4, readLabelValue, readProgramForLast4 } from '../data/i2cCardDetailsParse';
-import { pickCreditProduct, type ProductRow } from '../data/i2cProductSelect';
+import { locateProductColumns, pickCreditProduct, type ProductRow } from '../data/i2cProductSelect';
 import { isSignInLabel } from '../data/i2cLogin';
 
 export {}; // Module-scoped so helpers don't collide with other content scripts at the TS layer.
@@ -334,23 +334,26 @@ async function tryProductSearchSelect(): Promise<boolean> {
   const tables = Array.from(document.querySelectorAll('table'));
   for (const table of tables) {
     if (table.querySelector('table')) continue;
-    const headerCells = Array.from(table.querySelectorAll<HTMLTableCellElement>('tr:first-child th, tr:first-child td'))
-      .map((c) => (c.textContent || '').replace(/\s+/g, ' ').trim());
-    const categoryAt = headerCells.findIndex((h) => /^Program\s*Category$/i.test(h));
-    const statusAt = headerCells.findIndex((h) => /^Status$/i.test(h));
-    if (categoryAt === -1 || statusAt === -1) continue;
 
-    const bodyRows = Array.from(table.querySelectorAll('tr')).slice(1)
-      .filter((tr) => tr.querySelectorAll('td').length > Math.max(categoryAt, statusAt));
-    if (!bodyRows.length) continue;
+    const rowEls = Array.from(table.querySelectorAll('tr'));
+    const rowCells = rowEls.map((tr) =>
+      Array.from(tr.querySelectorAll<HTMLTableCellElement>('th, td')).map((c) => c.textContent || ''));
 
-    const rows: ProductRow[] = bodyRows.map((tr) => {
-      const cells = Array.from(tr.querySelectorAll<HTMLTableCellElement>('td'));
-      return {
-        category: (cells[categoryAt]?.textContent || '').replace(/\s+/g, ' ').trim(),
-        status: (cells[statusAt]?.textContent || '').replace(/\s+/g, ' ').trim(),
-      };
-    });
+    // The header is searched for, not assumed: i2c puts a "Product Information" /
+    // "Customer Information" grouping row above it.
+    const cols = locateProductColumns(rowCells);
+    if (!cols) continue;
+
+    const dataIdx = rowEls
+      .map((_, i) => i)
+      .filter((i) => i > cols.headerAt
+        && rowCells[i].length > Math.max(cols.categoryAt, cols.statusAt));
+    if (!dataIdx.length) continue;
+
+    const rows: ProductRow[] = dataIdx.map((i) => ({
+      category: (rowCells[i][cols.categoryAt] || '').replace(/\s+/g, ' ').trim(),
+      status: (rowCells[i][cols.statusAt] || '').replace(/\s+/g, ' ').trim(),
+    }));
 
     const pick = pickCreditProduct(rows);
     if (pick === null) {
@@ -359,8 +362,11 @@ async function tryProductSearchSelect(): Promise<boolean> {
       return true;
     }
 
-    const link = Array.from(bodyRows[pick].querySelectorAll<HTMLElement>('a, button'))
-      .find((el) => /^Select\s+Customer$/i.test((el.textContent || '').replace(/\s+/g, ' ').trim()) && isVisible(el));
+    const row = rowEls[dataIdx[pick]];
+    const link = Array.from(row.querySelectorAll<HTMLElement>('a, button, input[type="button"]'))
+      .find((el) => /^Select\s+Customer$/i.test(
+        ((el as HTMLInputElement).value || el.textContent || '').replace(/\s+/g, ' ').trim(),
+      ) && isVisible(el));
     if (!link) {
       log('  \u2192 product search: credit row found but no Select Customer link in it');
       return false;

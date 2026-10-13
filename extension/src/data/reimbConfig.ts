@@ -73,3 +73,18 @@ export function defaultApproverKey(amount: number | null): 'luke' | 'amanda' {
 export function buildDescriptionTemplate(identityId: string, amount: number, sourceUrl: string): string {
   return `Hi team, can we please reimburse this client (${identityId}) for $${amount.toFixed(2)}? Reference ticket: \n\n${sourceUrl}  `;
 }
+
+/**
+ * Does this account ID need replacing with the client's W# before a REIMB is filed?
+ *
+ * A `C`-prefixed value is the credit-card account; a REIMB has to name the chequing
+ * (SPEND) account, which is `W`-prefixed. Atlas's headless lookup returns exactly that,
+ * so Overpayment Triage fetches it automatically on reaching the REIMB step.
+ *
+ * Deliberately separate from `accountIdValid`'s structural regex in OverpaymentTriage:
+ * a C# is a well-formed account ID, it is just the wrong one here. Folding this into
+ * that regex would make its "missing or invalid" message untrue for C-prefixed IDs.
+ */
+export function needsWNumberLookup(accountId: string): boolean {
+  return (accountId || '').trim().toUpperCase().startsWith('C');
+}
