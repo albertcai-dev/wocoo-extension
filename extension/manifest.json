@@ -36,6 +36,11 @@
       "run_at": "document_idle"
     },
     {
+      "matches": ["https://wealthsimpleadmin.mycardplace.com/*"],
+      "js": ["src/content/i2cAdmin.ts"],
+      "run_at": "document_idle"
+    },
+    {
       "matches": ["https://*.preset.io/*"],
       "js": ["src/content/preset.ts"],
       "run_at": "document_idle"
@@ -81,6 +86,7 @@
     "https://auth.atlassian.com/*",
     "https://api.atlassian.com/*",
     "https://wealthsimplecs.mycardplace.com/*",
+    "https://wealthsimpleadmin.mycardplace.com/*",
     "https://*.preset.io/*",
     "https://admin.koho.ca/*",
     "https://ledge-spa.cac1.pro1.production.w10e.com/*",

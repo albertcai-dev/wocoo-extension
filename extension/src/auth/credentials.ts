@@ -30,6 +30,27 @@ export async function clearI2cCredentials(): Promise<void> {
   await chrome.storage.local.remove(I2C_KEY);
 }
 
+// ============ i2c admin portal (wealthsimpleadmin.mycardplace.com) ============
+// A separate login from the Call Center one above, read by content/i2cAdmin.ts.
+
+const I2C_ADMIN_KEY = 'i2c_admin_credentials';
+
+export async function getI2cAdminCredentials(): Promise<I2cCredentials | null> {
+  const res = await chrome.storage.local.get(I2C_ADMIN_KEY);
+  const v = res[I2C_ADMIN_KEY];
+  if (!v || typeof v !== 'object') return null;
+  if (!v.username || !v.password) return null;
+  return { username: String(v.username), password: String(v.password), autoSubmit: !!v.autoSubmit };
+}
+
+export async function setI2cAdminCredentials(creds: I2cCredentials): Promise<void> {
+  await chrome.storage.local.set({ [I2C_ADMIN_KEY]: creds });
+}
+
+export async function clearI2cAdminCredentials(): Promise<void> {
+  await chrome.storage.local.remove(I2C_ADMIN_KEY);
+}
+
 // ============ LLM Gateway developer key ============
 // Same trust model as the i2c credentials above: chrome.storage.local is scoped to this
 // extension. The key is a personal LiteLLM developer key, not a shared secret.
