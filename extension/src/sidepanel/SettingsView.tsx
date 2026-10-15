@@ -1,8 +1,10 @@
 // Settings view — full page reached by clicking the ⚙ button in any header.
-// Houses Sign Out, credential storage (i2c today), and a placeholder for more.
+// Houses Sign Out, credential storage (i2c CS + admin, LLM Gateway), and a placeholder for more.
 
 import { useEffect, useState } from 'react';
 import { clearI2cCredentials, getI2cCredentials, setI2cCredentials,
+  clearI2cAdminCredentials, getI2cAdminCredentials, setI2cAdminCredentials,
+  type I2cCredentials,
   clearLlmGatewayKey, getLlmGatewayKey, setLlmGatewayKey } from '../auth/credentials';
 import { pingLlmGateway } from '../api/llmGateway';
 
@@ -55,7 +57,22 @@ export function SettingsView({ onBack, onSignOut }: { onBack: () => void; onSign
       </Section>
 
       <Section title="Credentials">
-        <I2cCredentialsRow />
+        <I2cCredentialsRow
+          title="i2c (MCP Call Center)"
+          placeholder="e.g. cs000acai"
+          pageName="i2c login page"
+          load={getI2cCredentials}
+          save={setI2cCredentials}
+          clear={clearI2cCredentials}
+        />
+        <I2cCredentialsRow
+          title="i2c Admin (wealthsimpleadmin)"
+          placeholder="Admin portal user ID"
+          pageName="i2c admin login page"
+          load={getI2cAdminCredentials}
+          save={setI2cAdminCredentials}
+          clear={clearI2cAdminCredentials}
+        />
         <LlmGatewayRow />
       </Section>
 
@@ -66,7 +83,15 @@ export function SettingsView({ onBack, onSignOut }: { onBack: () => void; onSign
   );
 }
 
-function I2cCredentialsRow() {
+// One card per i2c portal; each portal keeps its own login under its own storage key.
+function I2cCredentialsRow({ title, placeholder, pageName, load, save: saveCreds, clear: clearCreds }: {
+  title: string;
+  placeholder: string;
+  pageName: string;
+  load: () => Promise<I2cCredentials | null>;
+  save: (creds: I2cCredentials) => Promise<void>;
+  clear: () => Promise<void>;
+}) {
   const [loaded, setLoaded] = useState(false);
   const [hasSaved, setHasSaved] = useState(false);
   const [username, setUsername] = useState('');
@@ -76,7 +101,7 @@ function I2cCredentialsRow() {
   const [status, setStatus] = useState<string | null>(null);
 
   useEffect(() => {
-    getI2cCredentials().then((c) => {
+    load().then((c) => {
       if (c) {
         setHasSaved(true);
         setUsername(c.username);
@@ -89,14 +114,14 @@ function I2cCredentialsRow() {
 
   async function save() {
     if (!username.trim() || !password) { setStatus('Username and password are required.'); return; }
-    await setI2cCredentials({ username: username.trim(), password, autoSubmit });
+    await saveCreds({ username: username.trim(), password, autoSubmit });
     setHasSaved(true);
     setStatus('Saved.');
     setTimeout(() => setStatus(null), 2000);
   }
 
   async function clear() {
-    await clearI2cCredentials();
+    await clearCreds();
     setHasSaved(false);
     setUsername('');
     setPassword('');
@@ -109,7 +134,7 @@ function I2cCredentialsRow() {
   return (
     <div style={cardStyle}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 'var(--mint-sp-2)' }}>
-        <span style={{ fontSize: 'var(--mint-text-meta)', fontWeight: 700, color: 'var(--mint-fg-strong)' }}>i2c (MCP Call Center)</span>
+        <span style={{ fontSize: 'var(--mint-text-meta)', fontWeight: 700, color: 'var(--mint-fg-strong)' }}>{title}</span>
         {hasSaved ? (
           <span style={{ marginLeft: 'auto', fontSize: 'var(--mint-text-nano)', color: 'var(--mint-positive-fg-strong)', fontWeight: 600 }}>✓ Saved</span>
         ) : (
@@ -122,7 +147,7 @@ function I2cCredentialsRow() {
         type="text"
         value={username}
         onChange={(e) => setUsername(e.target.value)}
-        placeholder="e.g. cs000acai"
+        placeholder={placeholder}
         autoComplete="off"
         style={inputStyle}
       />
@@ -166,7 +191,7 @@ function I2cCredentialsRow() {
       ) : null}
 
       <div style={{ marginTop: 'var(--mint-sp-2)', fontSize: 'var(--mint-text-nano)', color: 'var(--mint-fg-soft)', lineHeight: 1.4 }}>
-        Stored locally on this device only. When you open the i2c login page, the extension fills these in.
+        Stored locally on this device only. When you open the {pageName}, the extension fills these in.
       </div>
     </div>
   );
