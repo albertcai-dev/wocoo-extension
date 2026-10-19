@@ -10,6 +10,12 @@ Actions:
   {"action": "ping"}                    -> {"ok": true, "pong": true}
   {"action": "launch_interest_tool"}    -> runs `open "Start App.command"`
         optional "path" overrides the default tool location.
+  {"action": "draft_get", "key": K}     -> {"ok": true, "draft": {...}|null}
+  {"action": "draft_list"}              -> {"ok": true, "items": [...]}
+  {"action": "draft_outcome", "row": R} -> {"ok": true}
+  {"action": "i2c_activity", "ts": T}   -> {"ok": true}
+        The draft_* / i2c_activity actions shell out to the local draft agent's store CLI:
+        `python3 $WDA_ROOT/src/store_cli.py ...` (WDA_ROOT defaults to ~/projects/wocoo-draft-agent).
 
 Installed by install.sh, which registers the host manifest with Chrome.
 """
@@ -21,6 +27,8 @@ import subprocess
 import sys
 
 DEFAULT_TOOL_COMMAND = os.path.expanduser('~/Documents/interest-tool/Start App.command')
+DEFAULT_WDA_ROOT = '~/projects/wocoo-draft-agent'
+STORE_TIMEOUT_S = 5
 
 
 def read_message():
@@ -50,6 +58,65 @@ def launch(path):
     return {'ok': True, 'launched': path}
 
 
+def run_store(args, stdin=None):
+    """Runs store_cli.py and returns (parsed stdout JSON, None) or (None, error message)."""
+    root = os.path.expanduser(os.environ.get('WDA_ROOT') or DEFAULT_WDA_ROOT)
+    cli = os.path.join(root, 'src', 'store_cli.py')
+    if not os.path.isfile(cli):
+        return None, f'Not found: {cli}'
+    try:
+        result = subprocess.run([sys.executable, cli, *args], input=stdin, capture_output=True,
+                                text=True, timeout=STORE_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        return None, f'store_cli timed out after {STORE_TIMEOUT_S}s'
+    except OSError as exc:
+        return None, f'store_cli could not run: {exc}'
+    out = (result.stdout or '').strip()
+    if result.returncode != 0:
+        detail = ''
+        try:
+            parsed = json.loads(out)
+            if isinstance(parsed, dict):
+                detail = parsed.get('error') or '; '.join(parsed.get('errors') or [])
+        except ValueError:
+            pass
+        detail = detail or (result.stderr or out or f'exit {result.returncode}').strip()
+        return None, f'store_cli failed: {detail}'
+    try:
+        return json.loads(out), None
+    except ValueError:
+        return None, f'store_cli returned non-JSON output: {out[:200]}'
+
+
+def draft_action(action, message):
+    if action == 'draft_get':
+        key = message.get('key')
+        if not isinstance(key, str) or not key:
+            return {'ok': False, 'error': 'draft_get needs a key'}
+        data, err = run_store(['get', '--key', key])
+        return {'ok': False, 'error': err} if err else {'ok': True, 'draft': data}
+    if action == 'draft_list':
+        data, err = run_store(['list-ready'])
+        if err:
+            return {'ok': False, 'error': err}
+        items = data.get('items') if isinstance(data, dict) else data
+        return {'ok': True, 'items': items if isinstance(items, list) else []}
+    if action == 'draft_outcome':
+        row = message.get('row')
+        if not isinstance(row, dict):
+            return {'ok': False, 'error': 'draft_outcome needs a row object'}
+        _, err = run_store(['outcome'], stdin=json.dumps(row))
+        return {'ok': False, 'error': err} if err else {'ok': True}
+    ts = message.get('ts')
+    if isinstance(ts, bool) or not isinstance(ts, (int, float)):
+        return {'ok': False, 'error': 'i2c_activity needs a numeric ts'}
+    _, err = run_store(['i2c-activity', '--ts', repr(float(ts))])
+    return {'ok': False, 'error': err} if err else {'ok': True}
+
+
+DRAFT_ACTIONS = ('draft_get', 'draft_list', 'draft_outcome', 'i2c_activity')
+
+
 def main():
     try:
         message = read_message()
@@ -65,6 +132,8 @@ def main():
     elif action == 'launch_interest_tool':
         path = os.path.expanduser(message.get('path') or DEFAULT_TOOL_COMMAND)
         send_message(launch(path))
+    elif action in DRAFT_ACTIONS:
+        send_message(draft_action(action, message))
     else:
         send_message({'ok': False, 'error': f'Unknown action: {action!r}'})
 
