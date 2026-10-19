@@ -1122,6 +1122,43 @@ export async function getIssueComments(ticketKey: string): Promise<string[]> {
   return comments.map((c) => adfToPlainText(c.body));
 }
 
+export interface JiraCommentDetail {
+  id: string;
+  authorAccountId: string;
+  created: string;
+  text: string;
+}
+
+/**
+ * Fetch comments with id, author accountId, created timestamp and plain text, oldest first.
+ * Used to tell whether a human replied after an agent draft was posted.
+ */
+export async function getIssueCommentsDetailed(ticketKey: string): Promise<JiraCommentDetail[]> {
+  const resp = await jiraFetch(
+    `/rest/api/3/issue/${encodeURIComponent(ticketKey)}/comment?maxResults=100&orderBy=created`,
+  );
+  if (!resp.ok) {
+    const txt = await resp.text();
+    throw new Error(`getIssueCommentsDetailed failed (HTTP ${resp.status}): ${txt}`);
+  }
+  const data = await resp.json();
+  const raw = (data.comments || []) as Array<{
+    id: string; author?: { accountId?: string }; created?: string; body?: unknown;
+  }>;
+  const rows = raw.map((c) => ({
+    id: String(c.id),
+    authorAccountId: c.author?.accountId || '',
+    created: c.created || '',
+    text: extractDescription(c.body),
+  }));
+  // Jira returns oldest first by default; sort defensively on the parsed timestamp.
+  const ts = (s: string) => { const t = Date.parse(s.replace(/([+-]\d\d)(\d\d)$/, '$1:$2')); return Number.isNaN(t) ? 0 : t; };
+  return rows
+    .map((r, i) => ({ r, i }))
+    .sort((a, b) => ts(a.r.created) - ts(b.r.created) || a.i - b.i)
+    .map((x) => x.r);
+}
+
 /**
  * Fetch issue status name + all comments in a single round trip. Used by the
  * Wires Pending Posting flow where we want to mark a row posted if the BOSM
