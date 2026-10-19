@@ -1,0 +1,287 @@
+// Agent draft card: the local draft agent's reply for the open ticket, its evidence and flags,
+// and a one-click "Post + mark Done". Renders nothing when the agent has no draft for the ticket.
+
+import { useEffect, useMemo, useState } from 'react';
+import type { WocooTicket } from '../data/mockTicket';
+import type { AgentDraft, DraftActionNeeded, DraftSegment } from '../data/agentDraftTypes';
+import { DraftStoreUnavailable, getDraft, recordOutcome } from '../api/draftStore';
+import { postComment, searchJiraUsers, transitionTicketByName } from '../api/jira';
+import {
+  applyMentionResolution, canPost, flagLabel, isHttpUrl, markPostedThisSession,
+  plainToSegments, postLabel, segmentsToPlain, unresolvedMentionNames,
+  type MentionCandidate,
+} from '../data/agentDraftView';
+import { errorBanner, primaryButton, secondaryButton } from './toolUi';
+
+type Load =
+  | { kind: 'loading' }
+  | { kind: 'none' }
+  | { kind: 'unavailable' }
+  | { kind: 'ready'; draft: AgentDraft };
+
+type Mentions =
+  | { kind: 'resolving' }
+  | { kind: 'done'; segments: DraftSegment[]; unresolved: string[] };
+
+type Phase = 'idle' | 'posting' | 'comment-posted' | 'done';
+
+const STATUSES: ReadonlyArray<WocooTicket['status']> = ['Triage', 'Back Office', 'Pending', 'Done', 'Cancelled', 'Other'];
+
+export function AgentDraftCard({ ticket, onOpenWorkflow, onTicketUpdate }: {
+  ticket: WocooTicket;
+  onOpenWorkflow: (workflow: NonNullable<DraftActionNeeded['workflow']>) => void;
+  onTicketUpdate?: (t: WocooTicket) => void;
+}) {
+  const [load, setLoad] = useState<Load>({ kind: 'loading' });
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoad({ kind: 'loading' });
+    getDraft(ticket.id).then(
+      (draft) => { if (!cancelled) setLoad(draft ? { kind: 'ready', draft } : { kind: 'none' }); },
+      (e) => { if (!cancelled) setLoad(e instanceof DraftStoreUnavailable ? { kind: 'unavailable' } : { kind: 'none' }); },
+    );
+    return () => { cancelled = true; };
+  }, [ticket.id]);
+
+  if (load.kind === 'loading' || load.kind === 'none') return null;
+  if (load.kind === 'unavailable') {
+    return (
+      <div style={cardStyle}>
+        <div style={mutedStyle}>Draft store unreachable — run native-host/install.sh</div>
+      </div>
+    );
+  }
+  return (
+    <DraftBody
+      key={`${load.draft.ticket}:${load.draft.created_at}`}
+      ticket={ticket}
+      draft={load.draft}
+      onOpenWorkflow={onOpenWorkflow}
+      onTicketUpdate={onTicketUpdate}
+    />
+  );
+}
+
+function DraftBody({ ticket, draft, onOpenWorkflow, onTicketUpdate }: {
+  ticket: WocooTicket;
+  draft: AgentDraft;
+  onOpenWorkflow: (workflow: NonNullable<DraftActionNeeded['workflow']>) => void;
+  onTicketUpdate?: (t: WocooTicket) => void;
+}) {
+  const editable = draft.outcome === 'draft' || draft.outcome === 'needs_info';
+  const [text, setText] = useState(() => segmentsToPlain(draft.segments));
+  const [actionDone, setActionDone] = useState(false);
+  const [phase, setPhase] = useState<Phase>('idle');
+  const [error, setError] = useState<string | null>(null);
+  const [mentions, setMentions] = useState<Mentions>({ kind: 'resolving' });
+
+  // Resolve @Name mentions to Jira accounts as the card loads, so any problem shows before posting.
+  useEffect(() => {
+    if (!editable) return;
+    let cancelled = false;
+    const names = unresolvedMentionNames(draft.segments);
+    (async () => {
+      const results: Record<string, MentionCandidate[]> = {};
+      await Promise.all(names.map(async (name) => {
+        try { results[name] = await searchJiraUsers(name); } catch { /* leave unresolved */ }
+      }));
+      if (cancelled) return;
+      const r = applyMentionResolution(draft.segments, results);
+      setMentions({ kind: 'done', segments: r.segments, unresolved: r.unresolved });
+    })();
+    return () => { cancelled = true; };
+  }, [draft, editable]);
+
+  const resolving = mentions.kind === 'resolving';
+  const allowed = editable && !resolving && canPost(draft, actionDone, text);
+  const flags = useMemo(() => draft.flags.filter((f) => !(draft.outcome === 'no_new_angle' && f === 'no_new_angle')), [draft]);
+
+  const onPost = async () => {
+    if (mentions.kind !== 'done') return;
+    setError(null);
+    let commentPosted = phase === 'comment-posted';
+    try {
+      if (!commentPosted) {
+        setPhase('posting');
+        await postComment(ticket.id, plainToSegments(text, mentions.segments));
+        commentPosted = true;
+        markPostedThisSession(ticket.id, draft.created_at);
+        setPhase('comment-posted');
+      }
+      if (draft.suggested_status) await transitionTicketByName(ticket.id, draft.suggested_status);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (!commentPosted) setPhase('idle');
+      setError(commentPosted
+        ? `Comment posted, but the status change failed: ${msg}`
+        : `Couldn't post: ${msg}`);
+      return;
+    }
+    try {
+      await recordOutcome({
+        key: ticket.id,
+        work_type: draft.work_type,
+        draft_created_at: draft.created_at,
+        recorded_at: new Date().toISOString(),
+        via: 'sidekick',
+        draft_text: segmentsToPlain(draft.segments),
+        posted_text: text,
+        suggested_status: draft.suggested_status,
+        actual_status: draft.suggested_status ?? ticket.status,
+        flags: draft.flags,
+        assigned_at: null,
+      });
+    } catch { /* the outcome log is best-effort; the post already succeeded */ }
+    setPhase('done');
+    const status = STATUSES.find((s) => s === draft.suggested_status);
+    if (status && onTicketUpdate) onTicketUpdate({ ...ticket, status });
+  };
+
+  const header = draft.outcome === 'move' ? 'Move suggestion'
+    : draft.outcome === 'no_new_angle' ? 'No new angle found'
+    : draft.kind === 'followup' ? 'Agent draft — follow-up' : 'Agent draft';
+
+  return (
+    <div style={cardStyle}>
+      <div style={{ fontSize: 'var(--mint-text-meta)', fontWeight: 700, color: 'var(--mint-fg-strong)' }}>{header}</div>
+      {draft.summary && <div style={mutedStyle}>{draft.summary}</div>}
+
+      {draft.action_needed && (
+        <div style={bannerStyle}>
+          <div style={{ fontWeight: 700 }}>Action needed — you</div>
+          <div style={{ marginTop: 2 }}>{draft.action_needed.summary}</div>
+          {draft.action_needed.workflow && (
+            <button type="button" style={{ ...secondaryButton, marginTop: 6 }}
+              onClick={() => onOpenWorkflow(draft.action_needed!.workflow!)}>
+              Open workflow
+            </button>
+          )}
+          <label style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 6 }}>
+            <input type="checkbox" checked={actionDone} onChange={(e) => setActionDone(e.target.checked)} />
+            <span>I've done this</span>
+          </label>
+        </div>
+      )}
+
+      {draft.outcome === 'move' && draft.move && (
+        <div style={{ ...mutedStyle, marginTop: 8 }}>
+          <div><b>{draft.move.destination}</b> — {draft.move.issue_type}</div>
+          <div style={{ marginTop: 4 }}>{draft.move.reason}</div>
+        </div>
+      )}
+
+      {editable && (
+        <>
+          <textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            disabled={phase !== 'idle'}
+            rows={8}
+            style={textareaStyle}
+            aria-label="Draft reply"
+          />
+          {mentions.kind === 'done' && mentions.unresolved.map((m) => (
+            <div key={m} style={warnStyle}>Couldn't resolve {m} — check before posting</div>
+          ))}
+          <div style={mutedStyle}>
+            {draft.suggested_status ? `Suggested status: ${draft.suggested_status}` : 'No status change suggested'}
+          </div>
+          {phase === 'done' ? (
+            <div style={{ ...mutedStyle, fontWeight: 600 }}>Posted{draft.suggested_status ? ` and marked ${draft.suggested_status}` : ''}.</div>
+          ) : (
+            <button
+              type="button"
+              disabled={!allowed || phase === 'posting'}
+              onClick={() => void onPost()}
+              style={{ ...primaryButton, marginTop: 'var(--mint-sp-2)', opacity: !allowed || phase === 'posting' ? 0.5 : 1 }}
+              title={draft.action_needed && !actionDone ? "Tick \"I've done this\" first" : undefined}
+            >
+              {phase === 'posting' ? 'Posting…' : phase === 'comment-posted' ? 'Retry status change' : postLabel(draft)}
+            </button>
+          )}
+          {error && <div style={{ ...errorBanner, marginTop: 'var(--mint-sp-2)' }}>{error}</div>}
+        </>
+      )}
+
+      {flags.length > 0 && (
+        <ul style={listStyle}>
+          {flags.map((f) => <li key={f}>⚠ {flagLabel(f)}</li>)}
+        </ul>
+      )}
+
+      {draft.evidence.length > 0 && (
+        <div style={{ marginTop: 'var(--mint-sp-2)' }}>
+          <div style={{ ...mutedStyle, fontWeight: 600 }}>
+            {draft.outcome === 'no_new_angle' ? 'What was checked' : 'Evidence'}
+          </div>
+          <ul style={listStyle}>
+            {draft.evidence.map((e, i) => (
+              <li key={i}>
+                <b>{e.label}</b>
+                {e.detail ? ` — ${e.detail}` : ''}
+                {isHttpUrl(e.url) && <>{' '}<a href={e.url} target="_blank" rel="noreferrer" style={linkStyle}>open</a></>}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {isHttpUrl(draft.compass_thread) && (
+        <a href={draft.compass_thread} target="_blank" rel="noreferrer" style={{ ...linkStyle, display: 'inline-block', marginTop: 6, fontSize: 'var(--mint-text-micro)' }}>
+          Compass thread
+        </a>
+      )}
+    </div>
+  );
+}
+
+const cardStyle: React.CSSProperties = {
+  background: 'var(--mint-bg-card)',
+  border: 'var(--mint-card-stroke)',
+  borderRadius: 'var(--mint-radius-card)',
+  padding: 'var(--mint-sp-3)',
+  marginTop: 'var(--mint-sp-3)',
+};
+
+const mutedStyle: React.CSSProperties = {
+  fontSize: 'var(--mint-text-micro)',
+  color: 'var(--mint-fg-subdued-title)',
+  marginTop: 4,
+};
+
+const bannerStyle: React.CSSProperties = {
+  marginTop: 'var(--mint-sp-2)',
+  padding: '8px 12px',
+  background: 'var(--mint-bg-subtle)',
+  border: 'var(--mint-card-stroke)',
+  borderRadius: 'var(--mint-radius-button)',
+  fontSize: 'var(--mint-text-micro)',
+  color: 'var(--mint-fg-strong)',
+};
+
+const warnStyle: React.CSSProperties = {
+  ...mutedStyle,
+  color: 'var(--mint-negative-fg-strong)',
+};
+
+const textareaStyle: React.CSSProperties = {
+  width: '100%',
+  boxSizing: 'border-box',
+  marginTop: 'var(--mint-sp-2)',
+  padding: 8,
+  fontSize: 'var(--mint-text-meta)',
+  fontFamily: 'inherit',
+  border: 'var(--mint-card-stroke)',
+  borderRadius: 'var(--mint-radius-button)',
+  resize: 'vertical',
+};
+
+const listStyle: React.CSSProperties = {
+  fontSize: 'var(--mint-text-micro)',
+  color: 'var(--mint-fg-subdued-title)',
+  margin: '6px 0 0',
+  paddingLeft: 18,
+};
+
+const linkStyle: React.CSSProperties = { color: 'var(--mint-fg-strong)' };

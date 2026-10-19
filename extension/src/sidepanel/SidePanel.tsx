@@ -25,6 +25,7 @@ import { ReverseFeeCard } from './ReverseFeeCard';
 import type { MoveDestination } from '../data/moveConfig';
 import { CredRouteCard } from './CredRouteCard';
 import { AITriageCard } from './AITriageCard';
+import { AgentDraftCard } from './AgentDraftCard';
 import { OverpaymentTriage } from './OverpaymentTriage';
 import { ReverseFeeWorkflow } from './ReverseFeeWorkflow';
 import { CustomCcStatementWorkflow } from './CustomCcStatementWorkflow';
@@ -556,6 +557,13 @@ function TicketViewInner({ ticket, onTicketUpdate, onStartTriage, onStartReverse
           onClose={() => setCreateReimbActive(false)}
         />
       ) : null}
+
+      {/* AGENT DRAFT — reply written by the local draft agent; post + mark status in one click */}
+      <AgentDraftCard
+        ticket={ticket}
+        onTicketUpdate={onTicketUpdate}
+        onOpenWorkflow={(w) => { if (w === 'overpayment') onStartTriage(); else onStartReverseFee(); }}
+      />
 
       {/* AI VERDICT — grounded in the ticket log + Notion playbook */}
       <AITriageCard ticket={ticket} onOpenSettings={onOpenSettings} />
