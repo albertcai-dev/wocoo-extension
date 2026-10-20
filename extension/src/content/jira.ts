@@ -8,8 +8,9 @@
 // guarantees we never *clear* on a missed detection — only overwrite on a positive match.
 
 import {
-  PREFILL_COMMENT_MESSAGE, opsToPasteHtml, opsToPlainText, segmentsToEditorOps, shouldPrefill,
-  type EditorOp, type PrefillCommentMessage, type PrefillCommentReply,
+  PREFILL_COMMENT_MESSAGE, fallbackLine, insertionBlocker, opsToPasteHtml, opsToPlainText, readInsertionState,
+  segmentsToEditorOps, shouldPrefill,
+  type EditorOp, type InsertionBlock, type PrefillCommentMessage, type PrefillCommentReply,
 } from '../data/commentPrefill';
 
 function currentTicketKey(): string | null {
@@ -136,51 +137,84 @@ window.addEventListener('hashchange', () => setTimeout(checkStatusChange, 400));
 
 // ------------------------------------------------------------
 // Comment prefill: the side panel sends the agent draft for this ticket and we put it into
-// Jira's comment editor UNSAVED, for the user to edit and Save himself.
+// Jira's NEW-comment editor UNSAVED, for the user to edit and Save himself.
 //
-// SAFETY: nothing here ever clicks Save, presses Enter / Cmd+Enter / Ctrl+Enter, or dispatches
-// a submit. The only keystroke synthesised is Escape, and only to dismiss the "@" typeahead when
-// the mentioned user's option never shows up.
+// SAFETY: nothing here clicks Save, dispatches a submit, or synthesises Enter / Cmd+Enter /
+// Ctrl+Enter key events, and execCommand is only ever 'insertText' with single-line text (never
+// 'insertParagraph' / 'insertLineBreak'). Paragraph breaks only arrive inside a paste's HTML;
+// when the paste isn't taken, only the first line goes in and the reply says 'partial'.
+// The one synthetic keystroke is Escape, sent only while a typeahead-specific popup is open, to
+// dismiss the "@" typeahead when the mentioned user's option never appears; a one-shot listener
+// on the editor's parent stops it bubbling further (e.g. to a board modal's close handler).
 //
-// Insertion strategy (layered, no trusted typing available to a content script):
-//   1. Open the editor by clicking the collapsed "Add a comment…" placeholder.
-//   2. Text: a synthetic `paste` ClipboardEvent carrying text/plain + text/html. ProseMirror
-//      reads event.clipboardData, so this inserts links and paragraphs in one step. If the editor
-//      did not take it, fall back to document.execCommand('insertText') line by line.
+// Before every paste, execCommand, typed character, option click and Escape the insertion guard
+// re-checks: editor still attached, focus still inside it, page still on the ticket, selection a
+// collapsed caret with nothing after it. Any failure aborts with reason 'interrupted'. Focus is
+// set once at the start and never stolen back.
+//
+// Insertion strategy (no trusted typing available to a content script):
+//   1. Open the editor by clicking the collapsed "Add a comment…" placeholder; only an editor
+//      inside the new-comment container (never one inside an existing comment) is used.
+//   2. Text: a synthetic `paste` ClipboardEvent carrying text/plain + text/html. ProseMirror reads
+//      event.clipboardData, so links and paragraphs go in in one step. If the editor did not
+//      take it, execCommand('insertText') of the first line only ('partial').
 //   3. Mentions: type "@" + the name with execCommand (ProseMirror sees it as typing, so the
 //      mention typeahead opens), wait up to 3 s for the option whose accountId matches, click it.
 //      No match -> the "@Name" stays as plain text.
 // ------------------------------------------------------------
 
 /** Every DOM hook the prefill relies on, in one place so they can be adjusted against the live
- *  Jira page. Lists are tried in order; the first visible match wins. */
+ *  Jira page. Lists are tried in order. ALL ARE UNVERIFIED GUESSES until the live check. */
 export const JIRA_COMMENT_SELECTORS = {
-  /** The collapsed "Add a comment…" box shown before the editor is mounted. */
+  /** The collapsed "Add a comment…" box shown before the new-comment editor is mounted. */
   placeholder: [
     '[data-testid="canned-comments.common.ui.comment-text-area-placeholder.textarea"]',
     '[data-testid*="comment-text-area-placeholder" i]',
-    '[data-testid*="comment" i][data-testid*="placeholder" i]',
     'textarea[placeholder^="Add a comment" i]',
     '[role="button"][aria-label^="Add a comment" i]',
   ],
   /** Text-content fallback for the placeholder when no selector above matches. */
   placeholderText: /^add a comment/i,
-  /** Elements whose own text is checked against placeholderText. */
-  placeholderTextCandidates: 'button, [role="button"], textarea, input, p, span, div[tabindex]',
+  /** Elements whose own text/placeholder/aria-label is checked against placeholderText. */
+  placeholderTextCandidates: 'button, [role="button"], textarea, input, div[tabindex]',
+  /** The new-comment container: wraps the placeholder and, once clicked, the new-comment editor.
+   *  Only an editor inside one of these is ever written to. */
+  newCommentContainer: [
+    '[data-testid="issue.activity.comment.add-comment"]',
+    '[data-testid*="add-comment" i]',
+    '[data-testid*="addcomment" i]',
+    '[data-testid*="new-comment" i]',
+  ],
+  /** An existing comment item (its Edit/Delete or, while editing, Save/Cancel belong to a posted
+   *  comment). An editor with one of these between it and the container is never used. */
+  existingCommentItem: [
+    '[data-testid^="comment-base-item-" i]',
+    '[data-testid*="comment-item" i]',
+    '[data-testid*="edit-comment" i]',
+  ],
+  /** Markers only a posted comment carries (its permalink / timestamp). An ancestor holding one
+   *  of these, below the container, is treated as an existing comment item. */
+  existingCommentMarkers: 'a[href*="focusedCommentId"], time',
+  /** Element ids of posted comments ("comment-12345"). */
+  existingCommentId: /^comment-\d+$/,
   /** The ProseMirror contenteditable of an Atlassian editor. */
   editor: [
     '.ProseMirror[contenteditable="true"]',
     '#ak-editor-textarea[contenteditable="true"]',
-    '[contenteditable="true"][aria-label*="comment" i]',
   ],
-  /** An editor inside one of these is the comment editor. */
-  commentAncestor: '[data-testid*="comment" i], [aria-label*="comment" i]',
-  /** Never write into an editor inside one of these (the description editor, when open). */
-  excludedAncestor: '[data-testid*="description" i]',
-  /** Editor decorations whose text is not the user's (placeholder hints, widgets). */
-  decorations: '.placeholder-decoration, .ProseMirror-widget, [data-testid="placeholder-test-id"]',
-  /** The "@" typeahead popup. */
-  mentionPopup: [
+  /** Editor decorations whose text is not the user's (placeholder hints, widgets, PM separators). */
+  decorations: '.placeholder-decoration, .ProseMirror-widget, .ProseMirror-separator, [data-testid="placeholder-test-id"]',
+  /** Non-text content that makes the box "not empty": images, media, emoji, mentions, any ADF node view. */
+  contentNodes: 'img, [data-node-type], [data-mention-id], [data-emoji-id], [data-emoji-short-name], .mediaSingleView-content-wrap, .mediaView-content-wrap, .emojiView-content-wrap',
+  /** Typeahead-specific popup. Also the ONLY selectors that allow the dismissing Escape. */
+  typeaheadPopup: [
+    '[data-testid="typeahead-popup"]',
+    '[data-testid*="typeahead" i]',
+    '[aria-label*="typeahead" i]',
+  ],
+  /** Where to look for the mention option (adds the generic listbox; matching is by accountId,
+   *  so a non-mention listbox can't match). Never used to decide on Escape. */
+  mentionOptionScopes: [
     '[data-testid="typeahead-popup"]',
     '[data-testid*="typeahead" i]',
     '[aria-label*="typeahead" i]',
@@ -222,21 +256,31 @@ async function pollFor<T>(fn: () => T | null, timeoutMs: number, stepMs = 120): 
   }
 }
 
+/** Whether anything between `el` and `container` (exclusive) is an existing comment item. */
+function insideExistingComment(el: HTMLElement, container: HTMLElement): boolean {
+  const S = JIRA_COMMENT_SELECTORS;
+  for (let n: HTMLElement | null = el.parentElement; n && n !== container; n = n.parentElement) {
+    if (S.existingCommentItem.some((sel) => n!.matches(sel))) return true;
+    if (S.existingCommentId.test(n.id)) return true;
+    if (n.querySelector(S.existingCommentMarkers)) return true;
+  }
+  return false;
+}
+
+/** The new-comment editor: inside a new-comment container, not inside an existing comment. */
 function findCommentEditor(): HTMLElement | null {
   const S = JIRA_COMMENT_SELECTORS;
-  const seen = new Set<HTMLElement>();
-  const editors: HTMLElement[] = [];
-  for (const sel of S.editor) {
-    for (const el of Array.from(document.querySelectorAll<HTMLElement>(sel))) {
-      if (seen.has(el) || !isShown(el) || !el.isContentEditable) continue;
-      if (el.closest(S.excludedAncestor)) continue;
-      seen.add(el);
-      editors.push(el);
+  for (const csel of S.newCommentContainer) {
+    for (const container of Array.from(document.querySelectorAll<HTMLElement>(csel))) {
+      if (!isShown(container)) continue;
+      for (const esel of S.editor) {
+        for (const ed of Array.from(container.querySelectorAll<HTMLElement>(esel))) {
+          if (isShown(ed) && ed.isContentEditable && !insideExistingComment(ed, container)) return ed;
+        }
+      }
     }
   }
-  const commentish = editors.find((el) => el.closest(S.commentAncestor));
-  if (commentish) return commentish;
-  return editors.length === 1 ? editors[0] : null;
+  return null;
 }
 
 function findCommentPlaceholder(): HTMLElement | null {
@@ -251,7 +295,7 @@ function findCommentPlaceholder(): HTMLElement | null {
   return null;
 }
 
-/** Opens the comment editor if it is collapsed and waits for it (up to ~5 s). */
+/** Opens the new-comment editor if it is collapsed and waits for it (up to ~5 s). */
 async function openCommentEditor(): Promise<HTMLElement | null> {
   let lastClick = 0;
   return pollFor(() => {
@@ -261,23 +305,54 @@ async function openCommentEditor(): Promise<HTMLElement | null> {
     if (ph && Date.now() - lastClick > 1_000) {
       lastClick = Date.now();
       ph.click();
-      ph.focus?.();
     }
     return null;
   }, PREFILL_EDITOR_WAIT_MS, 150);
 }
 
-/** The user's text in the editor, without placeholder decorations. */
+/** The user's content in a fragment/element as text, decorations removed. Non-text content
+ *  (images, media, emoji, mentions, node views) counts as one "@" each so it isn't mistaken for empty. */
+function contentText(root: ParentNode & Node): string {
+  const S = JIRA_COMMENT_SELECTORS;
+  root.querySelectorAll(S.decorations).forEach((n) => n.remove());
+  const nodes = root.querySelectorAll(S.contentNodes).length;
+  return (root.textContent || '') + '@'.repeat(nodes);
+}
+
 function editorText(editor: HTMLElement): string {
-  const clone = editor.cloneNode(true) as HTMLElement;
-  clone.querySelectorAll(JIRA_COMMENT_SELECTORS.decorations).forEach((n) => n.remove());
-  // Mention pills count as content even if they render their name in a pseudo-element.
-  const pills = clone.querySelectorAll(JIRA_COMMENT_SELECTORS.insertedMention).length;
-  return (clone.textContent || '') + (pills ? '@'.repeat(pills) : '');
+  return contentText(editor.cloneNode(true) as HTMLElement);
+}
+
+/** Text after the caret inside the editor (decorations removed). */
+function textAfterCaret(editor: HTMLElement): string {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0) return '';
+  const caret = sel.getRangeAt(0);
+  const r = document.createRange();
+  r.selectNodeContents(editor);
+  try { r.setStart(caret.endContainer, caret.endOffset); } catch { return '\u0000'; }
+  return contentText(r.cloneContents());
+}
+
+class PrefillInterrupted extends Error {
+  constructor(public why: InsertionBlock) { super(`prefill interrupted: ${why}`); }
+}
+class PrefillPartial extends Error {}
+
+/** Throws PrefillInterrupted unless it is safe to insert right now. */
+function guard(editor: HTMLElement, key: string): void {
+  const state = readInsertionState({
+    editor,
+    activeElement: document.activeElement,
+    selection: window.getSelection(),
+    currentKey: currentTicketKey(),
+    textAfterCaret: () => textAfterCaret(editor),
+  });
+  const block = insertionBlocker(state, key);
+  if (block) throw new PrefillInterrupted(block);
 }
 
 function placeCaretAtEnd(editor: HTMLElement): void {
-  editor.focus();
   const sel = window.getSelection();
   if (!sel) return;
   const last = editor.lastElementChild ?? editor;
@@ -300,28 +375,25 @@ function spaceBeforeCaret(editor: HTMLElement): boolean {
   return /[  ]$/.test(r.toString());
 }
 
-function execInsertLines(editor: HTMLElement, text: string): void {
-  const lines = text.replace(/\r\n?/g, '\n').split('\n');
-  lines.forEach((line, i) => {
-    editor.focus();
-    if (line) document.execCommand('insertText', false, line);
-    if (i < lines.length - 1) document.execCommand('insertParagraph');
-  });
+/** Single-line execCommand insert, guarded. Never called with a newline. */
+function execInsert(editor: HTMLElement, key: string, text: string): void {
+  if (!text) return;
+  if (/[\r\n]/.test(text)) throw new Error('execInsert called with a newline');
+  guard(editor, key);
+  document.execCommand('insertText', false, text);
 }
 
 /** Inserts a run of text ops at the caret. Leading/trailing spaces go in via execCommand because
  *  an HTML paste collapses whitespace at the edges of a paragraph. */
-async function insertTextOps(editor: HTMLElement, ops: EditorOp[]): Promise<void> {
+async function insertTextOps(editor: HTMLElement, key: string, ops: EditorOp[]): Promise<void> {
   const plain = opsToPlainText(ops);
   if (!plain) return;
-  const m = plain.match(/^([ \t]*)([\s\S]*?)([ \t]*)$/)!;
-  const [, lead, core, trail] = m;
-  if (lead) execInsertLines(editor, lead);
+  const [, lead, core, trail] = plain.match(/^([ \t]*)([\s\S]*?)([ \t]*)$/)!;
+  execInsert(editor, key, lead);
   if (core) {
-    // Trim the same edges off the ops before building the HTML side.
     const coreOps = trimOpsEdges(ops, lead.length, trail.length);
     const before = editorText(editor).length;
-    editor.focus();
+    guard(editor, key);
     const dt = new DataTransfer();
     dt.setData('text/plain', core);
     dt.setData('text/html', opsToPasteHtml(coreOps));
@@ -332,11 +404,13 @@ async function insertTextOps(editor: HTMLElement, ops: EditorOp[]): Promise<void
     const grew = () => (editorText(editor).length > before ? true : null);
     const took = await pollFor(grew, ev.defaultPrevented ? 1_000 : 150, 50);
     if (!took) {
-      console.debug('[wocoo-prefill] paste not taken; falling back to execCommand');
-      execInsertLines(editor, core);
+      console.debug('[wocoo-prefill] paste not taken; falling back to execCommand (first line only)');
+      const { line, truncated } = fallbackLine(core);
+      execInsert(editor, key, line);
+      if (truncated) throw new PrefillPartial();
     }
   }
-  if (trail) execInsertLines(editor, trail);
+  execInsert(editor, key, trail);
 }
 
 function trimOpsEdges(ops: EditorOp[], lead: number, trail: number): EditorOp[] {
@@ -365,9 +439,9 @@ function trimOpsEdges(ops: EditorOp[], lead: number, trail: number): EditorOp[] 
 function findMentionOption(accountId: string): HTMLElement | null {
   const S = JIRA_COMMENT_SELECTORS;
   const id = CSS.escape(accountId);
-  for (const sel of S.mentionPopup) {
+  for (const sel of S.mentionOptionScopes) {
     for (const popup of Array.from(document.querySelectorAll<HTMLElement>(sel))) {
-      if (!isShown(popup) || popup.isContentEditable || popup.closest('[contenteditable="true"]')) continue;
+      if (!isShown(popup) || popup.closest('[contenteditable="true"]')) continue;
       for (const attr of S.mentionIdAttributes) {
         const hit = popup.querySelector<HTMLElement>(`[${attr}="${id}"]`);
         if (hit && isShown(hit)) return hit.closest<HTMLElement>(S.mentionOption) ?? hit;
@@ -377,43 +451,55 @@ function findMentionOption(accountId: string): HTMLElement | null {
   return null;
 }
 
+/** Escape to the editor only (typeahead dismiss). A one-shot bubble listener on the parent stops
+ *  it there, so a board modal's or page's own Escape handler above never sees it. */
+function dismissTypeahead(editor: HTMLElement, key: string): void {
+  if (!firstShown(JIRA_COMMENT_SELECTORS.typeaheadPopup)) return;
+  guard(editor, key);
+  const parent = editor.parentElement;
+  const stop = (e: Event) => e.stopPropagation();
+  parent?.addEventListener('keydown', stop, { once: true });
+  try {
+    editor.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true, cancelable: true }));
+  } finally {
+    parent?.removeEventListener('keydown', stop);
+  }
+}
+
 /** Types "@query" through Jira's typeahead and picks the option for accountId.
  *  Returns false (leaving "@query" as plain text) if the option never appears. */
-async function insertMention(editor: HTMLElement, query: string, accountId: string | undefined): Promise<boolean> {
+async function insertMention(editor: HTMLElement, key: string, query: string, accountId: string | undefined): Promise<boolean> {
   const S = JIRA_COMMENT_SELECTORS;
-  if (!accountId) { execInsertLines(editor, '@' + query); return false; }
+  if (!accountId) { execInsert(editor, key, '@' + query); return false; }
   const pillsBefore = editor.querySelectorAll(S.insertedMention).length;
   for (const ch of '@' + query) {
-    editor.focus();
-    document.execCommand('insertText', false, ch);
+    execInsert(editor, key, ch);
     await sleep(35);
   }
   const option = await pollFor(() => findMentionOption(accountId), PREFILL_MENTION_WAIT_MS, 100);
   if (!option) {
     console.debug('[wocoo-prefill] no typeahead option for', query, '- leaving plain text');
-    if (firstShown(S.mentionPopup)) {
-      // Dismiss the typeahead; it keeps the typed "@query" as text.
-      editor.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true, cancelable: true }));
-      await sleep(80);
-    }
-    editor.focus();
+    dismissTypeahead(editor, key);
+    await sleep(80);
     return false;
   }
-  option.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-  if (option.isConnected) option.click();
+  guard(editor, key);
+  // click only: the current Atlassian editor typeahead selects in the item's onClick (React accepts
+  // synthetic clicks) and keeps editor focus via its own mousedown preventDefault, so no mousedown
+  // is sent. If the live check shows no pill, switch this to a mousedown dispatch (older MentionPicker).
+  option.click();
   await pollFor(() => (editor.querySelectorAll(S.insertedMention).length > pillsBefore ? true : null), 1_200, 80);
-  editor.focus();
   await sleep(60);
   return editor.querySelectorAll(S.insertedMention).length > pillsBefore;
 }
 
-async function runEditorOps(editor: HTMLElement, ops: EditorOp[]): Promise<void> {
+async function runEditorOps(editor: HTMLElement, key: string, ops: EditorOp[]): Promise<void> {
   let i = 0;
   let afterMention = false;
   while (i < ops.length) {
     const op = ops[i];
     if (op.kind === 'mention') {
-      afterMention = await insertMention(editor, op.query, op.accountId);
+      afterMention = await insertMention(editor, key, op.query, op.accountId);
       i++;
       continue;
     }
@@ -425,7 +511,7 @@ async function runEditorOps(editor: HTMLElement, ops: EditorOp[]): Promise<void>
       first.text = first.text.slice(1);
     }
     afterMention = false;
-    await insertTextOps(editor, run.filter((o) => o.kind !== 'text' || o.text));
+    await insertTextOps(editor, key, run.filter((o) => o.kind !== 'text' || o.text));
   }
 }
 
@@ -441,6 +527,7 @@ async function handlePrefill(msg: PrefillCommentMessage): Promise<PrefillComment
   if (!shouldPrefill(existing, msg.force)) return { ok: true, inserted: false, reason: 'not-empty' };
   const ops = segmentsToEditorOps(msg.segments);
   if (ops.length === 0) return { ok: true, inserted: false };
+  // The one place focus is set; from here on a focus change means the user moved and we stop.
   editor.focus();
   await sleep(50);
   if (!shouldPrefill(existing, false)) {
@@ -448,8 +535,24 @@ async function handlePrefill(msg: PrefillCommentMessage): Promise<PrefillComment
     placeCaretAtEnd(editor);
     await sleep(50);
     ops.unshift({ kind: 'text', text: '\n\n' });
+  } else {
+    // Empty box: make sure there is a caret inside it (focus() alone may not set one).
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || !editor.contains(sel.anchorNode)) {
+      placeCaretAtEnd(editor);
+      await sleep(50);
+    }
   }
-  await runEditorOps(editor, ops);
+  try {
+    await runEditorOps(editor, msg.key, ops);
+  } catch (e) {
+    if (e instanceof PrefillInterrupted) {
+      console.debug('[wocoo-prefill]', e.message);
+      return { ok: true, inserted: false, reason: 'interrupted' };
+    }
+    if (e instanceof PrefillPartial) return { ok: true, inserted: true, reason: 'partial' };
+    throw e;
+  }
   return { ok: true, inserted: true };
 }
 

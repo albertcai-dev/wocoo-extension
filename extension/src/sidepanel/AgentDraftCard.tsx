@@ -32,8 +32,8 @@ type Phase = 'idle' | 'posting' | 'comment-posted' | 'done';
 type Prefill =
   | { kind: 'idle' }
   | { kind: 'sending' }
-  | { kind: 'inserted' }
-  | { kind: 'skipped'; reason: 'not-empty' | 'no-editor' | 'wrong-ticket' | 'unreachable' };
+  | { kind: 'inserted'; partial: boolean }
+  | { kind: 'skipped'; reason: 'not-empty' | 'no-editor' | 'wrong-ticket' | 'interrupted' | 'unreachable' | 'error' };
 
 const JIRA_TAB_URL = /^https:\/\/wealthsimple\.atlassian\.net\//;
 
@@ -55,7 +55,17 @@ const PREFILL_NOTES: Record<Extract<Prefill, { kind: 'skipped' }>['reason'], str
   'not-empty': 'The Jira comment box already has text, so the draft was not inserted.',
   'no-editor': "Couldn't find the Jira comment box.",
   'wrong-ticket': 'The Jira tab is showing a different ticket.',
+  interrupted: 'Inserting stopped because the Jira comment box lost focus or the page changed — check what landed there; copy the rest from the card.',
   unreachable: "Couldn't reach the Jira tab — reload it to insert the draft.",
+  error: "The Jira tab couldn't insert the draft (another insert was still running, or it hit an error) — try again.",
+};
+
+/** Which skipped states offer the Insert draft button, and with what force. */
+const INSERT_FORCE: Partial<Record<Extract<Prefill, { kind: 'skipped' }>['reason'], boolean>> = {
+  'not-empty': true,
+  'no-editor': false,
+  unreachable: false,
+  error: false,
 };
 
 const STATUSES: ReadonlyArray<WocooTicket['status']> = ['Triage', 'Back Office', 'Pending', 'Done', 'Cancelled', 'Other'];
@@ -142,8 +152,9 @@ function DraftBody({ ticket, draft, onOpenWorkflow, onTicketUpdate }: {
     if (!segmentsToPlain(segments).trim()) return;
     setPrefill({ kind: 'sending' });
     const reply = await requestCommentPrefill(ticket.id, segments, force);
-    if (!reply || !reply.ok) { setPrefill({ kind: 'skipped', reason: 'unreachable' }); return; }
-    if (reply.inserted) { setPrefill({ kind: 'inserted' }); return; }
+    if (!reply) { setPrefill({ kind: 'skipped', reason: 'unreachable' }); return; }
+    if (!reply.ok) { setPrefill({ kind: 'skipped', reason: 'error' }); return; }
+    if (reply.inserted) { setPrefill({ kind: 'inserted', partial: reply.reason === 'partial' }); return; }
     // inserted:false with no reason = nothing to insert; leave the controls alone.
     setPrefill(reply.reason ? { kind: 'skipped', reason: reply.reason } : { kind: 'idle' });
   };
@@ -283,21 +294,24 @@ function DraftBody({ ticket, draft, onOpenWorkflow, onTicketUpdate }: {
               {phase === 'posting' ? 'Posting…' : phase === 'comment-posted' ? 'Retry status change' : postLabel(draft)}
             </button>
           )}
-          {phase === 'idle' && prefill.kind === 'inserted' && (
+          {phase === 'idle' && prefill.kind === 'inserted' && !prefill.partial && (
             <div style={mutedStyle}>Draft inserted into the Jira comment box (not saved) — edit it there and click Save.</div>
           )}
-          {phase !== 'idle' && prefill.kind === 'inserted' && (
+          {phase === 'idle' && prefill.kind === 'inserted' && prefill.partial && (
+            <div style={warnStyle}>Only part of the draft could be inserted; copy the rest from the card.</div>
+          )}
+          {phase !== 'idle' && (prefill.kind === 'inserted' || (prefill.kind === 'skipped' && prefill.reason === 'interrupted')) && (
             <div style={warnStyle}>The Jira comment box still holds the unsaved draft — discard it there so it isn't posted twice.</div>
           )}
           {phase === 'idle' && prefill.kind === 'sending' && <div style={mutedStyle}>Inserting draft into Jira…</div>}
           {phase === 'idle' && prefill.kind === 'skipped' && (
             <div style={mutedStyle}>
               {PREFILL_NOTES[prefill.reason]}
-              {prefill.reason !== 'wrong-ticket' && (
+              {INSERT_FORCE[prefill.reason] !== undefined && (
                 <button
                   type="button"
                   style={{ ...secondaryButton, marginLeft: 6 }}
-                  onClick={() => void sendPrefill(prefill.reason === 'not-empty')}
+                  onClick={() => void sendPrefill(INSERT_FORCE[prefill.reason]!)}
                 >
                   Insert draft
                 </button>

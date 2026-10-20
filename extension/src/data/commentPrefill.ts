@@ -3,6 +3,7 @@
 // operations and inserts them into the comment editor WITHOUT saving it.
 
 import type { DraftSegment } from './agentDraftTypes';
+import { isHttpUrl } from './agentDraftView';
 
 /** One insertion step in the comment editor. A text op with `href` is pasted as a link.
  *  A mention op is typed through Jira's own "@" typeahead and picked by accountId. */
@@ -18,11 +19,15 @@ export interface PrefillCommentMessage {
   force: boolean;
 }
 
-export type PrefillSkipReason = 'not-empty' | 'no-editor' | 'wrong-ticket';
+/** Why nothing was inserted. 'interrupted' = focus, caret, page or ticket changed mid-insert, so
+ *  the box may hold part of the draft. */
+export type PrefillSkipReason = 'not-empty' | 'no-editor' | 'wrong-ticket' | 'interrupted';
 
-/** Content script -> side panel. `ok:false` only for unexpected errors inside the content script. */
+/** Content script -> side panel. `ok:false` only for a busy content script or an unexpected error.
+ *  `inserted:true, reason:'partial'` = only the first paragraph went in (execCommand fallback). */
 export type PrefillCommentReply =
-  | { ok: true; inserted: boolean; reason?: PrefillSkipReason }
+  | { ok: true; inserted: false; reason?: PrefillSkipReason }
+  | { ok: true; inserted: true; reason?: 'partial' }
   | { ok: false; inserted: false; error: string };
 
 export const PREFILL_COMMENT_MESSAGE = 'wocoo:prefill-comment' as const;
@@ -90,7 +95,7 @@ export function opsToPasteHtml(ops: EditorOp[]): string {
   const body = ops.map((op) => {
     if (op.kind === 'mention') return escapeHtml('@' + op.query);
     const inner = textToHtml(op.text);
-    return op.href ? `<a href="${escapeHtml(op.href)}">${inner}</a>` : inner;
+    return op.href && isHttpUrl(op.href) ? `<a href="${escapeHtml(op.href)}">${inner}</a>` : inner;
   }).join('');
   return `<p>${body}</p>`;
 }
@@ -98,4 +103,62 @@ export function opsToPasteHtml(ops: EditorOp[]): string {
 /** The text/plain side of a synthetic paste. */
 export function opsToPlainText(ops: EditorOp[]): string {
   return ops.map((op) => (op.kind === 'mention' ? '@' + op.query : op.text)).join('');
+}
+
+/** For the execCommand fallback, which must not create paragraphs (that would need an
+ *  insertParagraph, i.e. a synthetic Enter): the first non-empty line, and whether more followed. */
+export function fallbackLine(text: string): { line: string; truncated: boolean } {
+  const lines = text.replace(/\r\n?/g, '\n').split('\n');
+  const at = lines.findIndex((l) => l.trim() !== '');
+  if (at < 0) return { line: '', truncated: false };
+  const truncated = lines.slice(at + 1).some((l) => l.trim() !== '');
+  return { line: lines[at], truncated };
+}
+
+// --- insertion guard ---------------------------------------------------------------------
+// Checked before every paste, execCommand and typed character, so text never lands somewhere
+// the user moved to while the insert was running.
+
+/** Snapshot of where an insertion would land. */
+export interface InsertionState {
+  editorConnected: boolean;
+  focusInEditor: boolean;
+  currentKey: string | null;
+  /** null when there is no selection inside the editor. */
+  caret: { collapsed: boolean; textAfter: string } | null;
+}
+
+export type InsertionBlock = 'editor-gone' | 'focus-lost' | 'ticket-changed' | 'no-caret' | 'selection-range' | 'caret-moved';
+
+/** The minimal DOM surface readInsertionState needs (real DOM in the content script, fakes in tests). */
+export interface InsertionDom {
+  editor: { isConnected: boolean; contains(node: unknown): boolean };
+  activeElement: unknown;
+  selection: { rangeCount: number; isCollapsed: boolean; anchorNode: unknown; focusNode: unknown } | null;
+  currentKey: string | null;
+  /** The user's text after the caret inside the editor, decorations removed. */
+  textAfterCaret: () => string;
+}
+
+export function readInsertionState(dom: InsertionDom): InsertionState {
+  const sel = dom.selection;
+  const inEditor = !!sel && sel.rangeCount > 0 && dom.editor.contains(sel.anchorNode) && dom.editor.contains(sel.focusNode);
+  return {
+    editorConnected: dom.editor.isConnected,
+    focusInEditor: dom.activeElement != null && dom.editor.contains(dom.activeElement),
+    currentKey: dom.currentKey,
+    caret: inEditor ? { collapsed: sel!.isCollapsed, textAfter: dom.textAfterCaret() } : null,
+  };
+}
+
+/** null when it is safe to insert; otherwise why not. We only ever append, so the caret must be a
+ *  collapsed caret with nothing but whitespace after it. A selected range is never replaced. */
+export function insertionBlocker(s: InsertionState, expectedKey: string): InsertionBlock | null {
+  if (!s.editorConnected) return 'editor-gone';
+  if (s.currentKey !== expectedKey) return 'ticket-changed';
+  if (!s.focusInEditor) return 'focus-lost';
+  if (!s.caret) return 'no-caret';
+  if (!s.caret.collapsed) return 'selection-range';
+  if (s.caret.textAfter.replace(/[\u200b\u200c\u200d\ufeff]/g, '').trim() !== '') return 'caret-moved';
+  return null;
 }
