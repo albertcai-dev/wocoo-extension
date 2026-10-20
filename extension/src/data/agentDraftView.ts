@@ -71,22 +71,23 @@ export function shouldTransition(suggestedStatus: string | null, currentStatus: 
  *  really is once the post (and any transition) has settled. */
 export function buildOutcomeRow(
   draft: AgentDraft,
-  postedText: string,
+  postedText: string | null,
   ticket: { id: string },
   actualStatus: string | null,
+  opts: { via?: DraftOutcomeRow['via']; assignedAt?: string | null } = {},
 ): DraftOutcomeRow {
   return {
     key: ticket.id,
     work_type: draft.work_type,
     draft_created_at: draft.created_at,
     recorded_at: new Date().toISOString(),
-    via: 'sidekick',
+    via: opts.via ?? 'sidekick',
     draft_text: segmentsToPlain(draft.segments),
     posted_text: postedText,
     suggested_status: draft.suggested_status,
     actual_status: actualStatus,
     flags: draft.flags,
-    assigned_at: null,
+    assigned_at: opts.assignedAt ?? null,
   };
 }
 

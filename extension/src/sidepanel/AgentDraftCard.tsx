@@ -6,6 +6,7 @@ import type { WocooTicket } from '../data/mockTicket';
 import type { AgentDraft, DraftActionNeeded, DraftSegment } from '../data/agentDraftTypes';
 import { toMovePrefill, type MovePrefill } from '../data/movePrefill';
 import { DraftStoreUnavailable, getDraft, recordOutcome } from '../api/draftStore';
+import { rememberDraft } from '../data/outcomeCapture';
 import { postComment, searchJiraUsers, transitionTicketByName } from '../api/jira';
 import {
   applyMentionResolution, buildOutcomeRow, canPost, flagLabel, isHttpUrl, markPostedThisSession,
@@ -84,7 +85,11 @@ export function AgentDraftCard({ ticket, onOpenWorkflow, onTicketUpdate, onOpenM
     let cancelled = false;
     setLoad({ kind: 'loading' });
     getDraft(ticket.id).then(
-      (draft) => { if (!cancelled) setLoad(draft ? { kind: 'ready', draft } : { kind: 'none' }); },
+      (draft) => {
+        // Keep what the user saw: the agent's poll may supersede it before they close the ticket.
+        if (draft) rememberDraft(draft);
+        if (!cancelled) setLoad(draft ? { kind: 'ready', draft } : { kind: 'none' });
+      },
       (e) => { if (!cancelled) setLoad(e instanceof DraftStoreUnavailable ? { kind: 'unavailable' } : { kind: 'none' }); },
     );
     return () => { cancelled = true; };

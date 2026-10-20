@@ -1131,11 +1131,17 @@ export interface JiraCommentDetail {
 
 /**
  * Fetch comments with id, author accountId, created timestamp and plain text, oldest first.
+ * Capped at 100 per call (oldest 100, or newest 100 with `newest`).
  * Used to tell whether a human replied after an agent draft was posted.
  */
-export async function getIssueCommentsDetailed(ticketKey: string): Promise<JiraCommentDetail[]> {
+export async function getIssueCommentsDetailed(
+  ticketKey: string,
+  opts: { newest?: boolean } = {},
+): Promise<JiraCommentDetail[]> {
+  // One response is capped at 100. `newest` asks for the newest 100 instead of the oldest 100;
+  // the result is still returned oldest first.
   const resp = await jiraFetch(
-    `/rest/api/3/issue/${encodeURIComponent(ticketKey)}/comment?maxResults=100&orderBy=created`,
+    `/rest/api/3/issue/${encodeURIComponent(ticketKey)}/comment?maxResults=100&orderBy=${opts.newest ? '-created' : 'created'}`,
   );
   if (!resp.ok) {
     const txt = await resp.text();

@@ -53,6 +53,28 @@ describe('getIssueCommentsDetailed', () => {
     expect(rows[0]).toMatchObject({ authorAccountId: '', text: '' });
   });
 
+  it('asks for orderBy=-created with newest, and still returns oldest first', async () => {
+    const fn = mockFetch({
+      ok: true,
+      body: { comments: [
+        { id: '9', author: { accountId: 'x' }, created: '2026-01-09T00:00:00.000+0000', body: adf('newer') },
+        { id: '8', author: { accountId: 'x' }, created: '2026-01-08T00:00:00.000+0000', body: adf('older') },
+      ] },
+    });
+    const rows = await getIssueCommentsDetailed('TEST-1', { newest: true });
+    const url = String(fn.mock.calls.find((c) => String(c[0]).includes('/comment'))![0]);
+    expect(url).toContain('orderBy=-created');
+    expect(rows.map((r) => r.id)).toEqual(['8', '9']);
+  });
+
+  it('defaults to orderBy=created', async () => {
+    const fn = mockFetch({ ok: true, body: { comments: [] } });
+    await getIssueCommentsDetailed('TEST-1');
+    const url = String(fn.mock.calls.find((c) => String(c[0]).includes('/comment'))![0]);
+    expect(url).toContain('orderBy=created');
+    expect(url).not.toContain('-created');
+  });
+
   it('throws with the HTTP status on failure', async () => {
     mockFetch({ ok: false, status: 404, body: { errorMessages: ['nope'] } });
     await expect(getIssueCommentsDetailed('TEST-1')).rejects.toThrow('HTTP 404');

@@ -209,4 +209,9 @@ describe('buildOutcomeRow', () => {
     });
     expect(Number.isNaN(Date.parse(row.recorded_at))).toBe(false);
   });
+
+  it('accepts via, assigned_at and a null posted_text for the jira path', () => {
+    const row = buildOutcomeRow(draft(), null, { id: 'TEST-1' }, 'Done', { via: 'jira', assignedAt: '2026-01-01T00:00:00.000Z' });
+    expect(row).toMatchObject({ via: 'jira', posted_text: null, assigned_at: '2026-01-01T00:00:00.000Z' });
+  });
 });

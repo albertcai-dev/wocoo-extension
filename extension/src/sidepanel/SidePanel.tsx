@@ -54,6 +54,7 @@ import { NotePrompt } from './NotePrompt';
 import type { TicketTransitionKind } from '../data/ticketLogTypes';
 import { clearPresetIdentityMirror, mirrorPresetIdentity, stagePresetIdentity } from '../data/presetIdentity';
 import { stageCardIssuanceSearch } from '../data/cardIssuanceStage';
+import { captureJiraOutcomeLive } from '../data/outcomeCaptureLive';
 
 // Bridge: DOM-observer transition detections come in as chrome.runtime messages from
 // the service worker. Feed them into the local event bus so a single subscribe path
@@ -119,6 +120,16 @@ export function SidePanel() {
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [authState, ticketKey]);
+
+  // A ticket closed in Jira's own UI after a reply made there (not through the draft card): record
+  // how that reply compared to the agent draft. Subscribed here, not in TicketView, so it fires
+  // whichever view the panel is showing. Moves are not outcomes; the draft card owns its own posts.
+  useEffect(() => {
+    return subscribeToTicketTransitions((evt) => {
+      if (evt.kind !== 'Done' && evt.kind !== 'Cancelled') return;
+      void captureJiraOutcomeLive(evt.ticketId, evt.kind);
+    });
+  }, []);
 
   // Mirror the open ticket's identity for the Preset content script. A Preset page the
   // user opens by hand (rather than through a workflow button) has no staged identity of

@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 import { searchTickets, type TicketRow } from '../api/jira';
 import { MobileChequeValidationTile } from './MobileChequeValidation';
 import { FetchWireSendWTile } from './FetchWireSendW';
+import { DraftsReadyList } from './DraftsReadyList';
 import {
   backfillI2cViaBridge,
   backfillKohoTrackKeysViaBridge,
@@ -238,6 +239,8 @@ export function HomeView({ onOpenTicket, onOpenWiresPending, onOpenEligibility, 
           ⚠ {state.message}
         </div>
       ) : null}
+
+      <DraftsReadyList onOpenTicket={onOpenTicket} />
 
       {state.kind === 'ready' ? (
         <>
