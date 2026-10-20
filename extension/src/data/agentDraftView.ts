@@ -1,12 +1,27 @@
 // Pure helpers for the agent draft card: turning the agent's segments into editable text and
 // back, deciding whether Post is allowed, and resolving @mentions to Jira accounts.
 
-import type { AgentDraft, DraftFlag, DraftSegment } from './agentDraftTypes';
+import type { AgentDraft, DraftFlag, DraftOutcomeRow, DraftSegment } from './agentDraftTypes';
 
-/** Text a segment shows in the editor. Mention text already carries its "@"; smartcards may lack text. */
+/** Text a segment shows in the editor. Mention text already carries its "@". A smartcard shows its
+ *  href (that is what gets posted as the block card), falling back to text only when it has none. */
 function segmentText(s: DraftSegment): string {
-  if (s.type === 'smartcard') return s.text || s.href || '';
+  if (s.type === 'smartcard') return s.href || s.text || '';
   return s.text ?? '';
+}
+
+const isWordChar = (c: string | undefined) => !!c && /[A-Za-z0-9_]/.test(c);
+
+/** indexOf that refuses a hit sitting inside a longer word (e.g. "here" inside "there"). */
+function indexOfBounded(hay: string, token: string, from: number): number {
+  let at = hay.indexOf(token, from);
+  while (at >= 0) {
+    const beforeOk = !isWordChar(token[0]) || !isWordChar(hay[at - 1]);
+    const afterOk = !isWordChar(token[token.length - 1]) || !isWordChar(hay[at + token.length]);
+    if (beforeOk && afterOk) return at;
+    at = hay.indexOf(token, at + 1);
+  }
+  return -1;
 }
 
 export function segmentsToPlain(segments: DraftSegment[]): string {
@@ -23,7 +38,7 @@ export function plainToSegments(edited: string, original: DraftSegment[]): Draft
     if (seg.type === 'text') continue;
     const token = segmentText(seg);
     if (!token) continue;
-    const at = edited.indexOf(token, pos);
+    const at = indexOfBounded(edited, token, pos);
     if (at < 0) continue;
     pushText(edited.slice(pos, at));
     out.push({ ...seg, text: token });
@@ -44,6 +59,35 @@ export function canPost(draft: AgentDraft, actionDone: boolean, text: string = s
 /** Button label: no suggested status means a plain post with no transition. */
 export function postLabel(draft: AgentDraft): string {
   return draft.suggested_status ? `Post + mark ${draft.suggested_status}` : 'Post';
+}
+
+/** Whether a transition is still needed: not when none is suggested or the ticket already sits in it. */
+export function shouldTransition(suggestedStatus: string | null, currentStatus: string): boolean {
+  if (!suggestedStatus) return false;
+  return suggestedStatus.trim().toLowerCase() !== currentStatus.trim().toLowerCase();
+}
+
+/** The outcome row Sidekick records after a post. `actualStatus` is the ticket's status as it
+ *  really is once the post (and any transition) has settled. */
+export function buildOutcomeRow(
+  draft: AgentDraft,
+  postedText: string,
+  ticket: { id: string },
+  actualStatus: string | null,
+): DraftOutcomeRow {
+  return {
+    key: ticket.id,
+    work_type: draft.work_type,
+    draft_created_at: draft.created_at,
+    recorded_at: new Date().toISOString(),
+    via: 'sidekick',
+    draft_text: segmentsToPlain(draft.segments),
+    posted_text: postedText,
+    suggested_status: draft.suggested_status,
+    actual_status: actualStatus,
+    flags: draft.flags,
+    assigned_at: null,
+  };
 }
 
 const FLAG_LABELS: Record<DraftFlag, string> = {

@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   segmentsToPlain, plainToSegments, canPost, flagLabel, postLabel, isHttpUrl,
   unresolvedMentionNames, applyMentionResolution,
-  markPostedThisSession, wasPostedThisSession,
+  markPostedThisSession, wasPostedThisSession, shouldTransition, buildOutcomeRow,
 } from './agentDraftView';
 import type { AgentDraft, DraftSegment } from './agentDraftTypes';
 
@@ -23,13 +23,14 @@ describe('segmentsToPlain', () => {
   it('renders mention text verbatim', () => {
     expect(segmentsToPlain(SEGS)).toBe('Hi @Jai Doe, all sorted.');
   });
-  it('renders links by text and smartcards by href when text is missing', () => {
+  it('renders links by text and smartcards by href, even when the smartcard has text', () => {
     const segs = [
       { type: 'link', text: 'the guide', href: 'https://example.test/g' },
       { type: 'text', text: ' and ' },
       { type: 'smartcard', href: 'https://example.test/c' },
+      { type: 'smartcard', text: 'Some title', href: 'https://example.test/d' },
     ] as DraftSegment[];
-    expect(segmentsToPlain(segs)).toBe('the guide and https://example.test/c');
+    expect(segmentsToPlain(segs)).toBe('the guide and https://example.test/chttps://example.test/d');
   });
 });
 
@@ -64,6 +65,19 @@ describe('plainToSegments', () => {
     expect(out.map((s) => s.type)).toEqual(['text', 'link', 'text', 'smartcard']);
     expect(out[1].href).toBe('https://example.test/g');
     expect(plainToSegments('See the guide only', segs).some((s) => s.type === 'smartcard')).toBe(false);
+  });
+  it('does not re-attach a link inside another word', () => {
+    const segs = [{ type: 'text', text: 'Go ' }, { type: 'link', text: 'here', href: 'https://example.test/h' }] as DraftSegment[];
+    expect(plainToSegments('Go there', segs).some((s) => s.type === 'link')).toBe(false);
+    const out = plainToSegments('Go there or here', segs);
+    expect(out.find((s) => s.type === 'link')).toMatchObject({ text: 'here', href: 'https://example.test/h' });
+    expect(segmentsToPlain(out)).toBe('Go there or here');
+  });
+  it('re-attaches a smartcard by its href', () => {
+    const segs = [{ type: 'smartcard', text: 'Title', href: 'https://example.test/c' }] as DraftSegment[];
+    const out = plainToSegments('see https://example.test/c', segs);
+    expect(out.map((s) => s.type)).toEqual(['text', 'smartcard']);
+    expect(out[1].href).toBe('https://example.test/c');
   });
   it('returns a single text segment when there is nothing to re-attach', () => {
     expect(plainToSegments('plain', [{ type: 'text', text: 'old' }])).toEqual([{ type: 'text', text: 'plain' }]);
@@ -168,5 +182,31 @@ describe('isHttpUrl', () => {
     expect(isHttpUrl('https://example.test/x')).toBe(true);
     expect(isHttpUrl('javascript:alert(1)')).toBe(false);
     expect(isHttpUrl(null)).toBe(false);
+  });
+});
+
+describe('shouldTransition', () => {
+  it('is false with no suggested status', () => {
+    expect(shouldTransition(null, 'Triage')).toBe(false);
+  });
+  it('is false when the ticket is already in the suggested status, ignoring case', () => {
+    expect(shouldTransition('Done', 'Done')).toBe(false);
+    expect(shouldTransition('done', 'DONE')).toBe(false);
+  });
+  it('is true when the status differs', () => {
+    expect(shouldTransition('Done', 'Triage')).toBe(true);
+  });
+});
+
+describe('buildOutcomeRow', () => {
+  it('has the sidekick payload shape', () => {
+    const d = draft({ flags: ['thin_precedent'] });
+    const row = buildOutcomeRow(d, 'edited text', { id: 'TEST-1' }, 'Triage');
+    expect(row).toMatchObject({
+      key: 'TEST-1', work_type: 'Test Type', draft_created_at: '2026-01-01T00:00:00Z',
+      via: 'sidekick', draft_text: 'Hi @Jai Doe, all sorted.', posted_text: 'edited text',
+      suggested_status: 'Done', actual_status: 'Triage', flags: ['thin_precedent'], assigned_at: null,
+    });
+    expect(Number.isNaN(Date.parse(row.recorded_at))).toBe(false);
   });
 });

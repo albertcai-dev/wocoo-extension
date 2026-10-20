@@ -1,14 +1,14 @@
 // Agent draft card: the local draft agent's reply for the open ticket, its evidence and flags,
 // and a one-click "Post + mark Done". Renders nothing when the agent has no draft for the ticket.
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { WocooTicket } from '../data/mockTicket';
 import type { AgentDraft, DraftActionNeeded, DraftSegment } from '../data/agentDraftTypes';
 import { DraftStoreUnavailable, getDraft, recordOutcome } from '../api/draftStore';
 import { postComment, searchJiraUsers, transitionTicketByName } from '../api/jira';
 import {
-  applyMentionResolution, canPost, flagLabel, isHttpUrl, markPostedThisSession,
-  plainToSegments, postLabel, segmentsToPlain, unresolvedMentionNames,
+  applyMentionResolution, buildOutcomeRow, canPost, flagLabel, isHttpUrl, markPostedThisSession,
+  plainToSegments, postLabel, segmentsToPlain, shouldTransition, unresolvedMentionNames, wasPostedThisSession,
   type MentionCandidate,
 } from '../data/agentDraftView';
 import { errorBanner, primaryButton, secondaryButton } from './toolUi';
@@ -75,6 +75,11 @@ function DraftBody({ ticket, draft, onOpenWorkflow, onTicketUpdate }: {
   const [phase, setPhase] = useState<Phase>('idle');
   const [error, setError] = useState<string | null>(null);
   const [mentions, setMentions] = useState<Mentions>({ kind: 'resolving' });
+  const [recordFailed, setRecordFailed] = useState(false);
+  const recordedRef = useRef(false);
+  // A draft already posted from this card this session is never offered again.
+  // Read once on mount: during this card's own post it flips true before the transition settles.
+  const [postedEarlier] = useState(() => wasPostedThisSession(ticket.id, draft.created_at));
 
   // Resolve @Name mentions to Jira accounts as the card loads, so any problem shows before posting.
   useEffect(() => {
@@ -101,41 +106,51 @@ function DraftBody({ ticket, draft, onOpenWorkflow, onTicketUpdate }: {
     if (mentions.kind !== 'done') return;
     setError(null);
     let commentPosted = phase === 'comment-posted';
+    // 'posting' holds until the transition settles, so Retry is never live mid-flight.
+    setPhase('posting');
     try {
       if (!commentPosted) {
-        setPhase('posting');
         await postComment(ticket.id, plainToSegments(text, mentions.segments));
         commentPosted = true;
         markPostedThisSession(ticket.id, draft.created_at);
-        setPhase('comment-posted');
       }
-      if (draft.suggested_status) await transitionTicketByName(ticket.id, draft.suggested_status);
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      if (!commentPosted) setPhase('idle');
-      setError(commentPosted
-        ? `Comment posted, but the status change failed: ${msg}`
-        : `Couldn't post: ${msg}`);
+      setPhase('idle');
+      setError(`Couldn't post: ${e instanceof Error ? e.message : String(e)}`);
       return;
     }
-    try {
-      await recordOutcome({
-        key: ticket.id,
-        work_type: draft.work_type,
-        draft_created_at: draft.created_at,
-        recorded_at: new Date().toISOString(),
-        via: 'sidekick',
-        draft_text: segmentsToPlain(draft.segments),
-        posted_text: text,
-        suggested_status: draft.suggested_status,
-        actual_status: draft.suggested_status ?? ticket.status,
-        flags: draft.flags,
-        assigned_at: null,
-      });
-    } catch { /* the outcome log is best-effort; the post already succeeded */ }
+
+    // A workflow may already have closed the ticket; being in the suggested status counts as done.
+    let actualStatus: string = ticket.status;
+    let transitionError: string | null = null;
+    if (shouldTransition(draft.suggested_status, ticket.status)) {
+      try {
+        await transitionTicketByName(ticket.id, draft.suggested_status!);
+        actualStatus = draft.suggested_status!;
+      } catch (e) {
+        transitionError = e instanceof Error ? e.message : String(e);
+      }
+    }
+
+    // Record once, right after the comment lands, whether or not the status change worked.
+    if (!recordedRef.current) {
+      recordedRef.current = true;
+      try {
+        await recordOutcome(buildOutcomeRow(draft, text, ticket, actualStatus));
+      } catch (e) {
+        console.warn('Could not record the draft outcome', e);
+        setRecordFailed(true);
+      }
+    }
+
+    if (transitionError) {
+      setPhase('comment-posted');
+      setError(`Comment posted, but the status change failed: ${transitionError}`);
+      return;
+    }
     setPhase('done');
-    const status = STATUSES.find((s) => s === draft.suggested_status);
-    if (status && onTicketUpdate) onTicketUpdate({ ...ticket, status });
+    const status = STATUSES.find((s) => s === actualStatus);
+    if (status && status !== ticket.status && onTicketUpdate) onTicketUpdate({ ...ticket, status });
   };
 
   const header = draft.outcome === 'move' ? 'Move suggestion'
@@ -151,6 +166,11 @@ function DraftBody({ ticket, draft, onOpenWorkflow, onTicketUpdate }: {
         <div style={bannerStyle}>
           <div style={{ fontWeight: 700 }}>Action needed — you</div>
           <div style={{ marginTop: 2 }}>{draft.action_needed.summary}</div>
+          {draft.action_needed.workflow && (
+            <div style={{ marginTop: 4, fontStyle: 'italic' }}>
+              This workflow posts its own reply and closes the ticket — use this draft only if you do the action by hand.
+            </div>
+          )}
           {draft.action_needed.workflow && (
             <button type="button" style={{ ...secondaryButton, marginTop: 6 }}
               onClick={() => onOpenWorkflow(draft.action_needed!.workflow!)}>
@@ -171,7 +191,11 @@ function DraftBody({ ticket, draft, onOpenWorkflow, onTicketUpdate }: {
         </div>
       )}
 
-      {editable && (
+      {editable && postedEarlier && (
+        <div style={{ ...mutedStyle, fontWeight: 600 }}>Posted earlier this session.</div>
+      )}
+
+      {editable && !postedEarlier && (
         <>
           <textarea
             value={text}
@@ -187,6 +211,7 @@ function DraftBody({ ticket, draft, onOpenWorkflow, onTicketUpdate }: {
           <div style={mutedStyle}>
             {draft.suggested_status ? `Suggested status: ${draft.suggested_status}` : 'No status change suggested'}
           </div>
+          {resolving && phase === 'idle' && <div style={mutedStyle}>Resolving mentions…</div>}
           {phase === 'done' ? (
             <div style={{ ...mutedStyle, fontWeight: 600 }}>Posted{draft.suggested_status ? ` and marked ${draft.suggested_status}` : ''}.</div>
           ) : (
@@ -201,6 +226,7 @@ function DraftBody({ ticket, draft, onOpenWorkflow, onTicketUpdate }: {
             </button>
           )}
           {error && <div style={{ ...errorBanner, marginTop: 'var(--mint-sp-2)' }}>{error}</div>}
+          {recordFailed && <div style={warnStyle}>Couldn't log this outcome — the post itself went through.</div>}
         </>
       )}
 
