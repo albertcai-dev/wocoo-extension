@@ -5,6 +5,7 @@ import {
   unresolvedMentionNames, applyMentionResolution,
   markPostedThisSession, wasPostedThisSession, shouldTransition, buildOutcomeRow,
   currentStatusName, resetPostedMemoryForTests,
+  matchPeopleByName,
 } from './agentDraftView';
 import type { AgentDraft, DraftSegment } from './agentDraftTypes';
 
@@ -257,5 +258,26 @@ describe('buildOutcomeRow', () => {
   it('accepts via, assigned_at and a null posted_text for the jira path', () => {
     const row = buildOutcomeRow(draft(), null, { id: 'TEST-1' }, 'Done', { via: 'jira', assignedAt: '2026-01-01T00:00:00.000Z' });
     expect(row).toMatchObject({ via: 'jira', posted_text: null, assigned_at: '2026-01-01T00:00:00.000Z' });
+  });
+});
+
+describe('matchPeopleByName', () => {
+  const people = [
+    { accountId: 'a1', displayName: 'Pat Doe' },
+    { accountId: 'a2', displayName: 'Sam  Roe' },
+    { accountId: 'a3', displayName: 'Pat Doe' },
+    { accountId: 'a4' },
+  ];
+
+  it('matches the exact display name, ignoring case, spacing and a leading @', () => {
+    expect(matchPeopleByName(people, '@sam roe')).toEqual([{ accountId: 'a2', displayName: 'Sam  Roe' }]);
+  });
+
+  it('returns every match so a duplicate name stays ambiguous', () => {
+    expect(matchPeopleByName(people, 'Pat Doe').map((p) => p.accountId)).toEqual(['a1', 'a3']);
+  });
+
+  it('does not match on a partial name', () => {
+    expect(matchPeopleByName(people, 'Pat')).toEqual([]);
   });
 });

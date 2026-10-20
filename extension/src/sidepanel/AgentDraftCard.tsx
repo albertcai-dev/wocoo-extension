@@ -8,9 +8,9 @@ import { toMovePrefill, type MovePrefill } from '../data/movePrefill';
 import { DraftStoreUnavailable, getDraft, isDraftStoreNotSetUp, recordOutcome } from '../api/draftStore';
 import { buildJiraOutcomeRow, rememberDraft, type ExistingReply } from '../data/outcomeCapture';
 import { checkExistingReplyLive, lookupAssignedAtLive } from '../data/outcomeCaptureLive';
-import { postComment, searchJiraUsers, transitionTicketByName } from '../api/jira';
+import { getIssuePeople, postComment, searchJiraUsers, transitionTicketByName } from '../api/jira';
 import {
-  applyMentionResolution, buildOutcomeRow, canPost, currentStatusName, flagLabel, isHttpUrl, markPostedThisSession,
+  applyMentionResolution, buildOutcomeRow, canPost, currentStatusName, flagLabel, isHttpUrl, markPostedThisSession, matchPeopleByName,
   plainToSegments, postLabel, segmentsToPlain, shouldTransition, unresolvedMentionNames, wasPostedThisSession,
   type MentionCandidate,
 } from '../data/agentDraftView';
@@ -194,7 +194,12 @@ function DraftBody({ ticket, draft, onOpenWorkflow, onTicketUpdate, onOpenMove }
     const names = unresolvedMentionNames(draft.segments);
     (async () => {
       const results: Record<string, MentionCandidate[]> = {};
+      // People already on the ticket first (the usual mention is its reporter); user search, which
+      // needs a profile scope Sidekick may not have, only for names not found there.
+      const people = names.length ? await getIssuePeople(ticket.id).catch(() => [] as MentionCandidate[]) : [];
       await Promise.all(names.map(async (name) => {
+        const onTicket = matchPeopleByName(people, name);
+        if (onTicket.length === 1) { results[name] = onTicket; return; }
         try { results[name] = await searchJiraUsers(name); } catch { /* leave unresolved */ }
       }));
       if (cancelled) return;
@@ -202,7 +207,7 @@ function DraftBody({ ticket, draft, onOpenWorkflow, onTicketUpdate, onOpenMove }
       setMentions({ kind: 'done', segments: r.segments, unresolved: r.unresolved });
     })();
     return () => { cancelled = true; };
-  }, [draft, editable]);
+  }, [draft, editable, ticket.id]);
 
   // One automatic retry when the Jira tab wasn't showing this ticket yet (e.g. opened from Drafts
   // ready, which navigates the tab): fired when the content script reports this ticket.

@@ -12,6 +12,7 @@ import {
   readInsertionState, segmentsToEditorOps, shouldPrefill,
   type EditorOp, type FocusedElementInfo, type InsertionBlock, type PrefillCommentMessage, type PrefillCommentReply,
 } from '../data/commentPrefill';
+import { JIRA_WHOAMI_MESSAGE } from '../data/jiraIdentity';
 import { JIRA_COMMENT_SELECTORS } from '../data/jiraCommentSelectors';
 
 function currentTicketKey(): string | null {
@@ -513,6 +514,14 @@ async function handlePrefill(msg: PrefillCommentMessage): Promise<PrefillComment
   }
   return { ok: true, inserted: true };
 }
+
+// The signed-in user's Jira accountId, from the page's own meta tag. Sidekick's OAuth scopes
+// don't cover /myself, so the side panel asks the page instead.
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg?.type !== JIRA_WHOAMI_MESSAGE || sender.id !== chrome.runtime.id) return;
+  const id = document.querySelector<HTMLMetaElement>('meta[name="ajs-atlassian-account-id"]')?.content?.trim();
+  sendResponse({ accountId: id || null });
+});
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg?.type !== PREFILL_COMMENT_MESSAGE) return;

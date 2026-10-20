@@ -3,7 +3,9 @@
 // loading the content script.
 
 /** Every DOM hook the prefill relies on, in one place so they can be adjusted against the live
- *  Jira page. Lists are tried in order. ALL ARE UNVERIFIED GUESSES until the live check. */
+ *  Jira page. Lists are tried in order. Checked live on 2026-10-20 (issue view): the
+ *  placeholder's first selector, the `issue.activity.comment` container and the
+ *  `#ak-editor-textarea` ProseMirror editor; the rest are fallbacks. */
 export const JIRA_COMMENT_SELECTORS = {
   /** The collapsed "Add a comment…" box shown before the new-comment editor is mounted. */
   placeholder: [
@@ -19,6 +21,7 @@ export const JIRA_COMMENT_SELECTORS = {
   /** The new-comment container: wraps the placeholder and, once clicked, the new-comment editor.
    *  Only an editor inside one of these is ever written to. */
   newCommentContainer: [
+    '[data-testid="issue.activity.comment"]',
     '[data-testid="issue.activity.comment.add-comment"]',
     '[data-testid*="add-comment" i]',
     '[data-testid*="addcomment" i]',

@@ -524,6 +524,28 @@ export async function searchJiraUsers(query: string): Promise<JiraUserSearchResu
   }));
 }
 
+/** People on a ticket (reporter, assignee, creator, commenters) with their accountIds. Unlike
+ *  user search, this needs only the issue-read scope, so it is how draft mentions resolve. */
+export async function getIssuePeople(ticketKey: string): Promise<JiraUserSearchResult[]> {
+  const key = encodeURIComponent(ticketKey);
+  const [issueResp, commentsResp] = await Promise.all([
+    jiraFetch(`/rest/api/3/issue/${key}?fields=reporter,assignee,creator`),
+    jiraFetch(`/rest/api/3/issue/${key}/comment?maxResults=100&orderBy=-created`),
+  ]);
+  if (!issueResp.ok) throw new Error(`getIssuePeople failed (HTTP ${issueResp.status})`);
+  const issue = await issueResp.json();
+  const comments = commentsResp.ok ? ((await commentsResp.json()).comments || []) : [];
+  const people = [issue.fields?.reporter, issue.fields?.assignee, issue.fields?.creator,
+    ...comments.map((c: any) => c.author)];
+  const byId = new Map<string, JiraUserSearchResult>();
+  for (const u of people) {
+    if (u?.accountId && u.displayName && !byId.has(u.accountId)) {
+      byId.set(u.accountId, { accountId: u.accountId, displayName: u.displayName, emailAddress: u.emailAddress, avatarUrl: u.avatarUrls?.['24x24'] });
+    }
+  }
+  return [...byId.values()];
+}
+
 // ============ Comment posting (with @mention support) ============
 // Used by Overpayment Triage step 6 to post a structured comment on the WOCOO ticket
 // after the REIMB is created. Builds ADF (Atlassian Document Format) so @mentions render

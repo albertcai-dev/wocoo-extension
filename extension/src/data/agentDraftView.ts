@@ -135,6 +135,13 @@ export function unresolvedMentionNames(segments: DraftSegment[]): string[] {
   return [...names];
 }
 
+/** People on the ticket whose display name is exactly `name` (case and spacing ignored). */
+export function matchPeopleByName(people: MentionCandidate[], name: string): MentionCandidate[] {
+  const norm = (s: string) => s.replace(/\s+/g, ' ').trim().toLowerCase();
+  const want = norm(bareName(name));
+  return people.filter((p) => !!p.displayName && norm(p.displayName) === want);
+}
+
 /** Applies user-search results (keyed by the bare name) to the mention segments. Exactly one
  *  match gives the mention its accountId; none or several downgrade it to plain text and
  *  report it so the card can warn. A name with no entry (failed lookup) counts as none. */
