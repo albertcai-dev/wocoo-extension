@@ -4,6 +4,7 @@ import {
   fallbackLine, insertionBlocker, opsToPasteHtml, readInsertionState, segmentsToEditorOps, shouldPrefill, textToHtml,
   isBusyElsewhere, type FocusedElementInfo,
   INITIAL_PREFILL_RETRY, afterPrefillReply, afterTicketShown,
+  boxHoldsDraft, comparableDraftText,
 } from './commentPrefill';
 import type { DraftSegment } from './agentDraftTypes';
 
@@ -274,5 +275,30 @@ describe('prefill retry after the Jira tab catches up (I6)', () => {
     ]) {
       expect(afterTicketShown(afterPrefillReply(INITIAL_PREFILL_RETRY, reply, true).state).retryNow).toBe(false);
     }
+  });
+});
+
+describe('boxHoldsDraft', () => {
+  const segs: DraftSegment[] = [
+    { type: 'text', text: 'Hi ' },
+    { type: 'mention', text: '@Pat Doe', accountId: 'acc-1' },
+    { type: 'text', text: ', it was a refund.\n\nThanks!' },
+  ];
+
+  it('matches the box as Jira renders the prefill (pill text, paragraphs, a counted node marker)', () => {
+    expect(boxHoldsDraft('Hi @Pat Doe , it was a refund.Thanks!@', segs)).toBe(true);
+  });
+
+  it('does not match once the user changed a word', () => {
+    expect(boxHoldsDraft('Hi @Pat Doe, it was a partial refund. Thanks!', segs)).toBe(false);
+  });
+
+  it('does not match an empty box or an empty draft', () => {
+    expect(boxHoldsDraft('', segs)).toBe(false);
+    expect(boxHoldsDraft('', [{ type: 'text', text: '  ' }])).toBe(false);
+  });
+
+  it('ignores case, spaces and non-breaking spaces only', () => {
+    expect(comparableDraftText('A\u00a0b  C@')).toBe('abc');
   });
 });

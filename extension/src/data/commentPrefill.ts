@@ -232,3 +232,33 @@ export function afterTicketShown(s: PrefillRetryState): { state: PrefillRetrySta
   if (s.awaiting && !s.retried) return { state: { ticketShown: true, awaiting: false, retried: true }, retryNow: true };
   return { state: { ...s, ticketShown: true }, retryNow: false };
 }
+
+// --- clearing the leftover prefill after the card posted ---------------------------------
+// The card posts through the API, so the prefilled (unsaved) copy in Jira's box would linger
+// and could be saved a second time. After a successful post the card asks the page to empty
+// the box, which it does only if the box still holds exactly the draft.
+
+export const CLEAR_PREFILL_MESSAGE = 'wocoo:clear-prefill' as const;
+
+export interface ClearPrefillMessage {
+  type: typeof CLEAR_PREFILL_MESSAGE;
+  key: string;
+  segments: DraftSegment[];
+}
+
+export type ClearPrefillReply = {
+  cleared: boolean;
+  reason?: 'wrong-ticket' | 'no-editor' | 'empty' | 'different' | 'busy' | 'error';
+};
+
+/** Text reduced to what both the draft and the rendered box agree on: no whitespace, no "@"
+ *  (a mention pill renders "@Name", and non-text nodes are counted as "@"), case-folded. */
+export function comparableDraftText(s: string): string {
+  return s.replace(/[@\s\u00a0\u200b]/g, '').toLowerCase();
+}
+
+/** Whether the comment box text is the prefilled draft, untouched. Empty drafts never match. */
+export function boxHoldsDraft(boxText: string, segments: DraftSegment[]): boolean {
+  const want = comparableDraftText(opsToPlainText(segmentsToEditorOps(segments)));
+  return want.length > 0 && comparableDraftText(boxText) === want;
+}

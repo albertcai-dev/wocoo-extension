@@ -8,9 +8,9 @@
 // guarantees we never *clear* on a missed detection — only overwrite on a positive match.
 
 import {
-  PREFILL_COMMENT_MESSAGE, fallbackLine, insertionBlocker, isBusyElsewhere, opsToPasteHtml, opsToPlainText,
+  CLEAR_PREFILL_MESSAGE, PREFILL_COMMENT_MESSAGE, boxHoldsDraft, fallbackLine, insertionBlocker, isBusyElsewhere, opsToPasteHtml, opsToPlainText,
   readInsertionState, segmentsToEditorOps, shouldPrefill,
-  type EditorOp, type FocusedElementInfo, type InsertionBlock, type PrefillCommentMessage, type PrefillCommentReply,
+  type ClearPrefillMessage, type ClearPrefillReply, type EditorOp, type FocusedElementInfo, type InsertionBlock, type PrefillCommentMessage, type PrefillCommentReply,
 } from '../data/commentPrefill';
 import { JIRA_WHOAMI_MESSAGE } from '../data/jiraIdentity';
 import { JIRA_COMMENT_SELECTORS } from '../data/jiraCommentSelectors';
@@ -146,6 +146,8 @@ window.addEventListener('hashchange', () => setTimeout(checkStatusChange, 400));
 // 'insertParagraph' / 'insertLineBreak'). Paragraph breaks only arrive inside a paste's HTML;
 // when the paste isn't taken, only the first line goes in and the reply says 'partial'.
 // No synthetic keystrokes at all: mentions arrive inside the paste (step 3 below).
+// The one other edit is clearPrefill below: after the card posted the draft through the API, it
+// empties the box with execCommand('delete'), only when the box still holds exactly the draft.
 //
 // Before every paste and execCommand the insertion guard
 // re-checks: editor still attached, focus still inside it, page still on the ticket, selection a
@@ -433,6 +435,52 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg?.type !== JIRA_WHOAMI_MESSAGE || sender.id !== chrome.runtime.id) return;
   const id = document.querySelector<HTMLMetaElement>('meta[name="ajs-atlassian-account-id"]')?.content?.trim();
   sendResponse({ accountId: id || null });
+});
+
+/** Empties the new-comment box after the card posted the same text. Leaves it alone unless it
+ *  is this ticket's box and still holds exactly the draft; then collapses the empty box. */
+async function clearPrefill(msg: ClearPrefillMessage): Promise<ClearPrefillReply> {
+  if (currentTicketKey() !== msg.key) return { cleared: false, reason: 'wrong-ticket' };
+  let editor = findCommentEditor();
+  if (!editor) {
+    // Collapsed: open it only when Jira says it is holding an unsaved comment, so a post with no
+    // leftover never pops an empty box open.
+    const ph = findCommentPlaceholder();
+    if (!ph || !/unsaved comment/i.test(ph.textContent || '')) return { cleared: false, reason: 'empty' };
+    editor = await openCommentEditor();
+  }
+  if (!editor) return { cleared: false, reason: 'no-editor' };
+  const text = editorText(editor);
+  if (!text.trim()) return { cleared: false, reason: 'empty' };
+  if (!boxHoldsDraft(text, msg.segments)) return { cleared: false, reason: 'different' };
+  editor.focus();
+  const sel = window.getSelection();
+  if (!sel) return { cleared: false, reason: 'error' };
+  const range = document.createRange();
+  range.selectNodeContents(editor);
+  sel.removeAllRanges();
+  sel.addRange(range);
+  document.execCommand('delete');
+  const empty = await pollFor(() => (editorText(editor).trim() === '' ? true : null), 1_000, 50);
+  if (!empty) return { cleared: false, reason: 'different' };
+  // Collapse the now-empty box so Jira drops its "unsaved comment" copy.
+  const container = JIRA_COMMENT_SELECTORS.newCommentContainer
+    .map((sel) => editor.closest<HTMLElement>(sel)).find(Boolean);
+  container?.querySelector<HTMLElement>('[data-testid="comment-cancel-button"]')?.click();
+  return { cleared: true };
+}
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg?.type !== CLEAR_PREFILL_MESSAGE || sender.id !== chrome.runtime.id) return;
+  if (prefillBusy) {
+    sendResponse({ cleared: false, reason: 'busy' } satisfies ClearPrefillReply);
+    return;
+  }
+  prefillBusy = true;
+  clearPrefill(msg as ClearPrefillMessage)
+    .then(sendResponse, () => sendResponse({ cleared: false, reason: 'error' } satisfies ClearPrefillReply))
+    .finally(() => { prefillBusy = false; });
+  return true; // reply asynchronously
 });
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {

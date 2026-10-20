@@ -15,8 +15,8 @@ import {
   type MentionCandidate,
 } from '../data/agentDraftView';
 import {
-  INITIAL_PREFILL_RETRY, PREFILL_COMMENT_MESSAGE, afterPrefillReply, afterTicketShown,
-  type PrefillCommentMessage, type PrefillCommentReply, type PrefillRetryState,
+  CLEAR_PREFILL_MESSAGE, INITIAL_PREFILL_RETRY, PREFILL_COMMENT_MESSAGE, afterPrefillReply, afterTicketShown,
+  type ClearPrefillMessage, type ClearPrefillReply, type PrefillCommentMessage, type PrefillCommentReply, type PrefillRetryState,
 } from '../data/commentPrefill';
 import { JIRA_TAB_URL } from '../data/jiraTab';
 import { errorBanner, primaryButton, secondaryButton } from './toolUi';
@@ -66,6 +66,18 @@ async function requestCommentPrefill(
   } catch {
     return null;
   }
+}
+
+/** After a successful post: asks the Jira tab to empty its comment box if it still holds the
+ *  prefilled draft (so the unsaved copy can't be saved a second time). Fire and forget. */
+async function requestClearPrefill(key: string, segments: DraftSegment[]): Promise<void> {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab?.id == null || !tab.url || !JIRA_TAB_URL.test(tab.url)) return;
+    const msg: ClearPrefillMessage = { type: CLEAR_PREFILL_MESSAGE, key, segments };
+    const reply = (await chrome.tabs.sendMessage(tab.id, msg)) as ClearPrefillReply | undefined;
+    if (reply && !reply.cleared && reply.reason !== 'empty') console.debug('[AgentDraftCard] left the Jira box alone:', reply.reason);
+  } catch { /* no Jira tab / content script: nothing to clear */ }
 }
 
 const PREFILL_NOTES: Record<Extract<Prefill, { kind: 'skipped' }>['reason'], string> = {
@@ -294,9 +306,11 @@ function DraftBody({ ticket, draft, onOpenWorkflow, onTicketUpdate, onOpenMove }
     }
     try {
       if (!commentPosted) {
-        await postComment(ticket.id, plainToSegments(text, mentions.segments), { multiline: true });
+        const postedSegments = plainToSegments(text, mentions.segments);
+        await postComment(ticket.id, postedSegments, { multiline: true });
         commentPosted = true;
         void markPostedThisSession(ticket.id, draft.created_at);
+        void requestClearPrefill(ticket.id, postedSegments);
       }
     } catch (e) {
       setPhase('idle');
