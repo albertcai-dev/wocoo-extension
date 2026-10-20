@@ -5,7 +5,11 @@
 // retry a few times anyway in case the form is replaced after first paint.
 
 import { gridFromRows, pageSaysNoRecord, readColumnForLast4, readLabelValue, readProgramForLast4 } from '../data/i2cCardDetailsParse';
-import { locateProductColumns, pickCreditProduct, type ProductRow } from '../data/i2cProductSelect';
+import { locateProductColumns, pickCreditProduct, pickProduct, type ProductRow } from '../data/i2cProductSelect';
+import {
+  AGENT_I2C_CHAIN_KEY, AGENT_I2C_RESULT_ATTR, AGENT_I2C_RESULT_KEY, parseAgentI2cRequest, readChain,
+  type AgentI2cChain, type AgentI2cResult,
+} from '../data/i2cAgentChain';
 import { isSignInLabel } from '../data/i2cLogin';
 import { AGENT_TAB_KEY, shouldReport } from '../data/i2cActivity';
 
@@ -1656,6 +1660,158 @@ function watchUserActivity() {
   document.addEventListener('keydown', onActivity, { capture: true, passive: true });
   document.addEventListener('mousedown', onActivity, { capture: true, passive: true });
   document.addEventListener('wheel', onActivity, { capture: true, passive: true });
+}
+
+// ----- The draft agent's own "open this client" chain ---------------------------------
+// Same steps and DOM hooks as the i2c button's chain above, but started by a window message
+// from the agent's tab and carried in that tab's sessionStorage, so it never runs in the
+// user's own i2c tabs. Each step publishes a JSON result on <html> for the agent to poll.
+
+function isAgentTab(): boolean {
+  try { return sessionStorage.getItem(AGENT_TAB_KEY) === '1'; } catch { return false; }
+}
+
+function publishAgentI2c(result: Omit<AgentI2cResult, 'at'>): void {
+  const full: AgentI2cResult = { ...result, at: Date.now() };
+  try { sessionStorage.setItem(AGENT_I2C_RESULT_KEY, JSON.stringify(full)); } catch { /* fine */ }
+  document.documentElement.setAttribute(AGENT_I2C_RESULT_ATTR, JSON.stringify(full));
+}
+
+function saveChain(chain: AgentI2cChain | null): void {
+  try {
+    if (chain) sessionStorage.setItem(AGENT_I2C_CHAIN_KEY, JSON.stringify(chain));
+    else sessionStorage.removeItem(AGENT_I2C_CHAIN_KEY);
+  } catch { /* fine */ }
+}
+
+function stopAgentChain(reason: string, extra: Partial<AgentI2cResult> = {}): void {
+  saveChain(null);
+  publishAgentI2c({ state: 'stopped', reason, ...extra });
+}
+
+/** The Product Search Result rows with the cells the agent reports, header-matched. */
+function readProductRowsWithCells(): Array<{ el: HTMLTableRowElement; row: ProductRow; program: string; card: string }> | null {
+  for (const table of Array.from(document.querySelectorAll('table'))) {
+    if (table.querySelector('table')) continue;
+    const rowEls = Array.from(table.querySelectorAll('tr'));
+    const cells = rowEls.map((tr) => Array.from(tr.querySelectorAll<HTMLTableCellElement>('th, td')).map((c) => (c.textContent || '').replace(/\s+/g, ' ').trim()));
+    const cols = locateProductColumns(cells);
+    if (!cols) continue;
+    const header = cells[cols.headerAt];
+    const programAt = header.findIndex((c) => /^Program$/i.test(c));
+    const cardAt = header.findIndex((c) => /^Account\/?\s*Card Number$/i.test(c));
+    const out = rowEls
+      .map((el, i) => ({ el, i }))
+      .filter(({ i }) => i > cols.headerAt && cells[i].length > Math.max(cols.categoryAt, cols.statusAt))
+      .map(({ el, i }) => ({
+        el,
+        row: { category: cells[i][cols.categoryAt] || '', status: cells[i][cols.statusAt] || '' },
+        program: programAt >= 0 ? cells[i][programAt] || '' : '',
+        card: cardAt >= 0 ? cells[i][cardAt] || '' : '',
+      }));
+    if (out.length) return out;
+  }
+  return null;
+}
+
+let agentStepRunning = false;
+/** One pass of the chain on the current page. Returns true when it acted or finished. */
+async function agentChainStep(): Promise<boolean> {
+  if (agentStepRunning || !isAgentTab()) return false;
+  const chain = readChain(sessionStorage.getItem(AGENT_I2C_CHAIN_KEY), Date.now());
+  if (!chain) return false;
+  agentStepRunning = true;
+  try {
+    const body = document.body?.textContent || '';
+    if (findFields()) { stopAgentChain('i2c is showing the login form; log in, then start again'); return true; }
+
+    if (chain.step === 'search') {
+      const input = findEmailInput();
+      if (!input) return false;
+      setValue(input, chain.email);
+      const btn = findSectionSearchButton(input);
+      if (!btn) { stopAgentChain('Customer Search: no Search button next to Email Address'); return true; }
+      saveChain({ ...chain, step: 'after-search' });
+      publishAgentI2c({ state: 'running', step: 'after-search' });
+      setTimeout(() => btn.click(), 100);
+      return true;
+    }
+
+    if (/Displays all applicable cardholder products/i.test(body)) {
+      const rows = readProductRowsWithCells();
+      if (!rows) return false;
+      const pick = pickProduct(rows.map((r) => r.row), chain.product);
+      const products = rows.map((r) => ({ program: r.program, category: r.row.category, status: r.row.status, card: r.card }));
+      if (pick === null) {
+        stopAgentChain(`Product Search Result: no single active ${chain.product === 'credit' ? 'credit' : 'retail prepaid (Debit)'} product; choose by hand`, { products });
+        return true;
+      }
+      const link = Array.from(rows[pick].el.querySelectorAll<HTMLElement>('a, button, input[type="button"]'))
+        .find((el) => /^Select\s+Customer$/i.test(((el as HTMLInputElement).value || el.textContent || '').replace(/\s+/g, ' ').trim()) && isVisible(el));
+      if (!link) { stopAgentChain('Product Search Result: no Select Customer link on the chosen row', { products }); return true; }
+      saveChain({ ...chain, step: 'continue' });
+      publishAgentI2c({ state: 'running', step: 'continue', products });
+      setTimeout(() => link.click(), PRODUCT_SELECT_CLICK_DELAY_MS);
+      return true;
+    }
+
+    const cont = Array.from(document.querySelectorAll<HTMLElement>('input[type="submit"], input[type="button"], button'))
+      .find((b) => /^Continue\s+with\s+this\s+Customer$/i.test(((b as HTMLInputElement).value || b.textContent || '').trim()) && isVisible(b));
+    if (cont && chain.step !== 'done') {
+      if (findAccountSelectInputs().length > 1 && !findAccountSelectInputs().some((i) => i.checked)) {
+        stopAgentChain('several accounts on the customer page; tick the right Select box and click Continue with this Customer');
+        return true;
+      }
+      if (!(await ensureAccountSelected())) return false;
+      saveChain({ ...chain, step: 'done' });
+      publishAgentI2c({ state: 'running', step: 'done' });
+      setTimeout(() => cont.click(), CONTINUE_CLICK_DELAY_MS);
+      return true;
+    }
+
+    if (chain.step === 'done' || chain.step === 'continue') {
+      // Past the customer flow: post-customer pages group the sidebar into Customer / Account /
+      // Card Management (pre-customer pages keep a flat list), so wait for that, not just for
+      // the Continue button to be gone (it may simply not have rendered yet).
+      if (!cont && /Account Management|Card Management|Customer Management|Account Summary/i.test(body)) {
+        saveChain(null);
+        publishAgentI2c({ state: 'done', step: 'done' });
+        return true;
+      }
+    }
+    return false;
+  } finally {
+    agentStepRunning = false;
+  }
+}
+
+/** Retries a step while a page renders (i2c is server-rendered, but alerts and panels lag). */
+async function runAgentChain(): Promise<void> {
+  const end = Date.now() + 10_000;
+  while (Date.now() < end) {
+    if (await agentChainStep()) return;
+    await sleep(300);
+  }
+}
+
+window.addEventListener('message', (ev: MessageEvent) => {
+  if (ev.source !== window) return;
+  const req = parseAgentI2cRequest(ev.data);
+  if (!req) return;
+  if (!isAgentTab()) return;
+  if ('error' in req) { publishAgentI2c({ state: 'stopped', reason: req.error }); return; }
+  saveChain({ email: req.email, product: req.product, startedAt: Date.now(), step: 'search' });
+  publishAgentI2c({ state: 'running', step: 'search' });
+  void runAgentChain();
+});
+
+// On every page load in the agent's tab: re-publish the last result, continue a chain.
+if (isAgentTab()) {
+  try {
+    const last = sessionStorage.getItem(AGENT_I2C_RESULT_KEY);
+    if (last) document.documentElement.setAttribute(AGENT_I2C_RESULT_ATTR, last);
+  } catch { /* fine */ }
+  void runAgentChain();
 }
 
 watchUserActivity();

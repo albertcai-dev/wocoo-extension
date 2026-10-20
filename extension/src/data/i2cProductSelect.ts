@@ -52,11 +52,23 @@ export interface ProductRow {
  * choose when a client has several accounts.
  */
 export function pickCreditProduct(rows: ProductRow[]): number | null {
+  return pickProduct(rows, 'credit');
+}
+
+/** Which card a lookup is about: the credit card, or the retail prepaid Visa (PPVC), whose
+ *  Program Category i2c shows as "Debit". */
+export type CardProduct = 'credit' | 'prepaid';
+
+const CATEGORY_FOR: Record<CardProduct, string> = { credit: 'credit', prepaid: 'debit' };
+
+/** Index of the one ACTIVE row of the wanted product, or null (none, or several: the caller
+ *  must choose). */
+export function pickProduct(rows: ProductRow[], want: CardProduct): number | null {
   const matches: number[] = [];
   rows.forEach((row, i) => {
     const category = (row.category || '').trim().toLowerCase();
     const status = (row.status || '').trim().toLowerCase();
-    if (category === 'credit' && status === 'active') matches.push(i);
+    if (category === CATEGORY_FOR[want] && status === 'active') matches.push(i);
   });
   return matches.length === 1 ? matches[0] : null;
 }
