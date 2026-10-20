@@ -45,6 +45,10 @@ type Prefill =
 type Gate =
   | { kind: 'checking' }
   | { kind: 'open' }
+  /** The ticket is Done or Cancelled: nothing to post, no prefill. */
+  | { kind: 'closed'; status: string }
+  /** The earlier-reply check failed: the draft stays usable by hand, but is never auto-filled. */
+  | { kind: 'unchecked' }
   | { kind: 'posted-earlier' }
   | { kind: 'already-replied'; existing: ExistingReply };
 
@@ -183,6 +187,12 @@ function DraftBody({ ticket, draft, onOpenWorkflow, onTicketUpdate, onOpenMove }
     if (!editable) return;
     let cancelled = false;
     (async () => {
+      // A ticket this card just posted and closed keeps its "posted" state; only a ticket found
+      // already closed gets the closed note.
+      if ((ticket.status === 'Done' || ticket.status === 'Cancelled') && phaseRef.current === 'idle') {
+        setGate({ kind: 'closed', status: currentStatusName(ticket) });
+        return;
+      }
       if (await wasPostedThisSession(ticket.id, draft.created_at)) {
         if (!cancelled) setGate({ kind: 'posted-earlier' });
         return;
@@ -191,13 +201,14 @@ function DraftBody({ ticket, draft, onOpenWorkflow, onTicketUpdate, onOpenMove }
         const existing = await checkExistingReplyLive(draft);
         if (!cancelled) setGate(existing.reply ? { kind: 'already-replied', existing } : { kind: 'open' });
       } catch (e) {
-        // Fail open: a prefill is never saved, and Post checks again before posting.
+        // Fail closed for the automatic prefill (it would land on a ticket he may already have
+        // answered); Insert draft and Post stay available, and Post checks again before posting.
         console.warn('[AgentDraftCard] could not check for an earlier reply', e);
-        if (!cancelled) setGate({ kind: 'open' });
+        if (!cancelled) setGate({ kind: 'unchecked' });
       }
     })();
     return () => { cancelled = true; };
-  }, [draft, editable, ticket.id]);
+  }, [draft, editable, ticket.id, ticket.status]);
 
   // Resolve @Name mentions to Jira accounts as the card loads, so any problem shows before posting.
   useEffect(() => {
@@ -453,6 +464,14 @@ function DraftBody({ ticket, draft, onOpenWorkflow, onTicketUpdate, onOpenMove }
         );
       })()}
 
+      {editable && gate.kind === 'closed' && (
+        <div style={{ ...mutedStyle, fontWeight: 600 }}>This ticket is {gate.status} — nothing to post.</div>
+      )}
+
+      {editable && gate.kind === 'unchecked' && (
+        <div style={mutedStyle}>Couldn't check whether you already replied, so the draft wasn't filled into Jira's box. Use Insert draft if you still want it.</div>
+      )}
+
       {editable && gate.kind === 'posted-earlier' && (
         <div style={{ ...mutedStyle, fontWeight: 600 }}>Posted earlier this session.</div>
       )}
@@ -487,7 +506,7 @@ function DraftBody({ ticket, draft, onOpenWorkflow, onTicketUpdate, onOpenMove }
         );
       })()}
 
-      {editable && (gate.kind === 'checking' || gate.kind === 'open') && (
+      {editable && (gate.kind === 'checking' || gate.kind === 'open' || gate.kind === 'unchecked') && (
         <>
           <textarea
             value={text}

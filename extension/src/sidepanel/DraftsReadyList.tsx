@@ -3,6 +3,9 @@
 
 import { useEffect, useState } from 'react';
 import { listReadyDrafts } from '../api/draftStore';
+import { getIssueCommentsDetailed, searchTickets } from '../api/jira';
+import { repliedAfterDraft, splitReadyRows } from '../data/draftsReadyFilter';
+import { getMyAccountId } from '../data/outcomeCaptureLive';
 import type { ReadyDraftRow } from '../data/agentDraftTypes';
 import { openTicketInJiraTab, ticketUrlFor } from '../data/jiraTab';
 import { createLatestRefresher } from '../data/latestRefresh';
@@ -17,13 +20,40 @@ async function openInJira(row: ReadyDraftRow): Promise<void> {
   }
 }
 
+/** The store's ready drafts, minus tickets that are closed, moved, reassigned or already answered
+ *  (the store only learns those at the agent's next poll). If Jira can't be reached, the store's
+ *  list is shown as is; a ticket whose reply check fails is kept. */
+async function loadReady(): Promise<ReadyDraftRow[]> {
+  const rows = await listReadyDrafts();
+  if (rows.length === 0) return rows;
+  let open;
+  try {
+    const found = await searchTickets('project = WOCOO AND assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC', 100);
+    open = found.map((t) => ({ key: t.id, status: t.status, updated: t.updated }));
+  } catch (e) {
+    console.debug('[DraftsReadyList] Jira check skipped', e);
+    return rows;
+  }
+  const { keep, recheck } = splitReadyRows(rows, open);
+  if (recheck.length === 0) return keep;
+  const me = await getMyAccountId().catch(() => null);
+  if (!me) return keep;
+  const answered = new Set<string>();
+  await Promise.all(recheck.map(async (r) => {
+    try {
+      if (repliedAfterDraft(await getIssueCommentsDetailed(r.key, { newest: true }), me, r.created_at)) answered.add(r.key);
+    } catch { /* keep it */ }
+  }));
+  return keep.filter((r) => !answered.has(r.key));
+}
+
 export function DraftsReadyList({ onOpenTicket }: { onOpenTicket: (ticketKey: string) => void }) {
   const [rows, setRows] = useState<ReadyDraftRow[]>([]);
 
   // Load on mount, and (debounced) whenever the panel regains focus or becomes visible again.
   // Only the newest response is applied. Any failure (DraftStoreUnavailable or else): show nothing.
   useEffect(() => {
-    const r = createLatestRefresher(listReadyDrafts, setRows, () => setRows([]), 1000);
+    const r = createLatestRefresher(loadReady, setRows, () => setRows([]), 1000);
     r.now();
     const onFocus = () => r.soon();
     const onVisible = () => { if (document.visibilityState === 'visible') r.soon(); };

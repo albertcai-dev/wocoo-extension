@@ -23,7 +23,7 @@ async function accountIdFromJiraPage(): Promise<string | null> {
 }
 
 let myAccountId: string | null = null;
-async function getMyAccountId(): Promise<string> {
+export async function getMyAccountId(): Promise<string> {
   if (myAccountId) return myAccountId;
   myAccountId = await resolveMyAccountId({
     fromApi: async () => (await getMyself()).accountId,

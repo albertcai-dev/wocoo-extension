@@ -11,7 +11,7 @@ import { createSessionMarks } from './sessionMarks';
 export const COMMENT_PAGE_CAP = 100;
 
 /** Jira stamps offsets without a colon ("-0500"); Date.parse wants "-05:00". NaN when unparseable. */
-function parseJiraTime(s: string): number {
+export function parseJiraTime(s: string): number {
   return Date.parse(s.replace(/([+-]\d\d)(\d\d)$/, '$1:$2'));
 }
 
