@@ -97,7 +97,14 @@ export function textToHtml(text: string): string {
  *  Mention ops (which the content script types separately) render as plain "@query". */
 export function opsToPasteHtml(ops: EditorOp[]): string {
   const body = ops.map((op) => {
-    if (op.kind === 'mention') return escapeHtml('@' + op.query);
+    // The Atlassian editor turns a pasted span[data-mention-id] into a real mention pill (that is
+    // how a copied comment keeps its mentions), so no typeahead is involved. Without an id, text.
+    if (op.kind === 'mention') {
+      const label = escapeHtml('@' + op.query);
+      return op.accountId
+        ? `<span data-mention-id="${escapeHtml(op.accountId)}" data-access-level="" data-text="${label}" contenteditable="false">${label}</span>`
+        : label;
+    }
     const inner = textToHtml(op.text);
     return op.href && isHttpUrl(op.href) ? `<a href="${escapeHtml(op.href)}">${inner}</a>` : inner;
   }).join('');

@@ -95,6 +95,25 @@ describe('opsToPasteHtml', () => {
   });
 });
 
+describe('opsToPasteHtml mentions', () => {
+  it('pastes a resolved mention as an Atlassian mention span', () => {
+    expect(opsToPasteHtml([
+      { kind: 'text', text: 'Hi ' },
+      { kind: 'mention', query: 'Pat Doe', accountId: 'acc-1' },
+      { kind: 'text', text: ', thanks' },
+    ])).toBe('<p>Hi <span data-mention-id="acc-1" data-access-level="" data-text="@Pat Doe" contenteditable="false">@Pat Doe</span>, thanks</p>');
+  });
+
+  it('escapes the id and the name', () => {
+    expect(opsToPasteHtml([{ kind: 'mention', query: 'A<b>', accountId: 'x"y' }]))
+      .toBe('<p><span data-mention-id="x&quot;y" data-access-level="" data-text="@A&lt;b&gt;" contenteditable="false">@A&lt;b&gt;</span></p>');
+  });
+
+  it('pastes an unresolved mention as plain text', () => {
+    expect(opsToPasteHtml([{ kind: 'mention', query: 'Pat Doe' }])).toBe('<p>@Pat Doe</p>');
+  });
+});
+
 describe('opsToPasteHtml href safety', () => {
   it('pastes a non-http(s) href as plain text, not an anchor', () => {
     expect(opsToPasteHtml([{ kind: 'text', text: 'click', href: 'javascript:alert(1)' }])).toBe('<p>click</p>');

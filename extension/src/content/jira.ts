@@ -145,11 +145,9 @@ window.addEventListener('hashchange', () => setTimeout(checkStatusChange, 400));
 // Ctrl+Enter key events, and execCommand is only ever 'insertText' with single-line text (never
 // 'insertParagraph' / 'insertLineBreak'). Paragraph breaks only arrive inside a paste's HTML;
 // when the paste isn't taken, only the first line goes in and the reply says 'partial'.
-// The one synthetic keystroke is Escape, sent only while a typeahead-specific popup is open, to
-// dismiss the "@" typeahead when the mentioned user's option never appears; a one-shot listener
-// on the editor's parent stops it bubbling further (e.g. to a board modal's close handler).
+// No synthetic keystrokes at all: mentions arrive inside the paste (step 3 below).
 //
-// Before every paste, execCommand, typed character, option click and Escape the insertion guard
+// Before every paste and execCommand the insertion guard
 // re-checks: editor still attached, focus still inside it, page still on the ticket, selection a
 // collapsed caret with nothing after it. Any failure aborts with reason 'interrupted'. Focus is
 // set once at the start and never stolen back. An automatic prefill (msg.auto) does not start at
@@ -161,14 +159,14 @@ window.addEventListener('hashchange', () => setTimeout(checkStatusChange, 400));
 //   2. Text: a synthetic `paste` ClipboardEvent carrying text/plain + text/html. ProseMirror reads
 //      event.clipboardData, so links and paragraphs go in in one step. If the editor did not
 //      take it, execCommand('insertText') of the first line only ('partial').
-//   3. Mentions: type "@" + the name with execCommand (ProseMirror sees it as typing, so the
-//      mention typeahead opens), wait up to 3 s for the option whose accountId matches, click it.
-//      No match -> the "@Name" stays as plain text.
+//   3. Mentions go in the same paste, as span[data-mention-id] in the HTML, which the editor
+//      parses into a mention pill (as when pasting a copied comment). Typing "@Name" through the
+//      typeahead was tried first and lost characters on the live page (2026-10-20). If the
+//      editor drops the span, the plain "@Name" text remains.
 // ------------------------------------------------------------
 
 
 const PREFILL_EDITOR_WAIT_MS = 5_000;
-const PREFILL_MENTION_WAIT_MS = 3_000;
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -317,18 +315,6 @@ function placeCaretAtEnd(editor: HTMLElement): void {
   sel.addRange(range);
 }
 
-/** Whether the character just before the caret is a space (Jira adds one after a mention). */
-function spaceBeforeCaret(editor: HTMLElement): boolean {
-  const sel = window.getSelection();
-  if (!sel || sel.rangeCount === 0) return false;
-  const caret = sel.getRangeAt(0);
-  if (!editor.contains(caret.startContainer)) return false;
-  const r = document.createRange();
-  r.setStart(editor, 0);
-  r.setEnd(caret.startContainer, caret.startOffset);
-  return /[  ]$/.test(r.toString());
-}
-
 /** Single-line execCommand insert, guarded. Never called with a newline. */
 function execInsert(editor: HTMLElement, key: string, text: string): void {
   if (!text) return;
@@ -390,83 +376,9 @@ function trimOpsEdges(ops: EditorOp[], lead: number, trail: number): EditorOp[] 
   return out;
 }
 
-function findMentionOption(accountId: string): HTMLElement | null {
-  const S = JIRA_COMMENT_SELECTORS;
-  const id = CSS.escape(accountId);
-  for (const sel of S.mentionOptionScopes) {
-    for (const popup of Array.from(document.querySelectorAll<HTMLElement>(sel))) {
-      if (!isShown(popup) || popup.closest('[contenteditable="true"]')) continue;
-      for (const attr of S.mentionIdAttributes) {
-        const hit = popup.querySelector<HTMLElement>(`[${attr}="${id}"]`);
-        if (hit && isShown(hit)) return hit.closest<HTMLElement>(S.mentionOption) ?? hit;
-      }
-    }
-  }
-  return null;
-}
-
-/** Escape to the editor only (typeahead dismiss). A one-shot bubble listener on the parent stops
- *  it there, so a board modal's or page's own Escape handler above never sees it. */
-function dismissTypeahead(editor: HTMLElement, key: string): void {
-  if (!firstShown(JIRA_COMMENT_SELECTORS.typeaheadPopup)) return;
-  guard(editor, key);
-  const parent = editor.parentElement;
-  const stop = (e: Event) => e.stopPropagation();
-  parent?.addEventListener('keydown', stop, { once: true });
-  try {
-    editor.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true, cancelable: true }));
-  } finally {
-    parent?.removeEventListener('keydown', stop);
-  }
-}
-
-/** Types "@query" through Jira's typeahead and picks the option for accountId.
- *  Returns false (leaving "@query" as plain text) if the option never appears. */
-async function insertMention(editor: HTMLElement, key: string, query: string, accountId: string | undefined): Promise<boolean> {
-  const S = JIRA_COMMENT_SELECTORS;
-  if (!accountId) { execInsert(editor, key, '@' + query); return false; }
-  const pillsBefore = editor.querySelectorAll(S.insertedMention).length;
-  for (const ch of '@' + query) {
-    execInsert(editor, key, ch);
-    await sleep(35);
-  }
-  const option = await pollFor(() => findMentionOption(accountId), PREFILL_MENTION_WAIT_MS, 100);
-  if (!option) {
-    console.debug('[wocoo-prefill] no typeahead option for', query, '- leaving plain text');
-    dismissTypeahead(editor, key);
-    await sleep(80);
-    return false;
-  }
-  guard(editor, key);
-  // click only: the current Atlassian editor typeahead selects in the item's onClick (React accepts
-  // synthetic clicks) and keeps editor focus via its own mousedown preventDefault, so no mousedown
-  // is sent. If the live check shows no pill, switch this to a mousedown dispatch (older MentionPicker).
-  option.click();
-  await pollFor(() => (editor.querySelectorAll(S.insertedMention).length > pillsBefore ? true : null), 1_200, 80);
-  await sleep(60);
-  return editor.querySelectorAll(S.insertedMention).length > pillsBefore;
-}
-
 async function runEditorOps(editor: HTMLElement, key: string, ops: EditorOp[]): Promise<void> {
-  let i = 0;
-  let afterMention = false;
-  while (i < ops.length) {
-    const op = ops[i];
-    if (op.kind === 'mention') {
-      afterMention = await insertMention(editor, key, op.query, op.accountId);
-      i++;
-      continue;
-    }
-    const run: EditorOp[] = [];
-    while (i < ops.length && ops[i].kind === 'text') run.push({ ...ops[i++] } as EditorOp);
-    // Jira puts a space after a picked mention; don't double it.
-    const first = run[0];
-    if (afterMention && first.kind === 'text' && first.text.startsWith(' ') && spaceBeforeCaret(editor)) {
-      first.text = first.text.slice(1);
-    }
-    afterMention = false;
-    await insertTextOps(editor, key, run.filter((o) => o.kind !== 'text' || o.text));
-  }
+  // One paste for everything, mentions included (see the strategy note above).
+  await insertTextOps(editor, key, ops.filter((o) => o.kind !== 'text' || o.text));
 }
 
 let prefillBusy = false;
