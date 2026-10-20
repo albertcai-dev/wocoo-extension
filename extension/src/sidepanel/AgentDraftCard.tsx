@@ -267,15 +267,16 @@ function DraftBody({ ticket, draft, onOpenWorkflow, onTicketUpdate, onOpenMove }
               <>
                 <div><b>{move.destination}</b> — {move.issue_type}</div>
                 <div style={{ marginTop: 4 }}>{move.reason}</div>
-                {onOpenMove && (
-                  <button type="button" style={{ ...primaryButton, marginTop: 'var(--mint-sp-2)' }}
-                    onClick={() => onOpenMove(movePrefill)}>
-                    Move to {move.destination}
-                  </button>
-                )}
               </>
             ) : (
-              <div>Move manually to <b>{move.destination}</b>: {move.reason}</div>
+              <div>Move manually to <b>{move.destination}</b> ({move.issue_type}): {move.reason}</div>
+            )}
+            {move.comment?.trim() && <MoveComment text={move.comment} />}
+            {movePrefill && onOpenMove && (
+              <button type="button" style={{ ...primaryButton, marginTop: 'var(--mint-sp-2)' }}
+                onClick={() => onOpenMove(movePrefill)}>
+                Move to {move.destination}
+              </button>
             )}
           </div>
         );
@@ -372,6 +373,27 @@ function DraftBody({ ticket, draft, onOpenWorkflow, onTicketUpdate, onOpenMove }
           Compass thread
         </a>
       )}
+    </div>
+  );
+}
+
+/** The comment the agent suggests posting with the move (the Move modal has no field for it). */
+function MoveComment({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch { /* clipboard unavailable; the text is selectable */ }
+  };
+  return (
+    <div style={{ marginTop: 6 }}>
+      <div style={{ fontWeight: 600 }}>Suggested move comment</div>
+      <div style={{ ...bannerStyle, marginTop: 2, whiteSpace: 'pre-wrap', userSelect: 'text' }}>{text}</div>
+      <button type="button" style={{ ...secondaryButton, marginTop: 4 }} onClick={() => void copy()}>
+        {copied ? 'Copied' : 'Copy'}
+      </button>
     </div>
   );
 }

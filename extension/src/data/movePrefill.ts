@@ -45,6 +45,11 @@ const ISSUE_TYPES: Partial<Record<MoveDestination, PrrIssueTypeConfig[]>> = {
   BOPSFUND: BOPSFUND_ISSUE_TYPES,
 };
 
+/** Whether the destination has an issue-type picker (EOC and CRED don't). */
+export function hasIssueTypePicker(dest: MoveDestination): boolean {
+  return !!ISSUE_TYPES[dest];
+}
+
 const norm = (s: string) => s.trim().toLowerCase();
 
 /** The issue-type id for a destination's picker, matched by name. undefined for EOC/CRED (no
@@ -59,7 +64,8 @@ const optionLabel = (o: { id: string; value?: string; name?: string }) => (o.val
 /** Field values to merge into a dynamic form once createmeta has loaded. Keys match a required
  *  field by id or name (case-insensitive). Option values resolve a label (or id) to the option
  *  id the <select> uses; "Parent > Child" fills a cascading field. Anything unmatched is left
- *  blank, and a field that already has a value (e.g. from the ticket) is never overwritten. */
+ *  blank, and a field that already has a value (e.g. from the ticket) is never overwritten.
+ *  Fields Atlas fills (prefillFrom atlasName/atlasAddress) are skipped. */
 export function matchPrefillFields(
   required: PrrRequiredField[],
   meta: CreateMetaField[],
@@ -70,14 +76,17 @@ export function matchPrefillFields(
   if (!prefill) return out;
   for (const f of required) {
     if ((current[f.fieldId] ?? '').trim()) continue;
+    // Atlas owns these (the scrape lands after createmeta); an agent value must not pre-empt it.
+    if (f.prefillFrom === 'atlasName' || f.prefillFrom === 'atlasAddress') continue;
     const key = Object.keys(prefill).find((k) => norm(k) === norm(f.fieldId) || norm(k) === norm(f.name));
     const raw = key === undefined ? '' : prefill[key].trim();
     if (!raw) continue;
 
     if (f.type === 'option' || f.type === 'array-option' || f.type === 'option-with-child') {
       const opts = meta.find((m) => m.fieldId === f.fieldId)?.allowedValues ?? [];
+      // Labels first: an option whose label equals another option's id must resolve by label.
       const find = (list: typeof opts, v: string) =>
-        list.find((o) => o.id === v) ?? list.find((o) => norm(optionLabel(o)) === norm(v));
+        list.find((o) => norm(optionLabel(o)) === norm(v)) ?? list.find((o) => o.id === v);
       if (f.type === 'option-with-child') {
         const [parentRaw, ...rest] = raw.split(/\s*>\s*/);
         const parent = find(opts, parentRaw);

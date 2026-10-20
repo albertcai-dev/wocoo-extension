@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { DraftMove } from './agentDraftTypes';
 import type { CreateMetaField } from '../api/jira';
 import { DBO_ISSUE_TYPES } from './moveConfig';
-import { issueTypeIdFor, matchPrefillFields, toMovePrefill } from './movePrefill';
+import { hasIssueTypePicker, issueTypeIdFor, matchPrefillFields, toMovePrefill } from './movePrefill';
 
 const move = (over: Partial<DraftMove>): DraftMove => ({
   destination: 'EOC',
@@ -94,5 +94,32 @@ describe('matchPrefillFields', () => {
     }];
     expect(matchPrefillFields(fields, m, { Area: 'Cards > Reissue' }, {})).toEqual({ customfield_2: '20', customfield_2__child: '21' });
     expect(matchPrefillFields(fields, m, { Area: 'Cards' }, {})).toEqual({ customfield_2: '20' });
+  });
+
+  it('never fills fields Atlas owns', () => {
+    const fields = [
+      { fieldId: 'customfield_3', name: 'Cardholder Name', type: 'string' as const, prefillFrom: 'atlasName' as const },
+      { fieldId: 'customfield_4', name: 'Shipping Address', type: 'paragraph' as const, prefillFrom: 'atlasAddress' as const },
+      { fieldId: 'customfield_5', name: 'Note', type: 'string' as const },
+    ];
+    const out = matchPrefillFields(fields, [], { 'Cardholder Name': 'X', 'customfield_4': '1 Fake St', Note: 'hi' }, {});
+    expect(out).toEqual({ customfield_5: 'hi' });
+  });
+
+  it('matches an option label before an id that equals another option label', () => {
+    const fields = [{ fieldId: 'customfield_6', name: 'Pick', type: 'option' as const }];
+    const m: CreateMetaField[] = [{
+      fieldId: 'customfield_6', name: 'Pick', required: true,
+      allowedValues: [{ id: '30', value: 'Other' }, { id: '31', value: '30' }],
+    }];
+    expect(matchPrefillFields(fields, m, { Pick: '30' }, {})).toEqual({ customfield_6: '31' });
+  });
+});
+
+describe('hasIssueTypePicker', () => {
+  it('is true for dynamic destinations only', () => {
+    expect(hasIssueTypePicker('DBO')).toBe(true);
+    expect(hasIssueTypePicker('EOC')).toBe(false);
+    expect(hasIssueTypePicker('CRED')).toBe(false);
   });
 });

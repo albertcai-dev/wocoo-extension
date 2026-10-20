@@ -61,7 +61,7 @@ import {
   fetchAtlasClientDetailsHeadless,
   type AtlasClientDetails,
 } from '../data/atlasAccountLookup';
-import { issueTypeIdFor, matchPrefillFields, type MovePrefill } from '../data/movePrefill';
+import { hasIssueTypePicker, issueTypeIdFor, matchPrefillFields, type MovePrefill } from '../data/movePrefill';
 
 type Status = 'configuring' | 'confirming' | 'executing' | 'success' | 'error';
 
@@ -134,6 +134,9 @@ export function MoveModal({ ticket, onClose, initialDestKey = 'EOC', prefill }: 
   const prefillFieldsPending = useRef(!!prefill?.fields);
   const seedTypeId = (dest: MoveDestination, fallback = '') =>
     prefill?.destination === dest ? (prefillTypeId.current ?? fallback) : fallback;
+  // Called from createmeta .then() callbacks of effects that don't list it as a dep. That is
+  // safe: it reads only refs (prefillTypeId, prefillFieldsPending) and `prefill`, which is a
+  // prop fixed for this mount (SidePanel remounts the modal per open), so it can't go stale.
   const seedPrefillFields = (
     cfg: PrrIssueTypeConfig,
     meta: CreateMetaField[],
@@ -1004,6 +1007,14 @@ export function MoveModal({ ticket, onClose, initialDestKey = 'EOC', prefill }: 
                   metaError={bopsMetaError}
                   locked={status === 'confirming' || status === 'executing'}
                 />
+              )}
+
+              {prefill?.issueTypeName && prefillTypeId.current === undefined && destKey === prefill.destination && hasIssueTypePicker(prefill.destination) && (
+                <div style={{ marginTop: 'var(--mint-sp-3)' }}>
+                  <InfoCard tone="warning">
+                    Suggested issue type "{prefill.issueTypeName}" isn't available for {prefill.destination} — pick one.
+                  </InfoCard>
+                </div>
               )}
 
               {/* Reason for move — required for the v3 sheet log */}
