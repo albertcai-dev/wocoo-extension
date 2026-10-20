@@ -13,6 +13,25 @@ export class DraftStoreUnavailable extends Error {
   }
 }
 
+/** Errors meaning this machine has no draft agent set up: the native host isn't installed
+ *  ("…host not found"), the host can't find the agent's store CLI ("Not found: …store_cli.py"),
+ *  or an older launcher predates the draft actions ("Unknown action: 'draft_…'"). Teammates
+ *  sharing the extension without the agent hit these on every ticket. */
+const NOT_SET_UP = [
+  /native messaging host not found/i,
+  /^host not found/i,
+  /^Not found: .*store_cli\.py$/i,
+  /^Unknown action: '?(draft_|i2c_activity)/i,
+];
+
+/** True when the draft store failed only because it isn't set up here, so the UI should render
+ *  nothing. Other failures (e.g. "Access … forbidden" from stale allowed_origins, a store CLI
+ *  error or timeout) are real problems worth a one-line message. */
+export function isDraftStoreNotSetUp(err: unknown): boolean {
+  if (!(err instanceof DraftStoreUnavailable)) return false;
+  return NOT_SET_UP.some((re) => re.test(err.message.trim()));
+}
+
 interface HostReply {
   ok?: boolean;
   error?: string;

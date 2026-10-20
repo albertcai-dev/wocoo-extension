@@ -1,8 +1,10 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import type { WocooTicket } from './mockTicket';
 import {
   segmentsToPlain, plainToSegments, canPost, flagLabel, postLabel, isHttpUrl,
   unresolvedMentionNames, applyMentionResolution,
   markPostedThisSession, wasPostedThisSession, shouldTransition, buildOutcomeRow,
+  currentStatusName, resetPostedMemoryForTests,
 } from './agentDraftView';
 import type { AgentDraft, DraftSegment } from './agentDraftTypes';
 
@@ -169,11 +171,26 @@ describe('mention resolution', () => {
 });
 
 describe('posted-this-session tracking', () => {
-  it('remembers a posted draft by key and created_at', () => {
-    expect(wasPostedThisSession('TEST-9', 't1')).toBe(false);
-    markPostedThisSession('TEST-9', 't1');
-    expect(wasPostedThisSession('TEST-9', 't1')).toBe(true);
-    expect(wasPostedThisSession('TEST-9', 't2')).toBe(false);
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  it('remembers a posted draft by key and created_at', async () => {
+    expect(await wasPostedThisSession('TEST-9', 't1')).toBe(false);
+    void markPostedThisSession('TEST-9', 't1');
+    expect(await wasPostedThisSession('TEST-9', 't1')).toBe(true);
+    expect(await wasPostedThisSession('TEST-9', 't2')).toBe(false);
+  });
+
+  it('persists to chrome.storage.session and reads it back after a panel reload', async () => {
+    const data: Record<string, unknown> = {};
+    vi.stubGlobal('chrome', { storage: { session: {
+      get: vi.fn(async (k: string) => (k in data ? { [k]: data[k] } : {})),
+      set: vi.fn(async (items: Record<string, unknown>) => { Object.assign(data, items); }),
+    } } });
+    await markPostedThisSession('TEST-8', 't1');
+    expect(Object.keys(data)).toHaveLength(1);
+    resetPostedMemoryForTests();
+    expect(await wasPostedThisSession('TEST-8', 't1')).toBe(true);
+    expect(await wasPostedThisSession('TEST-8', 't2')).toBe(false);
   });
 });
 
@@ -195,6 +212,33 @@ describe('shouldTransition', () => {
   });
   it('is true when the status differs', () => {
     expect(shouldTransition('Done', 'Triage')).toBe(true);
+  });
+});
+
+describe('currentStatusName', () => {
+  const t = (over: Partial<Pick<WocooTicket, 'status' | 'jiraStatus'>>) =>
+    ({ status: 'Other', ...over }) as Pick<WocooTicket, 'status' | 'jiraStatus'>;
+
+  it('uses the raw Jira status name when it is still current', () => {
+    const ticket = t({ status: 'Cancelled', jiraStatus: { name: 'Cancelled/ No Action', bucket: 'Cancelled' } });
+    expect(currentStatusName(ticket)).toBe('Cancelled/ No Action');
+    expect(shouldTransition('Cancelled/ No Action', currentStatusName(ticket))).toBe(false);
+  });
+
+  it('distinguishes raw statuses that share a bucket', () => {
+    const ticket = t({ status: 'Pending', jiraStatus: { name: 'Pending External', bucket: 'Pending' } });
+    expect(shouldTransition('Pending Customer', currentStatusName(ticket))).toBe(true);
+  });
+
+  it('falls back to the bucket when there is no raw name', () => {
+    expect(currentStatusName(t({ status: 'Triage' }))).toBe('Triage');
+  });
+
+  it('falls back to the bucket when a later update changed status but not the raw name', () => {
+    // e.g. a workflow did onTicketUpdate({ ...ticket, status: 'Done' })
+    const ticket = t({ status: 'Done', jiraStatus: { name: 'Triage', bucket: 'Triage' } });
+    expect(currentStatusName(ticket)).toBe('Done');
+    expect(shouldTransition('Done', currentStatusName(ticket))).toBe(false);
   });
 });
 

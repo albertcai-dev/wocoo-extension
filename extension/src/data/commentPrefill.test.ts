@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import { JIRA_COMMENT_SELECTORS } from './jiraCommentSelectors';
 import {
   fallbackLine, insertionBlocker, opsToPasteHtml, readInsertionState, segmentsToEditorOps, shouldPrefill, textToHtml,
+  isBusyElsewhere, type FocusedElementInfo,
+  INITIAL_PREFILL_RETRY, afterPrefillReply, afterTicketShown,
 } from './commentPrefill';
 import type { DraftSegment } from './agentDraftTypes';
 
@@ -177,5 +180,80 @@ describe('fallbackLine', () => {
 
   it('marks trailing newlines alone as truncation-free', () => {
     expect(fallbackLine('only this\n')).toEqual({ line: 'only this', truncated: false });
+  });
+});
+
+describe('isBusyElsewhere (M3: never steal focus from an inline edit)', () => {
+  const el = (over: Partial<FocusedElementInfo>): FocusedElementInfo =>
+    ({ tagName: 'DIV', isContentEditable: false, inNewComment: false, ...over });
+
+  it('is false with nothing focused', () => {
+    expect(isBusyElsewhere(null)).toBe(false);
+    expect(isBusyElsewhere(el({ tagName: 'BODY' }))).toBe(false);
+  });
+
+  it('is true for a text input, textarea or contenteditable outside the new-comment editor', () => {
+    expect(isBusyElsewhere(el({ tagName: 'INPUT', inputType: 'text' }))).toBe(true);
+    expect(isBusyElsewhere(el({ tagName: 'INPUT' }))).toBe(true);
+    expect(isBusyElsewhere(el({ tagName: 'INPUT', inputType: 'search' }))).toBe(true);
+    expect(isBusyElsewhere(el({ tagName: 'TEXTAREA' }))).toBe(true);
+    expect(isBusyElsewhere(el({ isContentEditable: true }))).toBe(true);
+  });
+
+  it('is false inside the new-comment editor or its placeholder', () => {
+    expect(isBusyElsewhere(el({ isContentEditable: true, inNewComment: true }))).toBe(false);
+    expect(isBusyElsewhere(el({ tagName: 'TEXTAREA', inNewComment: true }))).toBe(false);
+  });
+
+  it('is false for non-text controls (buttons, checkboxes, links)', () => {
+    expect(isBusyElsewhere(el({ tagName: 'BUTTON' }))).toBe(false);
+    expect(isBusyElsewhere(el({ tagName: 'A' }))).toBe(false);
+    expect(isBusyElsewhere(el({ tagName: 'INPUT', inputType: 'checkbox' }))).toBe(false);
+    expect(isBusyElsewhere(el({ tagName: 'INPUT', inputType: 'button' }))).toBe(false);
+  });
+});
+
+describe('JIRA_COMMENT_SELECTORS.mentionOptionScopes (M2)', () => {
+  it('is scoped to typeahead popups only, never a bare listbox', () => {
+    expect(JIRA_COMMENT_SELECTORS.mentionOptionScopes).not.toContain('[role="listbox"]');
+    expect([...JIRA_COMMENT_SELECTORS.mentionOptionScopes]).toEqual([...JIRA_COMMENT_SELECTORS.typeaheadPopup]);
+  });
+});
+
+describe('prefill retry after the Jira tab catches up (I6)', () => {
+  const missed = { ok: true, inserted: false, reason: 'wrong-ticket' } as const;
+
+  it('a missed automatic prefill waits for this ticket to show, then retries once', () => {
+    let r = afterPrefillReply(INITIAL_PREFILL_RETRY, missed, true);
+    expect(r.retryNow).toBe(false);
+    const t = afterTicketShown(r.state);
+    expect(t.retryNow).toBe(true);
+    // The retry misses again: no further retries.
+    r = afterPrefillReply(t.state, missed, true);
+    expect(r.retryNow).toBe(false);
+    expect(afterTicketShown(r.state).retryNow).toBe(false);
+  });
+
+  it('retries straight away when the ticket was already reported before the reply came back', () => {
+    const shown = afterTicketShown(INITIAL_PREFILL_RETRY);
+    expect(shown.retryNow).toBe(false);
+    expect(afterPrefillReply(shown.state, missed, true).retryNow).toBe(true);
+  });
+
+  it('an unreachable tab (null reply, e.g. mid-navigation) counts as a miss', () => {
+    const r = afterPrefillReply(INITIAL_PREFILL_RETRY, null, true);
+    expect(afterTicketShown(r.state).retryNow).toBe(true);
+  });
+
+  it('never retries an Insert draft click or a prefill that did not miss', () => {
+    expect(afterTicketShown(afterPrefillReply(INITIAL_PREFILL_RETRY, missed, false).state).retryNow).toBe(false);
+    for (const reply of [
+      { ok: true, inserted: true } as const,
+      { ok: true, inserted: false, reason: 'not-empty' } as const,
+      { ok: true, inserted: false, reason: 'busy-elsewhere' } as const,
+      { ok: false, inserted: false, error: 'busy' } as const,
+    ]) {
+      expect(afterTicketShown(afterPrefillReply(INITIAL_PREFILL_RETRY, reply, true).state).retryNow).toBe(false);
+    }
   });
 });

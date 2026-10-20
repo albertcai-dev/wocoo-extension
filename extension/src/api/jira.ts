@@ -1408,6 +1408,7 @@ function mapJiraIssue(key: string, data: any): WocooTicket {
     summary: f.summary || '',
     description,
     status,
+    ...(f.status?.name ? { jiraStatus: { name: String(f.status.name), bucket: status } } : {}),
     priority: ['Highest', 'High', 'Medium', 'Low', 'Lowest'].includes(priorityName) ? priorityName : 'Medium',
     workType: f.issuetype?.name || 'Other',
     category: f.issuetype?.name || 'Other',

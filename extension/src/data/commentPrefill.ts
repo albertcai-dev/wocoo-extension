@@ -17,11 +17,15 @@ export interface PrefillCommentMessage {
   key: string;
   segments: DraftSegment[];
   force: boolean;
+  /** The card's automatic prefill on ticket open (not an Insert draft click). Only an automatic
+   *  prefill backs off when the user is typing somewhere else on the page ('busy-elsewhere'). */
+  auto?: boolean;
 }
 
 /** Why nothing was inserted. 'interrupted' = focus, caret, page or ticket changed mid-insert, so
- *  the box may hold part of the draft. */
-export type PrefillSkipReason = 'not-empty' | 'no-editor' | 'wrong-ticket' | 'interrupted';
+ *  the box may hold part of the draft. 'busy-elsewhere' = an automatic prefill found the user
+ *  typing in another field (e.g. an inline field edit) and left focus alone. */
+export type PrefillSkipReason = 'not-empty' | 'no-editor' | 'wrong-ticket' | 'interrupted' | 'busy-elsewhere';
 
 /** Content script -> side panel. `ok:false` only for a busy content script or an unexpected error.
  *  `inserted:true, reason:'partial'` = only the first paragraph went in (execCommand fallback). */
@@ -161,4 +165,63 @@ export function insertionBlocker(s: InsertionState, expectedKey: string): Insert
   if (!s.caret.collapsed) return 'selection-range';
   if (s.caret.textAfter.replace(/[\u200b\u200c\u200d\ufeff]/g, '').trim() !== '') return 'caret-moved';
   return null;
+}
+
+// --- focus guard for the automatic prefill ------------------------------------------------
+
+/** What the content script knows about document.activeElement. */
+export interface FocusedElementInfo {
+  tagName: string;
+  /** An <input>'s type attribute, if any. */
+  inputType?: string;
+  isContentEditable: boolean;
+  /** Inside the new-comment container, or the collapsed "Add a comment…" placeholder itself. */
+  inNewComment: boolean;
+}
+
+const NON_TEXT_INPUTS = new Set(['button', 'checkbox', 'color', 'file', 'hidden', 'image', 'radio', 'range', 'reset', 'submit']);
+
+/** Whether the user is typing somewhere other than the new-comment editor: a text input,
+ *  textarea or contenteditable with focus outside it. Opening the comment editor would take
+ *  that focus away, so the automatic prefill skips. */
+export function isBusyElsewhere(el: FocusedElementInfo | null): boolean {
+  if (!el || el.inNewComment) return false;
+  if (el.isContentEditable) return true;
+  const tag = el.tagName.toUpperCase();
+  if (tag === 'TEXTAREA') return true;
+  if (tag === 'INPUT') return !NON_TEXT_INPUTS.has((el.inputType || 'text').toLowerCase());
+  return false;
+}
+
+// --- one retry when the Jira tab catches up -----------------------------------------------
+// Opening a ticket from the side panel navigates the Jira tab, so the card's automatic prefill
+// can reach the old page ('wrong-ticket') or none at all (null reply: mid-navigation). Once the
+// content script reports this ticket ('wocoo:ticket-changed'), the card retries exactly once.
+
+export interface PrefillRetryState {
+  /** The content script has reported this ticket since the card mounted. */
+  ticketShown: boolean;
+  /** An automatic prefill missed and is waiting for the ticket to show. */
+  awaiting: boolean;
+  retried: boolean;
+}
+
+export const INITIAL_PREFILL_RETRY: PrefillRetryState = { ticketShown: false, awaiting: false, retried: false };
+
+const missedTicket = (reply: PrefillCommentReply | null) =>
+  !reply || (reply.ok && !reply.inserted && reply.reason === 'wrong-ticket');
+
+/** After a prefill reply. `auto` = the card's automatic prefill (an Insert draft click never retries). */
+export function afterPrefillReply(
+  s: PrefillRetryState, reply: PrefillCommentReply | null, auto: boolean,
+): { state: PrefillRetryState; retryNow: boolean } {
+  if (!auto || s.retried || !missedTicket(reply)) return { state: { ...s, awaiting: false }, retryNow: false };
+  if (s.ticketShown) return { state: { ...s, awaiting: false, retried: true }, retryNow: true };
+  return { state: { ...s, awaiting: true }, retryNow: false };
+}
+
+/** When the content script reports this card's ticket. */
+export function afterTicketShown(s: PrefillRetryState): { state: PrefillRetryState; retryNow: boolean } {
+  if (s.awaiting && !s.retried) return { state: { ticketShown: true, awaiting: false, retried: true }, retryNow: true };
+  return { state: { ...s, ticketShown: true }, retryNow: false };
 }

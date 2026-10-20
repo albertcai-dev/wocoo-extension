@@ -1,32 +1,40 @@
 // Home section listing tickets the draft agent has a reply waiting for. Renders nothing when the
 // store is unreachable or empty: Home should not carry error noise for an optional integration.
 
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { listReadyDrafts } from '../api/draftStore';
 import type { ReadyDraftRow } from '../data/agentDraftTypes';
+import { openTicketInJiraTab, ticketUrlFor } from '../data/jiraTab';
+import { createLatestRefresher } from '../data/latestRefresh';
+
+/** Opening a row switches the panel to the ticket AND shows it in the Jira tab, so the draft card's
+ *  automatic prefill has the ticket's comment box to fill. */
+async function openInJira(row: ReadyDraftRow): Promise<void> {
+  try {
+    await openTicketInJiraTab(ticketUrlFor(row), row.key, chrome.tabs as never);
+  } catch (e) {
+    console.debug('[DraftsReadyList] could not open the Jira tab', e);
+  }
+}
 
 export function DraftsReadyList({ onOpenTicket }: { onOpenTicket: (ticketKey: string) => void }) {
   const [rows, setRows] = useState<ReadyDraftRow[]>([]);
 
-  const refresh = useCallback(() => {
-    listReadyDrafts().then(
-      (items) => setRows(items),
-      // DraftStoreUnavailable (or anything else): show nothing rather than a stale or error state.
-      () => setRows([]),
-    );
-  }, []);
-
-  // Load on mount and whenever the panel regains focus or becomes visible again.
+  // Load on mount, and (debounced) whenever the panel regains focus or becomes visible again.
+  // Only the newest response is applied. Any failure (DraftStoreUnavailable or else): show nothing.
   useEffect(() => {
-    refresh();
-    const onVisible = () => { if (document.visibilityState === 'visible') refresh(); };
-    window.addEventListener('focus', refresh);
+    const r = createLatestRefresher(listReadyDrafts, setRows, () => setRows([]), 1000);
+    r.now();
+    const onFocus = () => r.soon();
+    const onVisible = () => { if (document.visibilityState === 'visible') r.soon(); };
+    window.addEventListener('focus', onFocus);
     document.addEventListener('visibilitychange', onVisible);
     return () => {
-      window.removeEventListener('focus', refresh);
+      r.dispose();
+      window.removeEventListener('focus', onFocus);
       document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [refresh]);
+  }, []);
 
   if (rows.length === 0) return null;
 
@@ -40,7 +48,7 @@ export function DraftsReadyList({ onOpenTicket }: { onOpenTicket: (ticketKey: st
           <button
             key={r.key}
             type="button"
-            onClick={() => onOpenTicket(r.key)}
+            onClick={() => { onOpenTicket(r.key); void openInJira(r); }}
             style={{
               textAlign: 'left',
               padding: 'var(--mint-sp-2) var(--mint-sp-3)',

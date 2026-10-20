@@ -1,10 +1,11 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { AgentDraft, ReadyDraftRow } from './agentDraftTypes';
 import type { JiraCommentDetail } from '../api/jira';
-import { markPostedThisSession } from './agentDraftView';
+import { markPostedThisSession, resetPostedMemoryForTests } from './agentDraftView';
 import {
   buildJiraOutcomeRow, mergeComments, fetchCommentsForOutcome, rememberDraft,
   captureJiraOutcome, resetOutcomeCaptureState, type CaptureDeps,
+  firstReplyAfterDraft, lookupAssignedAt, checkExistingReply, markWorkflowHandled, wasWorkflowHandled,
 } from './outcomeCapture';
 
 const ME = 'acct-me';
@@ -203,5 +204,110 @@ describe('captureJiraOutcome', () => {
   it('never throws when a lookup fails', async () => {
     const d = deps({ getComments: vi.fn(async () => { throw new Error('jira down'); }) });
     expect(await captureJiraOutcome(d, 'TEST-1', 'Done')).toBe('failed');
+  });
+});
+
+describe('firstReplyAfterDraft', () => {
+  it('is the earliest of my comments strictly after the draft', () => {
+    const comments = [
+      c('1', ME, '2026-01-01T06:00:00.000-0500', 'before'),
+      c('2', OTHER, '2026-01-01T07:10:00.000-0500', 'someone else'),
+      c('4', ME, '2026-01-01T08:00:00.000-0500', 'second'),
+      c('3', ME, '2026-01-01T07:30:00.000-0500', 'first'),
+    ];
+    expect(firstReplyAfterDraft(draft(), comments, ME)?.id).toBe('3');
+    expect(firstReplyAfterDraft(draft(), comments.slice(0, 2), ME)).toBeNull();
+  });
+});
+
+describe('lookupAssignedAt', () => {
+  const row = (over: Partial<ReadyDraftRow>): ReadyDraftRow => ({
+    key: 'TEST-1', summary: '', marker: '', kind: 'new', outcome: 'draft', url: '', created_at: '', assigned_at: null, ...over,
+  });
+  it('converts epoch seconds to ISO for the matching key', async () => {
+    const out = await lookupAssignedAt('TEST-1', async () => [row({ key: 'TEST-2', assigned_at: 5 }), row({ assigned_at: 1767268800 })]);
+    expect(out).toBe(new Date(1767268800 * 1000).toISOString());
+  });
+  it('is null when missing, unassigned or the list fails', async () => {
+    expect(await lookupAssignedAt('TEST-1', async () => [])).toBeNull();
+    expect(await lookupAssignedAt('TEST-1', async () => [row({})])).toBeNull();
+    expect(await lookupAssignedAt('TEST-1', async () => { throw new Error('down'); })).toBeNull();
+  });
+});
+
+describe('checkExistingReply', () => {
+  it('returns my reply after the draft with the comments and my account id', async () => {
+    const comments = [c('1', ME, '2026-01-01T07:30:00.000-0500', 'Mine')];
+    const r = await checkExistingReply(draft(), { getComments: async () => comments, getMyAccountId: async () => ME });
+    expect(r.reply?.id).toBe('1');
+    expect(r.me).toBe(ME);
+    expect(r.comments).toBe(comments);
+  });
+  it('reply is null when I have not replied since the draft', async () => {
+    const r = await checkExistingReply(draft(), {
+      getComments: async () => [c('1', OTHER, '2026-01-01T07:30:00.000-0500', 'x')],
+      getMyAccountId: async () => ME,
+    });
+    expect(r.reply).toBeNull();
+  });
+  it('propagates lookup failures (the caller decides)', async () => {
+    await expect(checkExistingReply(draft(), {
+      getComments: async () => { throw new Error('jira down'); }, getMyAccountId: async () => ME,
+    })).rejects.toThrow('jira down');
+  });
+});
+
+describe('captureJiraOutcome: workflow-handled and persisted card marks', () => {
+  function deps(): CaptureDeps & { record: ReturnType<typeof vi.fn> } {
+    return {
+      getDraft: vi.fn(async () => draft()),
+      getComments: vi.fn(async () => [c('1', ME, '2026-01-01T07:30:00.000-0500', 'Workflow comment')]),
+      getMyAccountId: vi.fn(async () => ME),
+      listReady: vi.fn(async () => []),
+      record: vi.fn(async () => {}),
+    } as CaptureDeps & { record: ReturnType<typeof vi.fn> };
+  }
+  beforeEach(() => { resetOutcomeCaptureState(); });
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  it('writes no row for a ticket a workflow completed', async () => {
+    void markWorkflowHandled('TEST-1');
+    const d = deps();
+    expect(await captureJiraOutcome(d, 'TEST-1', 'Done')).toBe('workflow-handled');
+    expect(d.record).not.toHaveBeenCalled();
+    expect(d.getComments).not.toHaveBeenCalled();
+  });
+
+  it('other tickets are unaffected', async () => {
+    void markWorkflowHandled('TEST-7');
+    const d = deps();
+    expect(await captureJiraOutcome(d, 'TEST-1', 'Done')).toBe('recorded');
+  });
+
+  it('a workflow mark made before a panel reload still skips (chrome.storage.session)', async () => {
+    const data: Record<string, unknown> = {};
+    vi.stubGlobal('chrome', { storage: { session: {
+      get: vi.fn(async (k: string) => (k in data ? { [k]: data[k] } : {})),
+      set: vi.fn(async (items: Record<string, unknown>) => { Object.assign(data, items); }),
+    } } });
+    await markWorkflowHandled('TEST-1');
+    resetOutcomeCaptureState(); // drops memory, as a reload would
+    expect(await wasWorkflowHandled('TEST-1')).toBe(true);
+    const d = deps();
+    expect(await captureJiraOutcome(d, 'TEST-1', 'Done')).toBe('workflow-handled');
+  });
+
+  it('a card mark made before a panel reload still skips (no duplicate sidekick + jira rows)', async () => {
+    const data: Record<string, unknown> = {};
+    vi.stubGlobal('chrome', { storage: { session: {
+      get: vi.fn(async (k: string) => (k in data ? { [k]: data[k] } : {})),
+      set: vi.fn(async (items: Record<string, unknown>) => { Object.assign(data, items); }),
+    } } });
+    await markPostedThisSession('TEST-1', '2026-03-03T00:00:00Z');
+    resetPostedMemoryForTests();
+    const d = deps();
+    d.getDraft = vi.fn(async () => draft({ created_at: '2026-03-03T00:00:00Z' }));
+    expect(await captureJiraOutcome(d, 'TEST-1', 'Done')).toBe('card-recorded');
+    expect(d.record).not.toHaveBeenCalled();
   });
 });

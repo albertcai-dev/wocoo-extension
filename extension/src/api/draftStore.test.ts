@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
-  DraftStoreUnavailable, getDraft, listReadyDrafts, recordOutcome, reportI2cActivity,
+  DraftStoreUnavailable, getDraft, isDraftStoreNotSetUp, listReadyDrafts, recordOutcome, reportI2cActivity,
 } from './draftStore';
 import type { DraftOutcomeRow } from '../data/agentDraftTypes';
 
@@ -77,5 +77,39 @@ describe('recordOutcome / reportI2cActivity', () => {
     mockNative(undefined, 'host not found');
     await expect(reportI2cActivity(1)).rejects.toBeInstanceOf(DraftStoreUnavailable);
     await expect(recordOutcome({} as DraftOutcomeRow)).rejects.toBeInstanceOf(DraftStoreUnavailable);
+  });
+});
+
+describe('isDraftStoreNotSetUp', () => {
+  const err = (m: string) => new DraftStoreUnavailable(m);
+
+  it('is true when this machine simply has no draft agent (render nothing)', () => {
+    expect(isDraftStoreNotSetUp(err('Specified native messaging host not found.'))).toBe(true);
+    expect(isDraftStoreNotSetUp(err('host not found'))).toBe(true);
+    expect(isDraftStoreNotSetUp(err('Not found: /Users/someone/projects/wocoo-draft-agent/src/store_cli.py'))).toBe(true);
+    // An older launcher (interest tool only) that predates the draft actions.
+    expect(isDraftStoreNotSetUp(err("Unknown action: 'draft_get'"))).toBe(true);
+  });
+
+  it('is false for a real failure worth a one-line message', () => {
+    expect(isDraftStoreNotSetUp(err('Access to the specified native messaging host is forbidden.'))).toBe(false);
+    expect(isDraftStoreNotSetUp(err('store_cli failed: boom'))).toBe(false);
+    expect(isDraftStoreNotSetUp(err('store_cli timed out after 5s'))).toBe(false);
+    expect(isDraftStoreNotSetUp(err('The draft store did not respond.'))).toBe(false);
+  });
+
+  it('is false for anything that is not a DraftStoreUnavailable', () => {
+    expect(isDraftStoreNotSetUp(new Error('Specified native messaging host not found.'))).toBe(false);
+    expect(isDraftStoreNotSetUp('host not found')).toBe(false);
+  });
+
+  it('classifies what getDraft actually throws', async () => {
+    mockNative(undefined, 'Specified native messaging host not found.');
+    const e = await getDraft('TEST-1').catch((x) => x);
+    expect(isDraftStoreNotSetUp(e)).toBe(true);
+    mockNative({ ok: false, error: 'Not found: /x/src/store_cli.py' });
+    expect(isDraftStoreNotSetUp(await getDraft('TEST-1').catch((x) => x))).toBe(true);
+    mockNative(undefined, 'Access to the specified native messaging host is forbidden.');
+    expect(isDraftStoreNotSetUp(await getDraft('TEST-1').catch((x) => x))).toBe(false);
   });
 });

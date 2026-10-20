@@ -6,6 +6,9 @@ export interface WocooTicket {
   summary: string;
   description: string;
   status: 'Triage' | 'Back Office' | 'Pending' | 'Done' | 'Cancelled' | 'Other';
+  /** Jira's own status name and the `status` bucket it mapped to when the ticket was fetched.
+   *  Stale once `status` is changed locally; see currentStatusName. */
+  jiraStatus?: { name: string; bucket: 'Triage' | 'Back Office' | 'Pending' | 'Done' | 'Cancelled' | 'Other' };
   priority: 'Highest' | 'High' | 'Medium' | 'Low' | 'Lowest';
   workType: string;
   category: string;

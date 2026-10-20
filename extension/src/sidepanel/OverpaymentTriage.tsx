@@ -35,6 +35,7 @@ import {
 import type { ReimbApproverKey } from '../api/jira';
 import { fetchAtlasAccountIdHeadless } from '../data/atlasAccountLookup';
 import { needsWNumberLookup } from '../data/reimbConfig';
+import { markWorkflowHandled } from '../data/outcomeCapture';
 import { stagePresetIdentity as stageIdentityForPreset } from '../data/presetIdentity';
 
 const TRANSITION_TO_DONE_ID = '251';
@@ -387,6 +388,8 @@ export function OverpaymentTriage({ ticket, onClose, onTicketUpdate }: { ticket:
     try {
       const segments = buildCommentSegments(ticket, linkKey, linkUrl, state.amount, state.commentText);
       await postComment(ticket.id, segments);
+      // This reply is the workflow's, not one based on an agent draft: no draft outcome row.
+      void markWorkflowHandled(ticket.id);
       // Chain the transition like the decline path. Comment is already posted at
       // this point — if the transition fails, surface a soft warning rather than
       // rolling back, so the agent can finish the move manually.
@@ -413,6 +416,7 @@ export function OverpaymentTriage({ ticket, onClose, onTicketUpdate }: { ticket:
     try {
       const segments = buildDeclineCommentSegments(ticket, state.declineText);
       await postComment(ticket.id, segments);
+      void markWorkflowHandled(ticket.id);
       // Match v3: post comment, mark posted, then transition to Done so the agent doesn't
       // have to bounce back to Jira to close out a clearly-declined ticket.
       try {

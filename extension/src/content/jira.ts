@@ -8,10 +8,11 @@
 // guarantees we never *clear* on a missed detection — only overwrite on a positive match.
 
 import {
-  PREFILL_COMMENT_MESSAGE, fallbackLine, insertionBlocker, opsToPasteHtml, opsToPlainText, readInsertionState,
-  segmentsToEditorOps, shouldPrefill,
-  type EditorOp, type InsertionBlock, type PrefillCommentMessage, type PrefillCommentReply,
+  PREFILL_COMMENT_MESSAGE, fallbackLine, insertionBlocker, isBusyElsewhere, opsToPasteHtml, opsToPlainText,
+  readInsertionState, segmentsToEditorOps, shouldPrefill,
+  type EditorOp, type FocusedElementInfo, type InsertionBlock, type PrefillCommentMessage, type PrefillCommentReply,
 } from '../data/commentPrefill';
+import { JIRA_COMMENT_SELECTORS } from '../data/jiraCommentSelectors';
 
 function currentTicketKey(): string | null {
   // Highest-confidence: full-page ticket view.
@@ -150,7 +151,8 @@ window.addEventListener('hashchange', () => setTimeout(checkStatusChange, 400));
 // Before every paste, execCommand, typed character, option click and Escape the insertion guard
 // re-checks: editor still attached, focus still inside it, page still on the ticket, selection a
 // collapsed caret with nothing after it. Any failure aborts with reason 'interrupted'. Focus is
-// set once at the start and never stolen back.
+// set once at the start and never stolen back. An automatic prefill (msg.auto) does not start at
+// all while the user is typing in another input/textarea/contenteditable ('busy-elsewhere').
 //
 // Insertion strategy (no trusted typing available to a content script):
 //   1. Open the editor by clicking the collapsed "Add a comment…" placeholder; only an editor
@@ -163,70 +165,6 @@ window.addEventListener('hashchange', () => setTimeout(checkStatusChange, 400));
 //      No match -> the "@Name" stays as plain text.
 // ------------------------------------------------------------
 
-/** Every DOM hook the prefill relies on, in one place so they can be adjusted against the live
- *  Jira page. Lists are tried in order. ALL ARE UNVERIFIED GUESSES until the live check. */
-export const JIRA_COMMENT_SELECTORS = {
-  /** The collapsed "Add a comment…" box shown before the new-comment editor is mounted. */
-  placeholder: [
-    '[data-testid="canned-comments.common.ui.comment-text-area-placeholder.textarea"]',
-    '[data-testid*="comment-text-area-placeholder" i]',
-    'textarea[placeholder^="Add a comment" i]',
-    '[role="button"][aria-label^="Add a comment" i]',
-  ],
-  /** Text-content fallback for the placeholder when no selector above matches. */
-  placeholderText: /^add a comment/i,
-  /** Elements whose own text/placeholder/aria-label is checked against placeholderText. */
-  placeholderTextCandidates: 'button, [role="button"], textarea, input, div[tabindex]',
-  /** The new-comment container: wraps the placeholder and, once clicked, the new-comment editor.
-   *  Only an editor inside one of these is ever written to. */
-  newCommentContainer: [
-    '[data-testid="issue.activity.comment.add-comment"]',
-    '[data-testid*="add-comment" i]',
-    '[data-testid*="addcomment" i]',
-    '[data-testid*="new-comment" i]',
-  ],
-  /** An existing comment item (its Edit/Delete or, while editing, Save/Cancel belong to a posted
-   *  comment). An editor with one of these between it and the container is never used. */
-  existingCommentItem: [
-    '[data-testid^="comment-base-item-" i]',
-    '[data-testid*="comment-item" i]',
-    '[data-testid*="edit-comment" i]',
-  ],
-  /** Markers only a posted comment carries (its permalink / timestamp). An ancestor holding one
-   *  of these, below the container, is treated as an existing comment item. */
-  existingCommentMarkers: 'a[href*="focusedCommentId"], time',
-  /** Element ids of posted comments ("comment-12345"). */
-  existingCommentId: /^comment-\d+$/,
-  /** The ProseMirror contenteditable of an Atlassian editor. */
-  editor: [
-    '.ProseMirror[contenteditable="true"]',
-    '#ak-editor-textarea[contenteditable="true"]',
-  ],
-  /** Editor decorations whose text is not the user's (placeholder hints, widgets, PM separators). */
-  decorations: '.placeholder-decoration, .ProseMirror-widget, .ProseMirror-separator, [data-testid="placeholder-test-id"]',
-  /** Non-text content that makes the box "not empty": images, media, emoji, mentions, any ADF node view. */
-  contentNodes: 'img, [data-node-type], [data-mention-id], [data-emoji-id], [data-emoji-short-name], .mediaSingleView-content-wrap, .mediaView-content-wrap, .emojiView-content-wrap',
-  /** Typeahead-specific popup. Also the ONLY selectors that allow the dismissing Escape. */
-  typeaheadPopup: [
-    '[data-testid="typeahead-popup"]',
-    '[data-testid*="typeahead" i]',
-    '[aria-label*="typeahead" i]',
-  ],
-  /** Where to look for the mention option (adds the generic listbox; matching is by accountId,
-   *  so a non-mention listbox can't match). Never used to decide on Escape. */
-  mentionOptionScopes: [
-    '[data-testid="typeahead-popup"]',
-    '[data-testid*="typeahead" i]',
-    '[aria-label*="typeahead" i]',
-    '[role="listbox"]',
-  ],
-  /** Attributes on a typeahead option (or its descendant) that carry the user's accountId. */
-  mentionIdAttributes: ['data-mention-id', 'data-id'],
-  /** Click target around a matched element. */
-  mentionOption: '[role="option"], [data-testid*="typeahead-item" i]',
-  /** A mention pill inside the editor (used to confirm a pick landed). */
-  insertedMention: '[data-mention-id]',
-} as const;
 
 const PREFILL_EDITOR_WAIT_MS = 5_000;
 const PREFILL_MENTION_WAIT_MS = 3_000;
@@ -293,6 +231,21 @@ function findCommentPlaceholder(): HTMLElement | null {
     if (S.placeholderText.test(own.trim()) && own.trim().length < 40) return el;
   }
   return null;
+}
+
+/** document.activeElement as isBusyElsewhere sees it; null when nothing (or only the page) has focus. */
+function describeFocus(): FocusedElementInfo | null {
+  const el = document.activeElement;
+  if (!(el instanceof HTMLElement) || el === document.body || el === document.documentElement) return null;
+  const S = JIRA_COMMENT_SELECTORS;
+  const ph = findCommentPlaceholder();
+  const inNewComment = S.newCommentContainer.some((sel) => !!el.closest(sel)) || (!!ph && (ph === el || ph.contains(el)));
+  return {
+    tagName: el.tagName,
+    inputType: el instanceof HTMLInputElement ? el.type : undefined,
+    isContentEditable: el.isContentEditable,
+    inNewComment,
+  };
 }
 
 /** Opens the new-comment editor if it is collapsed and waits for it (up to ~5 s). */
@@ -519,6 +472,9 @@ let prefillBusy = false;
 
 async function handlePrefill(msg: PrefillCommentMessage): Promise<PrefillCommentReply> {
   if (currentTicketKey() !== msg.key) return { ok: true, inserted: false, reason: 'wrong-ticket' };
+  // Automatic prefill never takes focus from a field the user is editing (opening the editor
+  // clicks its placeholder, and inserting focuses it). An Insert draft click skips this check.
+  if (msg.auto && isBusyElsewhere(describeFocus())) return { ok: true, inserted: false, reason: 'busy-elsewhere' };
   const editor = await openCommentEditor();
   if (!editor) return { ok: true, inserted: false, reason: 'no-editor' };
   // The page may have navigated while we waited.
@@ -527,6 +483,8 @@ async function handlePrefill(msg: PrefillCommentMessage): Promise<PrefillComment
   if (!shouldPrefill(existing, msg.force)) return { ok: true, inserted: false, reason: 'not-empty' };
   const ops = segmentsToEditorOps(msg.segments);
   if (ops.length === 0) return { ok: true, inserted: false };
+  // The editor wait can take seconds; the user may have started editing something meanwhile.
+  if (msg.auto && isBusyElsewhere(describeFocus())) return { ok: true, inserted: false, reason: 'busy-elsewhere' };
   // The one place focus is set; from here on a focus change means the user moved and we stop.
   editor.focus();
   await sleep(50);

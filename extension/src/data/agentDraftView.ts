@@ -2,6 +2,8 @@
 // back, deciding whether Post is allowed, and resolving @mentions to Jira accounts.
 
 import type { AgentDraft, DraftFlag, DraftOutcomeRow, DraftSegment } from './agentDraftTypes';
+import type { WocooTicket } from './mockTicket';
+import { createSessionMarks } from './sessionMarks';
 
 /** Text a segment shows in the editor. Mention text already carries its "@". A smartcard shows its
  *  href (that is what gets posted as the block card), falling back to text only when it has none. */
@@ -65,6 +67,14 @@ export function postLabel(draft: AgentDraft): string {
 export function shouldTransition(suggestedStatus: string | null, currentStatus: string): boolean {
   if (!suggestedStatus) return false;
   return suggestedStatus.trim().toLowerCase() !== currentStatus.trim().toLowerCase();
+}
+
+/** The ticket's status as Jira names it, for comparing with a suggested status: the raw Jira
+ *  name while it still matches the panel's status bucket, else the bucket (an update such as
+ *  `{ ...ticket, status: 'Done' }` changes the bucket but leaves the raw name stale). */
+export function currentStatusName(ticket: Pick<WocooTicket, 'status' | 'jiraStatus'>): string {
+  const raw = ticket.jiraStatus;
+  return raw && raw.name && raw.bucket === ticket.status ? raw.name : ticket.status;
 }
 
 /** The outcome row Sidekick records after a post. `actualStatus` is the ticket's status as it
@@ -144,15 +154,22 @@ export function applyMentionResolution(
 }
 
 // --- posted-this-session ----------------------------------------------------------------
+// Kept in memory and in chrome.storage.session, so a reloaded side panel neither offers the
+// draft again nor lets the Jira-comment outcome sweep write a second row for it.
 
-const postedThisSession = new Set<string>();
+const postedMarks = createSessionMarks('agentDraftPosted');
 const sessionKey = (key: string, createdAt: string) => `${key}\u0000${createdAt}`;
 
-/** Remembers that a draft was posted from the card, so the later Jira-comment outcome sweep can skip it. */
-export function markPostedThisSession(key: string, createdAt: string): void {
-  postedThisSession.add(sessionKey(key, createdAt));
+/** Remembers that the card handled a draft (posted it, or marked the status after a Jira reply).
+ *  Memory updates synchronously, so a check that starts after this call returns sees it. */
+export function markPostedThisSession(key: string, createdAt: string): Promise<void> {
+  return postedMarks.mark(sessionKey(key, createdAt));
 }
 
-export function wasPostedThisSession(key: string, createdAt: string): boolean {
-  return postedThisSession.has(sessionKey(key, createdAt));
+export function wasPostedThisSession(key: string, createdAt: string): Promise<boolean> {
+  return postedMarks.has(sessionKey(key, createdAt));
+}
+
+export function resetPostedMemoryForTests(): void {
+  postedMarks.resetMemory();
 }
