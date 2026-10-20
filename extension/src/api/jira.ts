@@ -621,7 +621,11 @@ export function adfField(value: string): MoveField {
  * are ever wired through this function that are NOT terminal (e.g. re-open), the
  * caller must pass `skipLog` — the overpayment FRAUD path's move to Back Office does.
  */
-export async function transitionTicket(ticketKey: string, transitionId: string, opts: { skipLog?: boolean } = {}): Promise<void> {
+export async function transitionTicket(
+  ticketKey: string,
+  transitionId: string,
+  opts: { skipLog?: boolean; logKind?: 'Done' | 'Cancelled' } = {},
+): Promise<void> {
   const token = await getValidAccessToken();
   const cloudId = await getCloudId();
   const url = `https://api.atlassian.com/ex/jira/${cloudId}/rest/api/3/issue/${encodeURIComponent(ticketKey)}/transitions`;
@@ -649,7 +653,8 @@ export async function transitionTicket(ticketKey: string, transitionId: string, 
   if (ticketKey.startsWith('WOCOO-') && !opts.skipLog) {
     try {
       const { emitTicketTransition } = await import('../sidepanel/ticketLogEvents');
-      const kind = transitionId === '251' ? 'Done' : 'Cancelled';
+      // `logKind` is set only by transitionTicketByName, which knows the destination status.
+      const kind = opts.logKind ?? (transitionId === '251' ? 'Done' : 'Cancelled');
       emitTicketTransition({ ticketId: ticketKey, kind, source: 'sidepanel' });
     } catch (e) {
       console.debug('[jira.transitionTicket] event emit failed (non-fatal):', e);
@@ -706,7 +711,16 @@ export async function transitionTicketByName(ticketKey: string, transitionName: 
     const available = transitions.map((t) => `"${t.name}"→${t.to?.name || '?'}`).join(', ');
     throw new Error(`Transition "${transitionName}" not available for ${ticketKey}. Available: ${available || '(none)'}`);
   }
-  await transitionTicket(ticketKey, found.id);
+  await transitionTicket(ticketKey, found.id, ticketLogOptsForStatus(found.to?.name));
+}
+
+/** Ticket Log kind for a destination status name: "Done" logs Done, a "Cancel…" status logs
+ *  Cancelled, anything else (Back Office, Pending, …) is not a resolution and is not logged. */
+function ticketLogOptsForStatus(statusName: string | undefined): { skipLog?: boolean; logKind?: 'Done' | 'Cancelled' } {
+  const name = (statusName || '').trim().toLowerCase();
+  if (name === 'done') return { logKind: 'Done' };
+  if (name.startsWith('cancel')) return { logKind: 'Cancelled' };
+  return { skipLog: true };
 }
 
 // ============ Clone + issue-link helpers (used by Clone/Move flow) ============
