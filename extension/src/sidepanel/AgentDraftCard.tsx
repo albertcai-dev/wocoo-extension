@@ -11,6 +11,9 @@ import {
   plainToSegments, postLabel, segmentsToPlain, shouldTransition, unresolvedMentionNames, wasPostedThisSession,
   type MentionCandidate,
 } from '../data/agentDraftView';
+import {
+  PREFILL_COMMENT_MESSAGE, type PrefillCommentMessage, type PrefillCommentReply,
+} from '../data/commentPrefill';
 import { errorBanner, primaryButton, secondaryButton } from './toolUi';
 
 type Load =
@@ -24,6 +27,36 @@ type Mentions =
   | { kind: 'done'; segments: DraftSegment[]; unresolved: string[] };
 
 type Phase = 'idle' | 'posting' | 'comment-posted' | 'done';
+
+/** State of pre-filling the Jira tab's comment box with the draft (never saved by Sidekick). */
+type Prefill =
+  | { kind: 'idle' }
+  | { kind: 'sending' }
+  | { kind: 'inserted' }
+  | { kind: 'skipped'; reason: 'not-empty' | 'no-editor' | 'wrong-ticket' | 'unreachable' };
+
+const JIRA_TAB_URL = /^https:\/\/wealthsimple\.atlassian\.net\//;
+
+/** Asks the Jira content script in the active tab to fill its comment box. null when there is no
+ *  Jira tab in front or its content script can't be reached (e.g. the tab predates an extension reload). */
+async function requestCommentPrefill(key: string, segments: DraftSegment[], force: boolean): Promise<PrefillCommentReply | null> {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab?.id == null || !tab.url || !JIRA_TAB_URL.test(tab.url)) return null;
+    const msg: PrefillCommentMessage = { type: PREFILL_COMMENT_MESSAGE, key, segments, force };
+    const reply = (await chrome.tabs.sendMessage(tab.id, msg)) as PrefillCommentReply | undefined;
+    return reply ?? null;
+  } catch {
+    return null;
+  }
+}
+
+const PREFILL_NOTES: Record<Extract<Prefill, { kind: 'skipped' }>['reason'], string> = {
+  'not-empty': 'The Jira comment box already has text, so the draft was not inserted.',
+  'no-editor': "Couldn't find the Jira comment box.",
+  'wrong-ticket': 'The Jira tab is showing a different ticket.',
+  unreachable: "Couldn't reach the Jira tab — reload it to insert the draft.",
+};
 
 const STATUSES: ReadonlyArray<WocooTicket['status']> = ['Triage', 'Back Office', 'Pending', 'Done', 'Cancelled', 'Other'];
 
@@ -77,6 +110,10 @@ function DraftBody({ ticket, draft, onOpenWorkflow, onTicketUpdate }: {
   const [mentions, setMentions] = useState<Mentions>({ kind: 'resolving' });
   const [recordFailed, setRecordFailed] = useState(false);
   const recordedRef = useRef(false);
+  const [prefill, setPrefill] = useState<Prefill>({ kind: 'idle' });
+  const autoPrefilledRef = useRef(false);
+  const textRef = useRef(text);
+  textRef.current = text;
   // A draft already posted from this card this session is never offered again.
   // Read once on mount: during this card's own post it flips true before the transition settles.
   const [postedEarlier] = useState(() => wasPostedThisSession(ticket.id, draft.created_at));
@@ -97,6 +134,27 @@ function DraftBody({ ticket, draft, onOpenWorkflow, onTicketUpdate }: {
     })();
     return () => { cancelled = true; };
   }, [draft, editable]);
+
+  // Pre-fill the Jira comment box with the (mention-resolved, possibly edited) draft. Never saves.
+  const sendPrefill = async (force: boolean) => {
+    if (mentions.kind !== 'done') return;
+    const segments = plainToSegments(textRef.current, mentions.segments);
+    if (!segmentsToPlain(segments).trim()) return;
+    setPrefill({ kind: 'sending' });
+    const reply = await requestCommentPrefill(ticket.id, segments, force);
+    if (!reply || !reply.ok) { setPrefill({ kind: 'skipped', reason: 'unreachable' }); return; }
+    if (reply.inserted) { setPrefill({ kind: 'inserted' }); return; }
+    // inserted:false with no reason = nothing to insert; leave the controls alone.
+    setPrefill(reply.reason ? { kind: 'skipped', reason: reply.reason } : { kind: 'idle' });
+  };
+
+  // Once per ticket open (this card mounts per ticket + draft), as soon as mentions are resolved.
+  useEffect(() => {
+    if (!editable || postedEarlier || mentions.kind !== 'done' || autoPrefilledRef.current) return;
+    autoPrefilledRef.current = true;
+    void sendPrefill(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editable, postedEarlier, mentions.kind]);
 
   const resolving = mentions.kind === 'resolving';
   const allowed = editable && !resolving && canPost(draft, actionDone, text);
@@ -224,6 +282,27 @@ function DraftBody({ ticket, draft, onOpenWorkflow, onTicketUpdate }: {
             >
               {phase === 'posting' ? 'Posting…' : phase === 'comment-posted' ? 'Retry status change' : postLabel(draft)}
             </button>
+          )}
+          {phase === 'idle' && prefill.kind === 'inserted' && (
+            <div style={mutedStyle}>Draft inserted into the Jira comment box (not saved) — edit it there and click Save.</div>
+          )}
+          {phase !== 'idle' && prefill.kind === 'inserted' && (
+            <div style={warnStyle}>The Jira comment box still holds the unsaved draft — discard it there so it isn't posted twice.</div>
+          )}
+          {phase === 'idle' && prefill.kind === 'sending' && <div style={mutedStyle}>Inserting draft into Jira…</div>}
+          {phase === 'idle' && prefill.kind === 'skipped' && (
+            <div style={mutedStyle}>
+              {PREFILL_NOTES[prefill.reason]}
+              {prefill.reason !== 'wrong-ticket' && (
+                <button
+                  type="button"
+                  style={{ ...secondaryButton, marginLeft: 6 }}
+                  onClick={() => void sendPrefill(prefill.reason === 'not-empty')}
+                >
+                  Insert draft
+                </button>
+              )}
+            </div>
           )}
           {error && <div style={{ ...errorBanner, marginTop: 'var(--mint-sp-2)' }}>{error}</div>}
           {recordFailed && <div style={warnStyle}>Couldn't log this outcome — the post itself went through.</div>}
