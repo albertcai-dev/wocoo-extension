@@ -353,13 +353,13 @@ function DraftAgentSection() {
             disabled={!state || busy}
             onChange={toggle}
           />
-          Sidekick Agent running
+          {running ? 'Sidekick Agent running' : 'Sidekick Agent Paused'}
           {since ? (
             <span style={{ marginLeft: 'auto', fontSize: 'var(--mint-text-nano)', color: 'var(--mint-fg-soft)', fontWeight: 400 }}>{since}</span>
           ) : null}
         </label>
 
-        {state ? (
+        {state && agentModeHelper(state.mode) ? (
           <div style={{ marginTop: 'var(--mint-sp-2)', fontSize: 'var(--mint-text-nano)', color: 'var(--mint-fg-soft)', lineHeight: 1.4 }}>
             {agentModeHelper(state.mode)}
           </div>

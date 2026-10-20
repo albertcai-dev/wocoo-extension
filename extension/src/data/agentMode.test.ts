@@ -24,7 +24,7 @@ describe('normaliseAgentMode', () => {
 describe('agentModeHelper', () => {
   it('describes each mode', () => {
     expect(agentModeHelper('running')).toMatch(/may use i2c on its own/);
-    expect(agentModeHelper('paused')).toMatch(/^Paused:/);
+    expect(agentModeHelper('paused')).toBe(''); // the label alone says "Sidekick Agent Paused"
   });
 });
 

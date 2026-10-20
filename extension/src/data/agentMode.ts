@@ -18,7 +18,7 @@ export function normaliseAgentMode(reply: { mode?: unknown; since?: unknown }): 
 export function agentModeHelper(mode: AgentMode): string {
   return mode === 'running'
     ? 'The agent drafts tickets and may use i2c on its own, logging in when needed.'
-    : "Paused: the agent won't draft or touch i2c, so you can work.";
+    : '';
 }
 
 /** "since <local time>" for a mode-change timestamp in epoch seconds, or null when unset. */
