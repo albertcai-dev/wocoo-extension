@@ -62,13 +62,20 @@ export type CardProduct = 'credit' | 'prepaid';
 const CATEGORY_FOR: Record<CardProduct, string> = { credit: 'credit', prepaid: 'debit' };
 
 /** Index of the one ACTIVE row of the wanted product, or null (none, or several: the caller
- *  must choose). */
-export function pickProduct(rows: ProductRow[], want: CardProduct): number | null {
-  const matches: number[] = [];
+ *  must choose). With `allowSoleInactive` (read-only lookups), a lone row of that product is
+ *  taken whatever its status (e.g. an INACTIVE card not yet activated); the debit/credit
+ *  flows keep the strict rule because they act on the account. */
+export function pickProduct(rows: ProductRow[], want: CardProduct, opts: { allowSoleInactive?: boolean } = {}): number | null {
+  const ofKind: number[] = [];
+  const active: number[] = [];
   rows.forEach((row, i) => {
     const category = (row.category || '').trim().toLowerCase();
     const status = (row.status || '').trim().toLowerCase();
-    if (category === CATEGORY_FOR[want] && status === 'active') matches.push(i);
+    if (category !== CATEGORY_FOR[want]) return;
+    ofKind.push(i);
+    if (status === 'active') active.push(i);
   });
-  return matches.length === 1 ? matches[0] : null;
+  if (active.length === 1) return active[0];
+  if (opts.allowSoleInactive && active.length === 0 && ofKind.length === 1) return ofKind[0];
+  return null;
 }
