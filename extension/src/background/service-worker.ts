@@ -30,6 +30,14 @@ chrome.runtime.onMessage.addListener((msg, _sender) => {
     }
     return;
   }
+  // Albert is active in i2c: tell the local draft agent. Native-host failures (host not
+  // installed, store CLI error) are swallowed; the agent just won't see the activity.
+  if (msg?.type === 'wocoo:i2c-activity') {
+    if (typeof msg.ts === 'number' && Number.isFinite(msg.ts)) {
+      reportI2cActivity(msg.ts).catch((err) => console.debug('i2c activity report failed', err));
+    }
+    return;
+  }
   if (msg?.type === 'wocoo:ticket-changed') {
     const key: string | null = msg.key ?? null;
     if (key) {
@@ -77,6 +85,7 @@ chrome.tabs.onUpdated.addListener((_id, info) => {
   if (info.status === 'complete' || info.url) rebroadcastActiveTab();
 });
 
+import { reportI2cActivity } from '../api/draftStore';
 import {
   MCV_ALARM_NAME,
   scheduleNextMcvAlarm,

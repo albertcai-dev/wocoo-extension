@@ -7,6 +7,7 @@
 import { gridFromRows, pageSaysNoRecord, readColumnForLast4, readLabelValue, readProgramForLast4 } from '../data/i2cCardDetailsParse';
 import { locateProductColumns, pickCreditProduct, type ProductRow } from '../data/i2cProductSelect';
 import { isSignInLabel } from '../data/i2cLogin';
+import { AGENT_TAB_KEY, shouldReport } from '../data/i2cActivity';
 
 export {}; // Module-scoped so helpers don't collide with other content scripts at the TS layer.
 
@@ -1633,4 +1634,29 @@ async function bootstrap() {
   }
 }
 
+// Tell the local draft agent when Albert is actively using i2c, so it holds off its own
+// lookups (it shares his login). Checked at event time: the agent sets its tab flag after
+// each navigation, so it may not exist yet at load. Throttled; failures are silent.
+function watchUserActivity() {
+  let lastSentMs = 0;
+  const onActivity = (e: Event) => {
+    let isAgentTab = false;
+    try { isAgentTab = sessionStorage.getItem(AGENT_TAB_KEY) === '1'; } catch { /* storage blocked */ }
+    const now = Date.now();
+    if (!shouldReport(e, isAgentTab, lastSentMs, now)) return;
+    lastSentMs = now;
+    try {
+      chrome.runtime
+        .sendMessage({ type: 'wocoo:i2c-activity', ts: Math.floor(now / 1000) })
+        .catch((err) => console.debug('[wocoo-i2c] activity report failed', err));
+    } catch (err) {
+      console.debug('[wocoo-i2c] activity report failed', err); // e.g. extension context invalidated
+    }
+  };
+  document.addEventListener('keydown', onActivity, { capture: true, passive: true });
+  document.addEventListener('mousedown', onActivity, { capture: true, passive: true });
+  document.addEventListener('wheel', onActivity, { capture: true, passive: true });
+}
+
+watchUserActivity();
 bootstrap();
