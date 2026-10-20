@@ -61,6 +61,7 @@ import {
   fetchAtlasClientDetailsHeadless,
   type AtlasClientDetails,
 } from '../data/atlasAccountLookup';
+import { issueTypeIdFor, matchPrefillFields, type MovePrefill } from '../data/movePrefill';
 
 type Status = 'configuring' | 'confirming' | 'executing' | 'success' | 'error';
 
@@ -123,8 +124,25 @@ function atlasPrefills(
   return out;
 }
 
-export function MoveModal({ ticket, onClose, initialDestKey = 'EOC' }: { ticket: WocooTicket; onClose: () => void; initialDestKey?: MoveDestination }) {
-  const [destKey, setDestKey] = useState<MoveDestination>(initialDestKey);
+export function MoveModal({ ticket, onClose, initialDestKey = 'EOC', prefill }: { ticket: WocooTicket; onClose: () => void; initialDestKey?: MoveDestination; prefill?: MovePrefill }) {
+  const [destKey, setDestKey] = useState<MoveDestination>(prefill?.destination ?? initialDestKey);
+  // Draft-agent suggestion: seeds state only, never submits — the operator still confirms.
+  // The issue type resolves by name from the static config, so it is known before createmeta
+  // loads; the field values wait for createmeta (option labels need it to become option IDs)
+  // and are applied once, to that seeded issue type only.
+  const prefillTypeId = useRef(prefill ? issueTypeIdFor(prefill.destination, prefill.issueTypeName) : undefined);
+  const prefillFieldsPending = useRef(!!prefill?.fields);
+  const seedTypeId = (dest: MoveDestination, fallback = '') =>
+    prefill?.destination === dest ? (prefillTypeId.current ?? fallback) : fallback;
+  const seedPrefillFields = (
+    cfg: PrrIssueTypeConfig,
+    meta: CreateMetaField[],
+    setValues: (updater: (prev: Record<string, string>) => Record<string, string>) => void,
+  ) => {
+    if (!prefillFieldsPending.current || cfg.id !== prefillTypeId.current) return;
+    prefillFieldsPending.current = false;
+    setValues((prev) => ({ ...prev, ...matchPrefillFields(cfg.requiredFields, meta, prefill?.fields, prev) }));
+  };
   // EOC's Client Status is the same three-way tier the WOCOO ticket already carries in
   // User Tier (customfield_11416), so derive it instead of guessing — this used to be
   // hardcoded to 'Premium', which silently mislabelled every Core and Generation client
@@ -146,7 +164,7 @@ export function MoveModal({ ticket, onClose, initialDestKey = 'EOC' }: { ticket:
   const [error, setError] = useState<string | null>(null);
   const [resultNote, setResultNote] = useState<string | null>(null);
   // v3 parity: every move requires a reason; the sheet log records it for audit.
-  const [reason, setReason] = useState<string>('');
+  const [reason, setReason] = useState<string>(prefill?.reason ?? '');
   const [logWarning, setLogWarning] = useState<string | null>(null);
   // Clone/Move flow: the clone we create before reassigning the original; tracked so that
   // partial-failure errors can point the user at it for manual cleanup.
@@ -159,7 +177,7 @@ export function MoveModal({ ticket, onClose, initialDestKey = 'EOC' }: { ticket:
   const [softWarnings, setSoftWarnings] = useState<string[]>([]);
 
   // PRR: dynamic form state. Picker + createmeta-driven field values.
-  const [prrIssueTypeId, setPrrIssueTypeId] = useState<string>('');
+  const [prrIssueTypeId, setPrrIssueTypeId] = useState<string>(() => seedTypeId('PRR'));
   const [prrFieldValues, setPrrFieldValues] = useState<Record<string, string>>({});
   const [prrMeta, setPrrMeta] = useState<CreateMetaField[] | null>(null);
   const [prrMetaState, setPrrMetaState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
@@ -167,7 +185,7 @@ export function MoveModal({ ticket, onClose, initialDestKey = 'EOC' }: { ticket:
 
   // DBO: same shape as PRR (dynamic form driven by createmeta), but scoped to the DBO
   // project + issue-type list.
-  const [dboIssueTypeId, setDboIssueTypeId] = useState<string>('');
+  const [dboIssueTypeId, setDboIssueTypeId] = useState<string>(() => seedTypeId('DBO'));
   const [dboFieldValues, setDboFieldValues] = useState<Record<string, string>>({});
   const [dboMeta, setDboMeta] = useState<CreateMetaField[] | null>(null);
   const [dboMetaState, setDboMetaState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
@@ -176,7 +194,7 @@ export function MoveModal({ ticket, onClose, initialDestKey = 'EOC' }: { ticket:
   // FRAUD: dynamic form driven by createmeta (mirrors DBO/PRR). Two issue types
   // (Task, Other) each with 3 required custom fields including the ~100-option
   // Fraud Detection Method picker.
-  const [fraudIssueTypeId, setFraudIssueTypeId] = useState<string>('');
+  const [fraudIssueTypeId, setFraudIssueTypeId] = useState<string>(() => seedTypeId('FRAUD'));
   const [fraudFieldValues, setFraudFieldValues] = useState<Record<string, string>>({});
   const [fraudMeta, setFraudMeta] = useState<CreateMetaField[] | null>(null);
   const [fraudMetaState, setFraudMetaState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
@@ -185,7 +203,7 @@ export function MoveModal({ ticket, onClose, initialDestKey = 'EOC' }: { ticket:
   // PFO: dynamic form driven by createmeta (mirrors DBO/PRR/FRAUD). The bespoke
   // Express Shipping UI this replaced hardcoded field IDs and option labels from the
   // now-deprecated OLDPFO project — see the PFO block in moveConfig.ts.
-  const [pfoIssueTypeId, setPfoIssueTypeId] = useState<string>(PFO_ISSUE_TYPES[0].id);
+  const [pfoIssueTypeId, setPfoIssueTypeId] = useState<string>(() => seedTypeId('PFO', PFO_ISSUE_TYPES[0].id));
   const [pfoFieldValues, setPfoFieldValues] = useState<Record<string, string>>({});
   const [pfoMeta, setPfoMeta] = useState<CreateMetaField[] | null>(null);
   const [pfoMetaState, setPfoMetaState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
@@ -201,7 +219,7 @@ export function MoveModal({ ticket, onClose, initialDestKey = 'EOC' }: { ticket:
 
   // BOPSFUND: dynamic form driven by createmeta (mirrors FRAUD). Every issue type shares
   // Identity / Account ID / Funds Transfer ID; three add one option field.
-  const [bopsIssueTypeId, setBopsIssueTypeId] = useState<string>('');
+  const [bopsIssueTypeId, setBopsIssueTypeId] = useState<string>(() => seedTypeId('BOPSFUND'));
   const [bopsFieldValues, setBopsFieldValues] = useState<Record<string, string>>({});
   const [bopsMeta, setBopsMeta] = useState<CreateMetaField[] | null>(null);
   const [bopsMetaState, setBopsMetaState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
@@ -308,6 +326,7 @@ export function MoveModal({ ticket, onClose, initialDestKey = 'EOC' }: { ticket:
       .then((fields) => {
         if (cancelled) return;
         setPrrMeta(fields);
+        seedPrefillFields(prrConfig, fields, setPrrFieldValues);
         setPrrMetaState('ready');
       })
       .catch((e: any) => {
@@ -336,6 +355,7 @@ export function MoveModal({ ticket, onClose, initialDestKey = 'EOC' }: { ticket:
       .then((fields) => {
         if (cancelled) return;
         setFraudMeta(fields);
+        seedPrefillFields(fraudConfig, fields, setFraudFieldValues);
         setFraudMetaState('ready');
       })
       .catch((e: any) => {
@@ -364,6 +384,7 @@ export function MoveModal({ ticket, onClose, initialDestKey = 'EOC' }: { ticket:
       .then((fields) => {
         if (cancelled) return;
         setBopsMeta(fields);
+        seedPrefillFields(bopsConfig, fields, setBopsFieldValues);
         setBopsMetaState('ready');
       })
       .catch((e: any) => {
@@ -407,6 +428,7 @@ export function MoveModal({ ticket, onClose, initialDestKey = 'EOC' }: { ticket:
       .then((fields) => {
         if (cancelled) return;
         setDboMeta(fields);
+        seedPrefillFields(dboConfig, fields, setDboFieldValues);
         setDboMetaState('ready');
       })
       .catch((e: any) => {
@@ -438,6 +460,7 @@ export function MoveModal({ ticket, onClose, initialDestKey = 'EOC' }: { ticket:
         if (cancelled) return;
         setPfoMeta(fields);
         setPfoFieldValues((prev) => ({ ...prev, ...applyOptionPrefills(pfoConfig.requiredFields, fields, ticket) }));
+        seedPrefillFields(pfoConfig, fields, setPfoFieldValues);
         setPfoMetaState('ready');
       })
       .catch((e: any) => {

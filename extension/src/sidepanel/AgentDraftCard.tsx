@@ -4,6 +4,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { WocooTicket } from '../data/mockTicket';
 import type { AgentDraft, DraftActionNeeded, DraftSegment } from '../data/agentDraftTypes';
+import { toMovePrefill, type MovePrefill } from '../data/movePrefill';
 import { DraftStoreUnavailable, getDraft, recordOutcome } from '../api/draftStore';
 import { postComment, searchJiraUsers, transitionTicketByName } from '../api/jira';
 import {
@@ -70,10 +71,12 @@ const INSERT_FORCE: Partial<Record<Extract<Prefill, { kind: 'skipped' }>['reason
 
 const STATUSES: ReadonlyArray<WocooTicket['status']> = ['Triage', 'Back Office', 'Pending', 'Done', 'Cancelled', 'Other'];
 
-export function AgentDraftCard({ ticket, onOpenWorkflow, onTicketUpdate }: {
+export function AgentDraftCard({ ticket, onOpenWorkflow, onTicketUpdate, onOpenMove }: {
   ticket: WocooTicket;
   onOpenWorkflow: (workflow: NonNullable<DraftActionNeeded['workflow']>) => void;
   onTicketUpdate?: (t: WocooTicket) => void;
+  /** Opens the Move modal pre-filled from the agent's move suggestion. */
+  onOpenMove?: (prefill: MovePrefill) => void;
 }) {
   const [load, setLoad] = useState<Load>({ kind: 'loading' });
 
@@ -102,15 +105,17 @@ export function AgentDraftCard({ ticket, onOpenWorkflow, onTicketUpdate }: {
       draft={load.draft}
       onOpenWorkflow={onOpenWorkflow}
       onTicketUpdate={onTicketUpdate}
+      onOpenMove={onOpenMove}
     />
   );
 }
 
-function DraftBody({ ticket, draft, onOpenWorkflow, onTicketUpdate }: {
+function DraftBody({ ticket, draft, onOpenWorkflow, onTicketUpdate, onOpenMove }: {
   ticket: WocooTicket;
   draft: AgentDraft;
   onOpenWorkflow: (workflow: NonNullable<DraftActionNeeded['workflow']>) => void;
   onTicketUpdate?: (t: WocooTicket) => void;
+  onOpenMove?: (prefill: MovePrefill) => void;
 }) {
   const editable = draft.outcome === 'draft' || draft.outcome === 'needs_info';
   const [text, setText] = useState(() => segmentsToPlain(draft.segments));
@@ -253,12 +258,28 @@ function DraftBody({ ticket, draft, onOpenWorkflow, onTicketUpdate }: {
         </div>
       )}
 
-      {draft.outcome === 'move' && draft.move && (
-        <div style={{ ...mutedStyle, marginTop: 8 }}>
-          <div><b>{draft.move.destination}</b> — {draft.move.issue_type}</div>
-          <div style={{ marginTop: 4 }}>{draft.move.reason}</div>
-        </div>
-      )}
+      {draft.outcome === 'move' && draft.move && (() => {
+        const move = draft.move;
+        const movePrefill = toMovePrefill(move);
+        return (
+          <div style={{ ...mutedStyle, marginTop: 8 }}>
+            {movePrefill ? (
+              <>
+                <div><b>{move.destination}</b> — {move.issue_type}</div>
+                <div style={{ marginTop: 4 }}>{move.reason}</div>
+                {onOpenMove && (
+                  <button type="button" style={{ ...primaryButton, marginTop: 'var(--mint-sp-2)' }}
+                    onClick={() => onOpenMove(movePrefill)}>
+                    Move to {move.destination}
+                  </button>
+                )}
+              </>
+            ) : (
+              <div>Move manually to <b>{move.destination}</b>: {move.reason}</div>
+            )}
+          </div>
+        );
+      })()}
 
       {editable && postedEarlier && (
         <div style={{ ...mutedStyle, fontWeight: 600 }}>Posted earlier this session.</div>

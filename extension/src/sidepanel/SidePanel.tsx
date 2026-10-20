@@ -26,6 +26,7 @@ import type { MoveDestination } from '../data/moveConfig';
 import { CredRouteCard } from './CredRouteCard';
 import { AITriageCard } from './AITriageCard';
 import { AgentDraftCard } from './AgentDraftCard';
+import type { MovePrefill } from '../data/movePrefill';
 import { OverpaymentTriage } from './OverpaymentTriage';
 import { ReverseFeeWorkflow } from './ReverseFeeWorkflow';
 import { CustomCcStatementWorkflow } from './CustomCcStatementWorkflow';
@@ -292,8 +293,20 @@ function TicketViewInner({ ticket, onTicketUpdate, onStartTriage, onStartReverse
   const [moveOpen, setMoveOpen] = useState(false);
   const [createReimbActive, setCreateReimbActive] = useState(false);
   const [moveInitialDest, setMoveInitialDest] = useState<MoveDestination>('EOC');
+  // Set only when the Move modal was opened from the draft agent's move suggestion.
+  const [movePrefill, setMovePrefill] = useState<MovePrefill | undefined>(undefined);
+  // Bumped per open so a second suggestion click remounts the modal and re-seeds it.
+  const [moveOpenCount, setMoveOpenCount] = useState(0);
   const openCloneMove = (initialDestKey: MoveDestination = 'EOC') => {
     setMoveInitialDest(initialDestKey);
+    setMovePrefill(undefined);
+    setMoveOpenCount((n) => n + 1);
+    setMoveOpen(true);
+  };
+  const openPrefilledMove = (prefill: MovePrefill) => {
+    setMoveInitialDest(prefill.destination);
+    setMovePrefill(prefill);
+    setMoveOpenCount((n) => n + 1);
     setMoveOpen(true);
   };
 
@@ -546,8 +559,10 @@ function TicketViewInner({ ticket, onTicketUpdate, onStartTriage, onStartReverse
       />
       {moveOpen ? (
         <MoveModal
+          key={moveOpenCount}
           ticket={ticket}
           initialDestKey={moveInitialDest}
+          prefill={movePrefill}
           onClose={() => { setMoveOpen(false); void onTicketUpdate; }}
         />
       ) : null}
@@ -563,6 +578,7 @@ function TicketViewInner({ ticket, onTicketUpdate, onStartTriage, onStartReverse
         ticket={ticket}
         onTicketUpdate={onTicketUpdate}
         onOpenWorkflow={(w) => { if (w === 'overpayment') onStartTriage(); else onStartReverseFee(); }}
+        onOpenMove={openPrefilledMove}
       />
 
       {/* AI VERDICT — grounded in the ticket log + Notion playbook */}
