@@ -400,7 +400,7 @@ function DraftBody({ ticket, draft, onOpenWorkflow, onTicketUpdate, onOpenMove }
 
   const header = draft.outcome === 'move' ? 'Move suggestion'
     : draft.outcome === 'no_new_angle' ? 'No new angle found'
-    : draft.kind === 'followup' ? 'Agent draft — follow-up' : 'Agent draft';
+    : draft.kind === 'followup' ? 'Sidekick Agent draft — follow-up' : 'Sidekick Agent draft';
 
   return (
     <div style={cardStyle}>

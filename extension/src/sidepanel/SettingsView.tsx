@@ -318,7 +318,7 @@ function DraftAgentSection() {
   const since = state ? agentModeSince(state.since) : null;
 
   return (
-    <Section title="Draft agent">
+    <Section title="Sidekick Agent">
       <div style={cardStyle}>
         <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--mint-text-meta)', fontWeight: 700, color: 'var(--mint-fg-strong)', cursor: state && !busy ? 'pointer' : 'default' }}>
           <input
@@ -327,7 +327,7 @@ function DraftAgentSection() {
             disabled={!state || busy}
             onChange={toggle}
           />
-          Draft agent running
+          Sidekick Agent running
           {since ? (
             <span style={{ marginLeft: 'auto', fontSize: 'var(--mint-text-nano)', color: 'var(--mint-fg-soft)', fontWeight: 400 }}>{since}</span>
           ) : null}
