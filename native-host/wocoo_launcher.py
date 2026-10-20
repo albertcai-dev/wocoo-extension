@@ -14,7 +14,9 @@ Actions:
   {"action": "draft_list"}              -> {"ok": true, "items": [...]}
   {"action": "draft_outcome", "row": R} -> {"ok": true}
   {"action": "i2c_activity", "ts": T}   -> {"ok": true}
-        The draft_* / i2c_activity actions shell out to the local draft agent's store CLI:
+  {"action": "agent_mode_get"}          -> {"ok": true, "mode": "running"|"paused", "since": N|null}
+  {"action": "agent_mode_set", "mode": M}  (M is "running" or "paused") -> same reply as agent_mode_get
+        The draft_* / i2c_activity / agent_mode_* actions shell out to the local draft agent's store CLI:
         `python3 $WDA_ROOT/src/store_cli.py ...` (WDA_ROOT defaults to ~/projects/wocoo-draft-agent).
 
 Installed by install.sh, which registers the host manifest with Chrome.
@@ -107,6 +109,18 @@ def draft_action(action, message):
             return {'ok': False, 'error': 'draft_outcome needs a row object'}
         _, err = run_store(['outcome'], stdin=json.dumps(row))
         return {'ok': False, 'error': err} if err else {'ok': True}
+    if action in ('agent_mode_get', 'agent_mode_set'):
+        args = ['agent-mode']
+        if action == 'agent_mode_set':
+            mode = message.get('mode')
+            if mode not in AGENT_MODES:
+                return {'ok': False, 'error': 'agent_mode_set needs mode running or paused'}
+            args += ['--set', mode]
+        data, err = run_store(args)
+        if err:
+            return {'ok': False, 'error': err}
+        data = data if isinstance(data, dict) else {}
+        return {'ok': True, 'mode': data.get('mode'), 'since': data.get('since')}
     ts = message.get('ts')
     if isinstance(ts, bool) or not isinstance(ts, (int, float)):
         return {'ok': False, 'error': 'i2c_activity needs a numeric ts'}
@@ -114,7 +128,9 @@ def draft_action(action, message):
     return {'ok': False, 'error': err} if err else {'ok': True}
 
 
-DRAFT_ACTIONS = ('draft_get', 'draft_list', 'draft_outcome', 'i2c_activity')
+AGENT_MODES = ('running', 'paused')
+DRAFT_ACTIONS = ('draft_get', 'draft_list', 'draft_outcome', 'i2c_activity',
+                 'agent_mode_get', 'agent_mode_set')
 
 
 def main():

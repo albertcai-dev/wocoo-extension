@@ -33,6 +33,9 @@ elif args[0] == 'outcome':
     print(json.dumps({"ok": True, "echo": json.loads(sys.stdin.read())}))
 elif args[0] == 'i2c-activity':
     print(json.dumps({"ok": True, "ts": float(args[2])}))
+elif args[0] == 'agent-mode':
+    mode = args[2] if len(args) > 2 and args[1] == '--set' else 'running'
+    print(json.dumps({"ok": True, "mode": mode, "since": 1700000000.5 if len(args) > 2 else None}))
 '''
 
 
@@ -83,6 +86,26 @@ class DraftActions(unittest.TestCase):
 
     def test_i2c_activity_passes_ts(self):
         self.assertEqual(call({'action': 'i2c_activity', 'ts': 1700000000}, self.root), {'ok': True})
+
+    def test_agent_mode_get(self):
+        self.assertEqual(call({'action': 'agent_mode_get'}, self.root),
+                         {'ok': True, 'mode': 'running', 'since': None})
+
+    def test_agent_mode_set_passes_mode(self):
+        self.assertEqual(call({'action': 'agent_mode_set', 'mode': 'paused'}, self.root),
+                         {'ok': True, 'mode': 'paused', 'since': 1700000000.5})
+
+    def test_agent_mode_set_rejects_invalid_mode(self):
+        for message in ({'action': 'agent_mode_set', 'mode': 'sleeping'}, {'action': 'agent_mode_set'}):
+            self.assertEqual(call(message, self.root),
+                             {'ok': False, 'error': 'agent_mode_set needs mode running or paused'})
+
+    def test_agent_mode_cli_failure_returns_error(self):
+        with open(os.path.join(self.root, 'src', 'store_cli.py'), 'w') as f:
+            f.write('import sys\nprint(\'{"ok": false, "error": "boom"}\')\nsys.exit(1)\n')
+        reply = call({'action': 'agent_mode_get'}, self.root)
+        self.assertFalse(reply['ok'])
+        self.assertIn('boom', reply['error'])
 
     def test_store_cli_failure_returns_error(self):
         with open(os.path.join(self.root, 'src', 'store_cli.py'), 'w') as f:

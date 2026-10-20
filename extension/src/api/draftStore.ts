@@ -2,6 +2,9 @@
 // (native-host/wocoo_launcher.py), which shells out to the agent's store CLI.
 
 import type { AgentDraft, DraftOutcomeRow, ReadyDraftRow } from '../data/agentDraftTypes';
+import { normaliseAgentMode, type AgentMode, type AgentModeState } from '../data/agentMode';
+
+export type { AgentMode };
 
 const NATIVE_HOST = 'com.wealthsimple.wocoo_launcher';
 
@@ -21,7 +24,7 @@ const NOT_SET_UP = [
   /native messaging host not found/i,
   /^host not found/i,
   /^Not found: .*store_cli\.py$/i,
-  /^Unknown action: '?(draft_|i2c_activity)/i,
+  /^Unknown action: '?(draft_|i2c_activity|agent_mode_)/i,
 ];
 
 /** True when the draft store failed only because it isn't set up here, so the UI should render
@@ -37,6 +40,8 @@ interface HostReply {
   error?: string;
   draft?: AgentDraft | null;
   items?: ReadyDraftRow[];
+  mode?: unknown;
+  since?: unknown;
 }
 
 function sendNative(message: object): Promise<HostReply | undefined> {
@@ -80,4 +85,14 @@ export async function recordOutcome(row: DraftOutcomeRow): Promise<void> {
 /** Tells the agent the user is active in i2c, so it holds off its own i2c lookups. `ts` is epoch seconds. */
 export async function reportI2cActivity(ts: number): Promise<void> {
   await call({ action: 'i2c_activity', ts });
+}
+
+/** Whether the agent is running or paused, and when that last changed (epoch seconds). */
+export async function getAgentMode(): Promise<AgentModeState> {
+  return normaliseAgentMode(await call({ action: 'agent_mode_get' }));
+}
+
+/** Runs or pauses the agent. A paused agent does no drafting and never touches the user's i2c session. */
+export async function setAgentMode(mode: AgentMode): Promise<AgentModeState> {
+  return normaliseAgentMode(await call({ action: 'agent_mode_set', mode }));
 }
