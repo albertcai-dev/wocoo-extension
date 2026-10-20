@@ -539,22 +539,34 @@ export interface CommentSegment {
 }
 
 /**
- * Post a comment to a Jira issue, with optional @mention, link, and smartcard segments.
- *
- * Inline segments (text / mention / link) are grouped into a single paragraph.
- * A `smartcard` segment is emitted as its own `blockCard` ADF block — Jira auto-fetches
- * the URL's metadata and renders it as a rich unfurled card (title, favicon, description)
- * instead of a plain hyperlink. Prefer this for cross-system links (i2c JSM, Confluence,
- * etc.) where the smart card gives more context than the raw URL.
+ * The ADF document postComment sends. By default every inline segment goes into one paragraph,
+ * text verbatim (existing callers rely on this). With `multiline` (the agent draft card), text
+ * splits into paragraphs at blank lines and single newlines become hardBreaks.
  */
-export async function postComment(ticketKey: string, segments: CommentSegment[]): Promise<void> {
+export function buildCommentAdf(
+  segments: CommentSegment[],
+  opts: { multiline?: boolean } = {},
+): { type: 'doc'; version: 1; content: unknown[] } {
   const blocks: unknown[] = [];
   let currentParagraph: unknown[] = [];
+  const isBreak = (n: unknown) => (n as { type?: string }).type === 'hardBreak';
   const flushParagraph = () => {
+    // Only multiline text creates hardBreaks; one at a paragraph's edge would be a stray blank line.
+    while (currentParagraph.length && isBreak(currentParagraph[0])) currentParagraph.shift();
+    while (currentParagraph.length && isBreak(currentParagraph[currentParagraph.length - 1])) currentParagraph.pop();
     if (currentParagraph.length > 0) {
       blocks.push({ type: 'paragraph', content: currentParagraph });
       currentParagraph = [];
     }
+  };
+  const pushMultilineText = (text: string) => {
+    text.replace(/\r\n?/g, '\n').split(/\n{2,}/).forEach((para, i) => {
+      if (i > 0) flushParagraph();
+      para.split('\n').forEach((line, j) => {
+        if (j > 0) currentParagraph.push({ type: 'hardBreak' });
+        if (line) currentParagraph.push({ type: 'text', text: line });
+      });
+    });
   };
   for (const s of segments) {
     if (s.type === 'smartcard' && s.href) {
@@ -564,16 +576,32 @@ export async function postComment(ticketKey: string, segments: CommentSegment[])
       currentParagraph.push({ type: 'mention', attrs: { id: s.accountId, text: s.text } });
     } else if (s.type === 'link' && s.href) {
       currentParagraph.push({ type: 'text', text: s.text, marks: [{ type: 'link', attrs: { href: s.href } }] });
+    } else if (opts.multiline) {
+      pushMultilineText(s.text);
     } else {
       currentParagraph.push({ type: 'text', text: s.text });
     }
   }
   flushParagraph();
   if (blocks.length === 0) blocks.push({ type: 'paragraph', content: [] });
+  return { type: 'doc', version: 1, content: blocks };
+}
 
-  const payload = {
-    body: { type: 'doc', version: 1, content: blocks },
-  };
+/**
+ * Post a comment to a Jira issue, with optional @mention, link, and smartcard segments.
+ *
+ * Inline segments (text / mention / link) are grouped into a single paragraph.
+ * A `smartcard` segment is emitted as its own `blockCard` ADF block — Jira auto-fetches
+ * the URL's metadata and renders it as a rich unfurled card (title, favicon, description)
+ * instead of a plain hyperlink. Prefer this for cross-system links (i2c JSM, Confluence,
+ * etc.) where the smart card gives more context than the raw URL.
+ */
+export async function postComment(
+  ticketKey: string,
+  segments: CommentSegment[],
+  opts: { multiline?: boolean } = {},
+): Promise<void> {
+  const payload = { body: buildCommentAdf(segments, opts) };
   const resp = await jiraFetch(`/rest/api/3/issue/${encodeURIComponent(ticketKey)}/comment`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -1144,6 +1172,44 @@ export interface JiraCommentDetail {
 }
 
 /**
+ * Plain text of a comment body, for comparing a reply with the agent draft it may be based on.
+ * Unlike extractDescription it keeps mentions ("@Name") and inline/block card URLs, so the text
+ * reads like segmentsToPlain of the draft. Paragraph-level blocks are joined with "\n".
+ */
+export function adfCommentToPlain(body: unknown): string {
+  if (typeof body === 'string') return body;
+  if (!body || typeof body !== 'object') return '';
+  const lines: string[] = [];
+  let line = '';
+  const flush = () => { if (line !== '') lines.push(line); line = ''; };
+  const LINE_BLOCKS = new Set(['paragraph', 'heading', 'codeBlock']);
+  const walk = (node: any): void => {
+    if (!node || typeof node !== 'object') return;
+    if (Array.isArray(node)) { node.forEach(walk); return; }
+    switch (node.type) {
+      case 'text': line += typeof node.text === 'string' ? node.text : ''; return;
+      case 'hardBreak': line += '\n'; return;
+      case 'mention': {
+        const t = String(node.attrs?.text ?? '');
+        if (t) line += t.startsWith('@') ? t : '@' + t;
+        return;
+      }
+      case 'inlineCard': line += String(node.attrs?.url ?? ''); return;
+      case 'blockCard':
+      case 'embedCard':
+        flush();
+        if (node.attrs?.url) lines.push(String(node.attrs.url));
+        return;
+    }
+    if (LINE_BLOCKS.has(node.type)) { flush(); walk(node.content); flush(); return; }
+    walk(node.content);
+  };
+  walk(body);
+  flush();
+  return lines.join('\n').trim();
+}
+
+/**
  * Fetch comments with id, author accountId, created timestamp and plain text, oldest first.
  * Capped at 100 per call (oldest 100, or newest 100 with `newest`).
  * Used to tell whether a human replied after an agent draft was posted.
@@ -1169,7 +1235,7 @@ export async function getIssueCommentsDetailed(
     id: String(c.id),
     authorAccountId: c.author?.accountId || '',
     created: c.created || '',
-    text: extractDescription(c.body),
+    text: adfCommentToPlain(c.body),
   }));
   // Jira returns oldest first by default; sort defensively on the parsed timestamp.
   const ts = (s: string) => { const t = Date.parse(s.replace(/([+-]\d\d)(\d\d)$/, '$1:$2')); return Number.isNaN(t) ? 0 : t; };

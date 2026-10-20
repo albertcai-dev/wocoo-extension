@@ -80,3 +80,136 @@ describe('getIssueCommentsDetailed', () => {
     await expect(getIssueCommentsDetailed('TEST-1')).rejects.toThrow('HTTP 404');
   });
 });
+
+// --- comment ADF -> plain text (I3) and card-path multi-line ADF (M1) ---------------------
+
+import { adfCommentToPlain, buildCommentAdf, postComment, extractDescription } from './jira';
+import { segmentsToPlain } from '../data/agentDraftView';
+import type { DraftSegment } from '../data/agentDraftTypes';
+
+describe('adfCommentToPlain', () => {
+  it('keeps mentions as "@Name" without doubling the @', () => {
+    const body = { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [
+      { type: 'text', text: 'Hi ' },
+      { type: 'mention', attrs: { id: 'acct-1', text: '@Pat Example' } },
+      { type: 'text', text: ' and ' },
+      { type: 'mention', attrs: { id: 'acct-2', text: 'Sam Sample' } },
+    ] }] };
+    expect(adfCommentToPlain(body)).toBe('Hi @Pat Example and @Sam Sample');
+  });
+
+  it('emits the URL of inline and block cards', () => {
+    const body = { type: 'doc', version: 1, content: [
+      { type: 'paragraph', content: [{ type: 'text', text: 'See ' }, { type: 'inlineCard', attrs: { url: 'https://example.test/a' } }] },
+      { type: 'blockCard', attrs: { url: 'https://example.test/b' } },
+    ] };
+    expect(adfCommentToPlain(body)).toBe('See https://example.test/a\nhttps://example.test/b');
+  });
+
+  it('joins paragraphs with one newline and renders hardBreak as a newline', () => {
+    const body = { type: 'doc', version: 1, content: [
+      { type: 'paragraph', content: [{ type: 'text', text: 'Line one' }, { type: 'hardBreak' }, { type: 'text', text: 'line two' }] },
+      { type: 'paragraph', content: [] },
+      { type: 'paragraph', content: [{ type: 'text', text: 'Second para' }] },
+    ] };
+    expect(adfCommentToPlain(body)).toBe('Line one\nline two\nSecond para');
+  });
+
+  it('walks lists and passes plain strings through', () => {
+    const body = { type: 'doc', version: 1, content: [{ type: 'bulletList', content: [
+      { type: 'listItem', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'one' }] }] },
+      { type: 'listItem', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'two' }] }] },
+    ] }] };
+    expect(adfCommentToPlain(body)).toBe('one\ntwo');
+    expect(adfCommentToPlain('already text')).toBe('already text');
+    expect(adfCommentToPlain(null)).toBe('');
+  });
+
+  it('leaves extractDescription unchanged (still drops mentions)', () => {
+    const body = { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [
+      { type: 'text', text: 'Hi ' }, { type: 'mention', attrs: { id: 'a', text: '@Pat' } },
+    ] }] };
+    expect(extractDescription(body)).toBe('Hi');
+  });
+
+  it('is what getIssueCommentsDetailed returns as text', async () => {
+    mockFetch({ ok: true, body: { comments: [{ id: '1', author: { accountId: 'x' }, created: '2026-01-01T00:00:00.000+0000',
+      body: { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [
+        { type: 'mention', attrs: { id: 'a', text: '@Pat' } }, { type: 'text', text: ' done' }] }] } }] } });
+    expect((await getIssueCommentsDetailed('TEST-1'))[0].text).toBe('@Pat done');
+  });
+
+  it('round trip: a posted draft with a mention and a link reads back as the draft text', async () => {
+    const draft: DraftSegment[] = [
+      { type: 'text', text: 'Hi ' },
+      { type: 'mention', text: '@Pat Example', accountId: 'acct-1' },
+      { type: 'text', text: ', the fee is reversed. Details: ' },
+      { type: 'link', text: 'statement', href: 'https://example.test/statement' },
+      { type: 'text', text: '.' },
+    ];
+    const fn = mockFetch({ ok: true, body: {} });
+    await postComment('TEST-1', draft);
+    const call = fn.mock.calls.find((c) => String(c[0]).endsWith('/comment'))!;
+    const body = JSON.parse(String((call as unknown as [string, RequestInit])[1].body)).body;
+    expect(adfCommentToPlain(body)).toBe(segmentsToPlain(draft));
+  });
+});
+
+describe('buildCommentAdf', () => {
+  const segs: DraftSegment[] = [
+    { type: 'text', text: 'Hi ' },
+    { type: 'mention', text: '@Pat', accountId: 'acct-1' },
+    { type: 'text', text: ',\n\nFirst line\nsecond line\n\n\nLast' },
+  ];
+
+  it('default (existing callers): one paragraph, newlines left inside the text', () => {
+    expect(buildCommentAdf(segs)).toEqual({ type: 'doc', version: 1, content: [{ type: 'paragraph', content: [
+      { type: 'text', text: 'Hi ' },
+      { type: 'mention', attrs: { id: 'acct-1', text: '@Pat' } },
+      { type: 'text', text: ',\n\nFirst line\nsecond line\n\n\nLast' },
+    ] }] });
+  });
+
+  it('multiline: blank lines start paragraphs, single newlines become hardBreaks', () => {
+    expect(buildCommentAdf(segs, { multiline: true }).content).toEqual([
+      { type: 'paragraph', content: [
+        { type: 'text', text: 'Hi ' },
+        { type: 'mention', attrs: { id: 'acct-1', text: '@Pat' } },
+        { type: 'text', text: ',' },
+      ] },
+      { type: 'paragraph', content: [
+        { type: 'text', text: 'First line' }, { type: 'hardBreak' }, { type: 'text', text: 'second line' },
+      ] },
+      { type: 'paragraph', content: [{ type: 'text', text: 'Last' }] },
+    ]);
+  });
+
+  it('multiline: CRLF, trailing blank lines and smartcards', () => {
+    const adf = buildCommentAdf([
+      { type: 'text', text: 'One\r\ntwo\n\n' },
+      { type: 'smartcard', text: '', href: 'https://example.test/x' },
+      { type: 'text', text: '\n\nAfter' },
+    ], { multiline: true });
+    expect(adf.content).toEqual([
+      { type: 'paragraph', content: [{ type: 'text', text: 'One' }, { type: 'hardBreak' }, { type: 'text', text: 'two' }] },
+      { type: 'blockCard', attrs: { url: 'https://example.test/x' } },
+      { type: 'paragraph', content: [{ type: 'text', text: 'After' }] },
+    ]);
+  });
+
+  it('multiline round trip reads back whitespace-equivalent to the draft text', () => {
+    const plain = segmentsToPlain(segs);
+    const back = adfCommentToPlain(buildCommentAdf(segs, { multiline: true }));
+    const norm = (s: string) => s.split(/\s+/).join(' ').trim();
+    expect(norm(back)).toBe(norm(plain));
+  });
+
+  it('postComment passes multiline through and defaults it off', async () => {
+    const fn = mockFetch({ ok: true, body: {} });
+    await postComment('TEST-1', [{ type: 'text', text: 'a\n\nb' }]);
+    await postComment('TEST-1', [{ type: 'text', text: 'a\n\nb' }], { multiline: true });
+    const bodies = fn.mock.calls.filter((c) => String(c[0]).endsWith('/comment'))
+      .map((c) => JSON.parse(String((c as unknown as [string, RequestInit])[1].body)).body.content.length);
+    expect(bodies).toEqual([1, 2]);
+  });
+});
