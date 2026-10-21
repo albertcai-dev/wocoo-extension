@@ -12,6 +12,7 @@
 import { useEffect, useState } from 'react';
 import type { WocooTicket } from '../data/mockTicket';
 import { postComment, transitionTicket } from '../api/jira';
+import { markWorkflowHandled } from '../data/outcomeCapture';
 import { fetchAtlasClientEmailHeadless } from '../data/atlasAccountLookup';
 import { isInterestRelatedWorkType, isInterestFeeInContent } from '../data/reverseFeeDetect';
 
@@ -114,6 +115,8 @@ export function ReverseFeeWorkflow({ ticket, onClose, onTicketUpdate }: { ticket
       if (!commentPosted) {
         const segments = buildCommentSegments(ticket, commentText);
         await postComment(ticket.id, segments);
+        // This reply is the workflow's, not one based on an agent draft: no draft outcome row.
+        void markWorkflowHandled(ticket.id);
         setCommentPosted(true);
       }
       await transitionTicket(ticket.id, TRANSITION_TO_DONE_ID);

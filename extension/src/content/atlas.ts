@@ -1,6 +1,43 @@
 export {}; // Treat as module → file-scoped declarations, no collision with other content scripts.
 
 import { CARD_ISSUANCE_STAGED_KEY, resolveCardIssuanceStage } from '../data/cardIssuanceStage';
+import {
+  AGENT_ATLAS_CIM_MSG, AGENT_ATLAS_LOOKUP_MSG, AGENT_ATLAS_RESULT_ATTR, parseAtlasRequest,
+} from '../data/agentSiteChains';
+import { fetchAtlasAccountIdViaGraphql, fetchAtlasClientEmailViaGraphql } from '../data/atlasGraphql';
+
+function isAgentAtlasTab(): boolean {
+  try { return sessionStorage.getItem('wocoo-agent') === '1'; } catch { return false; }
+}
+
+function publishAtlas(result: Record<string, unknown>): void {
+  document.documentElement.setAttribute(AGENT_ATLAS_RESULT_ATTR, JSON.stringify({ ...result, at: Date.now() }));
+}
+
+// The draft agent's Atlas lookup: Sidekick's own GraphQL calls (the Fetch Account Number,
+// Email, Client Status button), run from the agent's Atlas tab with the user's Atlas cookie.
+window.addEventListener('message', (ev: MessageEvent) => {
+  if (ev.source !== window || !isAgentAtlasTab()) return;
+  const req = parseAtlasRequest(ev.data, AGENT_ATLAS_LOOKUP_MSG);
+  if (!req) return;
+  if ('error' in req) { publishAtlas({ state: 'stopped', reason: req.error }); return; }
+  publishAtlas({ state: 'running', step: 'lookup' });
+  const identityId = req.identityId;
+  void Promise.allSettled([
+    fetchAtlasClientEmailViaGraphql({ identityId }),
+    fetchAtlasAccountIdViaGraphql({ identityId }),
+  ]).then(([email, account]) => {
+    publishAtlas({
+      state: 'done',
+      step: 'lookup',
+      email: email.status === 'fulfilled' ? email.value : null,
+      email_error: email.status === 'rejected' ? String(email.reason) : undefined,
+      account_number: account.status === 'fulfilled' ? account.value.accountNumber : null,
+      client_status: account.status === 'fulfilled' ? account.value.individualTierStatus : null,
+      account_error: account.status === 'rejected' ? String(account.reason) : undefined,
+    });
+  });
+});
 
 // Atlas auto-Submit content script.
 //
@@ -684,6 +721,7 @@ import { CARD_ISSUANCE_STAGED_KEY, resolveCardIssuanceStage } from '../data/card
   let filled = false;
   let searched = false;
   let identity: string | null = null;
+  let forAgent = false;
 
   async function tick() {
     if (searched) return;
@@ -713,16 +751,40 @@ import { CARD_ISSUANCE_STAGED_KEY, resolveCardIssuanceStage } from '../data/card
     searched = true;
     search.click();
     log('clicked Search');
+    if (forAgent) {
+      // Results render in place; give them a moment, then hand the agent the tool's text.
+      setTimeout(() => publishAtlas({ state: 'done', step: 'card-issuance', text: (card.innerText || '').slice(0, 6000) }), 3_000);
+      return;
+    }
     try { await chrome.storage.local.remove(CARD_ISSUANCE_STAGED_KEY); } catch { /* fine */ }
   }
 
-  const deadline = Date.now() + 20_000;
-  const interval = window.setInterval(() => {
-    if (Date.now() > deadline || searched) {
-      window.clearInterval(interval);
-      return;
-    }
+  function run() {
+    const deadline = Date.now() + 20_000;
+    const interval = window.setInterval(() => {
+      if (Date.now() > deadline || searched) {
+        window.clearInterval(interval);
+        if (!searched && forAgent) publishAtlas({ state: 'stopped', step: 'card-issuance', reason: 'Card Issuance Management Tool never became searchable' });
+        return;
+      }
+      void tick();
+    }, 400);
     void tick();
-  }, 400);
-  void tick();
+  }
+  run();
+
+  // The draft agent's trigger: same fill + Search, with the identity from its message instead
+  // of a stage in chrome.storage (which any Atlas tab could pick up).
+  window.addEventListener('message', (ev: MessageEvent) => {
+    if (ev.source !== window || !isAgentAtlasTab()) return;
+    const req = parseAtlasRequest(ev.data, AGENT_ATLAS_CIM_MSG);
+    if (!req) return;
+    if ('error' in req) { publishAtlas({ state: 'stopped', step: 'card-issuance', reason: req.error }); return; }
+    identity = req.identityId;
+    filled = false;
+    searched = false;
+    forAgent = true;
+    publishAtlas({ state: 'running', step: 'card-issuance' });
+    run();
+  });
 })();

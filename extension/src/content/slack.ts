@@ -5,7 +5,17 @@
 // Queue-driven, mirrors the Ledge pattern: side panel writes a job to
 // chrome.storage.local; this script picks it up, runs the DOM chain, writes the result.
 
-export {}; // module scope
+import {
+  AGENT_COMPASS_RESULT_ATTR,
+  COMPASS_MENTION,
+  MENTION_PILL_SELECTOR,
+  doneKey,
+  isCompassPillLabel,
+  parseAgentCompassRequest,
+  type AgentCompassRequest,
+  type AgentCompassResult,
+} from '../data/agentCompassPost';
+import { AGENT_TAB_KEY } from '../data/i2cActivity';
 
 const PENDING_KEY  = 'pending_slack_post';
 const RESULT_KEY   = 'slack_post_result';
@@ -302,6 +312,110 @@ async function clickSend(): Promise<boolean> {
   btn.click();
   return true;
 }
+
+// ----- agent Compass questions -----
+
+/** Empties the composer (only ever called on text this handler typed into an empty box). */
+function clearComposer(composer: HTMLElement): void {
+  composer.focus();
+  const sel = window.getSelection();
+  if (!sel) return;
+  const range = document.createRange();
+  range.selectNodeContents(composer);
+  sel.removeAllRanges();
+  sel.addRange(range);
+  document.execCommand('delete');
+}
+
+/** True once Slack has cleared the composer, which it does when a message is sent. */
+async function composerCleared(composer: HTMLElement): Promise<boolean> {
+  const cleared = await waitFor(() => ((composer.innerText || '').trim() === '' ? true : null), 5_000, 150);
+  return cleared === true;
+}
+
+/** True when the composer holds a real Compass mention: Slack renders a pill as a
+ *  <ts-mention data-label="@compass">, unlike typed text. */
+function hasCompassPill(composer: HTMLElement): boolean {
+  return Array.from(composer.querySelectorAll<HTMLElement>(MENTION_PILL_SELECTOR))
+    .some((el) => isCompassPillLabel(el.getAttribute('data-label')) || isCompassPillLabel(el.textContent));
+}
+
+/** Types and sends the agent's Compass question into the channel open in THIS tab. Runs only
+ *  in the agent's own tab (it sets AGENT_TAB_KEY), at most once per job id per tab: the job is
+ *  recorded before anything is typed, so a crash mid-send can never lead to a second post. */
+async function postAgentCompass(req: AgentCompassRequest): Promise<AgentCompassResult> {
+  let isAgentTab = false;
+  try { isAgentTab = sessionStorage.getItem(AGENT_TAB_KEY) === '1'; } catch { /* storage blocked */ }
+  if (!isAgentTab) return { jobId: req.jobId, ok: false, reason: 'not the agent tab' };
+  const key = doneKey(req.jobId);
+  const earlier = sessionStorage.getItem(key);
+  if (earlier) {
+    try {
+      return { ...(JSON.parse(earlier) as AgentCompassResult), duplicate: true };
+    } catch {
+      return { jobId: req.jobId, ok: false, duplicate: true, reason: 'already attempted' };
+    }
+  }
+  sessionStorage.setItem(key, JSON.stringify({ jobId: req.jobId, ok: false, reason: 'attempt interrupted' }));
+  let result: AgentCompassResult;
+  try {
+    const composer = await findComposer();
+    if (!composer) {
+      result = { jobId: req.jobId, ok: false, reason: 'Composer not found' };
+    } else if ((composer.innerText || '').trim() !== '') {
+      // Never send someone's half-written message along with the question.
+      result = { jobId: req.jobId, ok: false, reason: 'Composer is not empty' };
+    } else {
+      composer.focus();
+      await typeMessage(composer, {
+        jobId: req.jobId, channelName: '', mode: 'channel', text: req.text, mentions: [COMPASS_MENTION],
+      });
+      await delay(400);
+      if (!hasCompassPill(composer)) {
+        // No pill means Compass would get plain text and its shortcuts would not run. Don't send,
+        // and take back what we typed so it doesn't linger as a Slack draft.
+        clearComposer(composer);
+        result = { jobId: req.jobId, ok: false, reason: 'Compass mention did not become a pill; not sent' };
+      } else if (!(await clickSend())) {
+        clearComposer(composer);
+        result = { jobId: req.jobId, ok: false, reason: 'Send button not found / disabled' };
+      } else if (!(await composerCleared(composer))) {
+        result = { jobId: req.jobId, ok: false, reason: 'Send not confirmed (composer did not clear)' };
+      } else {
+        result = { jobId: req.jobId, ok: true };
+      }
+    }
+  } catch (e: any) {
+    result = { jobId: req.jobId, ok: false, reason: e?.message || String(e) };
+  }
+  sessionStorage.setItem(key, JSON.stringify(result));
+  return result;
+}
+
+function publishAgentResult(result: AgentCompassResult) {
+  log('agent compass result', result);
+  document.documentElement.setAttribute(AGENT_COMPASS_RESULT_ATTR, JSON.stringify(result));
+}
+
+let agentPostBusy = false;
+window.addEventListener('message', (ev: MessageEvent) => {
+  if (ev.source !== window) return;
+  const req = parseAgentCompassRequest(ev.data);
+  if (!req) return;
+  if ('error' in req) {
+    publishAgentResult({ jobId: String((ev.data as { jobId?: unknown }).jobId ?? ''), ok: false, reason: req.error });
+    return;
+  }
+  if (agentPostBusy) {
+    publishAgentResult({ jobId: req.jobId, ok: false, duplicate: true, reason: 'another agent post is in progress' });
+    return;
+  }
+  agentPostBusy = true;
+  document.documentElement.removeAttribute(AGENT_COMPASS_RESULT_ATTR);
+  void postAgentCompass(req)
+    .then(publishAgentResult)
+    .finally(() => { agentPostBusy = false; });
+});
 
 // ----- job loop -----
 

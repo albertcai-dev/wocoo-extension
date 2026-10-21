@@ -25,6 +25,9 @@ import { ReverseFeeCard } from './ReverseFeeCard';
 import type { MoveDestination } from '../data/moveConfig';
 import { CredRouteCard } from './CredRouteCard';
 import { AITriageCard } from './AITriageCard';
+import { SolveWithAgentButton } from './SolveWithAgentButton';
+import { AgentDraftCard } from './AgentDraftCard';
+import type { MovePrefill } from '../data/movePrefill';
 import { OverpaymentTriage } from './OverpaymentTriage';
 import { ReverseFeeWorkflow } from './ReverseFeeWorkflow';
 import { CustomCcStatementWorkflow } from './CustomCcStatementWorkflow';
@@ -52,6 +55,7 @@ import { NotePrompt } from './NotePrompt';
 import type { TicketTransitionKind } from '../data/ticketLogTypes';
 import { clearPresetIdentityMirror, mirrorPresetIdentity, stagePresetIdentity } from '../data/presetIdentity';
 import { stageCardIssuanceSearch } from '../data/cardIssuanceStage';
+import { captureJiraOutcomeLive } from '../data/outcomeCaptureLive';
 
 // Bridge: DOM-observer transition detections come in as chrome.runtime messages from
 // the service worker. Feed them into the local event bus so a single subscribe path
@@ -117,6 +121,16 @@ export function SidePanel() {
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [authState, ticketKey]);
+
+  // A ticket closed in Jira's own UI after a reply made there (not through the draft card): record
+  // how that reply compared to the agent draft. Subscribed here, not in TicketView, so it fires
+  // whichever view the panel is showing. Moves are not outcomes; the draft card owns its own posts.
+  useEffect(() => {
+    return subscribeToTicketTransitions((evt) => {
+      if (evt.kind !== 'Done' && evt.kind !== 'Cancelled') return;
+      void captureJiraOutcomeLive(evt.ticketId, evt.kind);
+    });
+  }, []);
 
   // Mirror the open ticket's identity for the Preset content script. A Preset page the
   // user opens by hand (rather than through a workflow button) has no staged identity of
@@ -286,13 +300,27 @@ function TicketView({ ticket, onTicketUpdate, onGoHome, onOpenSettings }: { tick
 function TicketViewInner({ ticket, onTicketUpdate, onStartTriage, onStartReverseFee, onStartCustomCcStatement, onStartWalletTriage, onStartVisaCompanionRpin, onStartRefundAuthLetter, onGoHome, onOpenSettings }: { ticket: WocooTicket; onTicketUpdate: (t: WocooTicket) => void; onStartTriage: () => void; onStartReverseFee: () => void; onStartCustomCcStatement: () => void; onStartWalletTriage: () => void; onStartVisaCompanionRpin: () => void; onStartRefundAuthLetter: () => void; onGoHome: () => void; onOpenSettings: () => void }) {
   const [showFullDescription, setShowFullDescription] = useState(false);
   const [showComments, setShowComments] = useState(false);
+  // Bumped when "Solve using Sidekick Agent" finishes, so the draft card reloads.
+  const [draftRefresh, setDraftRefresh] = useState(0);
   // Lifted from QuickActions so other surfaces (e.g. CredRouteCard recommendation banner)
   // can open the Clone/Move modal with a specific destination preselected.
   const [moveOpen, setMoveOpen] = useState(false);
   const [createReimbActive, setCreateReimbActive] = useState(false);
   const [moveInitialDest, setMoveInitialDest] = useState<MoveDestination>('EOC');
+  // Set only when the Move modal was opened from the draft agent's move suggestion.
+  const [movePrefill, setMovePrefill] = useState<MovePrefill | undefined>(undefined);
+  // Bumped per open so a second suggestion click remounts the modal and re-seeds it.
+  const [moveOpenCount, setMoveOpenCount] = useState(0);
   const openCloneMove = (initialDestKey: MoveDestination = 'EOC') => {
     setMoveInitialDest(initialDestKey);
+    setMovePrefill(undefined);
+    setMoveOpenCount((n) => n + 1);
+    setMoveOpen(true);
+  };
+  const openPrefilledMove = (prefill: MovePrefill) => {
+    setMoveInitialDest(prefill.destination);
+    setMovePrefill(prefill);
+    setMoveOpenCount((n) => n + 1);
     setMoveOpen(true);
   };
 
@@ -545,8 +573,10 @@ function TicketViewInner({ ticket, onTicketUpdate, onStartTriage, onStartReverse
       />
       {moveOpen ? (
         <MoveModal
+          key={moveOpenCount}
           ticket={ticket}
           initialDestKey={moveInitialDest}
+          prefill={movePrefill}
           onClose={() => { setMoveOpen(false); void onTicketUpdate; }}
         />
       ) : null}
@@ -557,8 +587,20 @@ function TicketViewInner({ ticket, onTicketUpdate, onStartTriage, onStartReverse
         />
       ) : null}
 
+      {/* AGENT DRAFT — reply written by the local draft agent; post + mark status in one click */}
+      <AgentDraftCard
+        key={`${ticket.id}:${draftRefresh}`}
+        ticket={ticket}
+        onTicketUpdate={onTicketUpdate}
+        onOpenWorkflow={(w) => { if (w === 'overpayment') onStartTriage(); else onStartReverseFee(); }}
+        onOpenMove={openPrefilledMove}
+      />
+
       {/* AI VERDICT — grounded in the ticket log + Notion playbook */}
       <AITriageCard ticket={ticket} onOpenSettings={onOpenSettings} />
+
+      {/* SOLVE — have the local Sidekick Agent draft this ticket now */}
+      <SolveWithAgentButton ticket={ticket} onSolved={() => setDraftRefresh((n) => n + 1)} />
 
       {/* RECENT COMMENTS (collapsed) */}
       {ticket.recentComments.length > 0 ? (

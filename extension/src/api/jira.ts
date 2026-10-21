@@ -524,6 +524,28 @@ export async function searchJiraUsers(query: string): Promise<JiraUserSearchResu
   }));
 }
 
+/** People on a ticket (reporter, assignee, creator, commenters) with their accountIds. Unlike
+ *  user search, this needs only the issue-read scope, so it is how draft mentions resolve. */
+export async function getIssuePeople(ticketKey: string): Promise<JiraUserSearchResult[]> {
+  const key = encodeURIComponent(ticketKey);
+  const [issueResp, commentsResp] = await Promise.all([
+    jiraFetch(`/rest/api/3/issue/${key}?fields=reporter,assignee,creator`),
+    jiraFetch(`/rest/api/3/issue/${key}/comment?maxResults=100&orderBy=-created`),
+  ]);
+  if (!issueResp.ok) throw new Error(`getIssuePeople failed (HTTP ${issueResp.status})`);
+  const issue = await issueResp.json();
+  const comments = commentsResp.ok ? ((await commentsResp.json()).comments || []) : [];
+  const people = [issue.fields?.reporter, issue.fields?.assignee, issue.fields?.creator,
+    ...comments.map((c: any) => c.author)];
+  const byId = new Map<string, JiraUserSearchResult>();
+  for (const u of people) {
+    if (u?.accountId && u.displayName && !byId.has(u.accountId)) {
+      byId.set(u.accountId, { accountId: u.accountId, displayName: u.displayName, emailAddress: u.emailAddress, avatarUrl: u.avatarUrls?.['24x24'] });
+    }
+  }
+  return [...byId.values()];
+}
+
 // ============ Comment posting (with @mention support) ============
 // Used by Overpayment Triage step 6 to post a structured comment on the WOCOO ticket
 // after the REIMB is created. Builds ADF (Atlassian Document Format) so @mentions render
@@ -539,22 +561,34 @@ export interface CommentSegment {
 }
 
 /**
- * Post a comment to a Jira issue, with optional @mention, link, and smartcard segments.
- *
- * Inline segments (text / mention / link) are grouped into a single paragraph.
- * A `smartcard` segment is emitted as its own `blockCard` ADF block — Jira auto-fetches
- * the URL's metadata and renders it as a rich unfurled card (title, favicon, description)
- * instead of a plain hyperlink. Prefer this for cross-system links (i2c JSM, Confluence,
- * etc.) where the smart card gives more context than the raw URL.
+ * The ADF document postComment sends. By default every inline segment goes into one paragraph,
+ * text verbatim (existing callers rely on this). With `multiline` (the agent draft card), text
+ * splits into paragraphs at blank lines and single newlines become hardBreaks.
  */
-export async function postComment(ticketKey: string, segments: CommentSegment[]): Promise<void> {
+export function buildCommentAdf(
+  segments: CommentSegment[],
+  opts: { multiline?: boolean } = {},
+): { type: 'doc'; version: 1; content: unknown[] } {
   const blocks: unknown[] = [];
   let currentParagraph: unknown[] = [];
+  const isBreak = (n: unknown) => (n as { type?: string }).type === 'hardBreak';
   const flushParagraph = () => {
+    // Only multiline text creates hardBreaks; one at a paragraph's edge would be a stray blank line.
+    while (currentParagraph.length && isBreak(currentParagraph[0])) currentParagraph.shift();
+    while (currentParagraph.length && isBreak(currentParagraph[currentParagraph.length - 1])) currentParagraph.pop();
     if (currentParagraph.length > 0) {
       blocks.push({ type: 'paragraph', content: currentParagraph });
       currentParagraph = [];
     }
+  };
+  const pushMultilineText = (text: string) => {
+    text.replace(/\r\n?/g, '\n').split(/\n{2,}/).forEach((para, i) => {
+      if (i > 0) flushParagraph();
+      para.split('\n').forEach((line, j) => {
+        if (j > 0) currentParagraph.push({ type: 'hardBreak' });
+        if (line) currentParagraph.push({ type: 'text', text: line });
+      });
+    });
   };
   for (const s of segments) {
     if (s.type === 'smartcard' && s.href) {
@@ -564,16 +598,32 @@ export async function postComment(ticketKey: string, segments: CommentSegment[])
       currentParagraph.push({ type: 'mention', attrs: { id: s.accountId, text: s.text } });
     } else if (s.type === 'link' && s.href) {
       currentParagraph.push({ type: 'text', text: s.text, marks: [{ type: 'link', attrs: { href: s.href } }] });
+    } else if (opts.multiline) {
+      pushMultilineText(s.text);
     } else {
       currentParagraph.push({ type: 'text', text: s.text });
     }
   }
   flushParagraph();
   if (blocks.length === 0) blocks.push({ type: 'paragraph', content: [] });
+  return { type: 'doc', version: 1, content: blocks };
+}
 
-  const payload = {
-    body: { type: 'doc', version: 1, content: blocks },
-  };
+/**
+ * Post a comment to a Jira issue, with optional @mention, link, and smartcard segments.
+ *
+ * Inline segments (text / mention / link) are grouped into a single paragraph.
+ * A `smartcard` segment is emitted as its own `blockCard` ADF block — Jira auto-fetches
+ * the URL's metadata and renders it as a rich unfurled card (title, favicon, description)
+ * instead of a plain hyperlink. Prefer this for cross-system links (i2c JSM, Confluence,
+ * etc.) where the smart card gives more context than the raw URL.
+ */
+export async function postComment(
+  ticketKey: string,
+  segments: CommentSegment[],
+  opts: { multiline?: boolean } = {},
+): Promise<void> {
+  const payload = { body: buildCommentAdf(segments, opts) };
   const resp = await jiraFetch(`/rest/api/3/issue/${encodeURIComponent(ticketKey)}/comment`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -621,7 +671,11 @@ export function adfField(value: string): MoveField {
  * are ever wired through this function that are NOT terminal (e.g. re-open), the
  * caller must pass `skipLog` — the overpayment FRAUD path's move to Back Office does.
  */
-export async function transitionTicket(ticketKey: string, transitionId: string, opts: { skipLog?: boolean } = {}): Promise<void> {
+export async function transitionTicket(
+  ticketKey: string,
+  transitionId: string,
+  opts: { skipLog?: boolean; logKind?: 'Done' | 'Cancelled' } = {},
+): Promise<void> {
   const token = await getValidAccessToken();
   const cloudId = await getCloudId();
   const url = `https://api.atlassian.com/ex/jira/${cloudId}/rest/api/3/issue/${encodeURIComponent(ticketKey)}/transitions`;
@@ -649,7 +703,8 @@ export async function transitionTicket(ticketKey: string, transitionId: string, 
   if (ticketKey.startsWith('WOCOO-') && !opts.skipLog) {
     try {
       const { emitTicketTransition } = await import('../sidepanel/ticketLogEvents');
-      const kind = transitionId === '251' ? 'Done' : 'Cancelled';
+      // `logKind` is set only by transitionTicketByName, which knows the destination status.
+      const kind = opts.logKind ?? (transitionId === '251' ? 'Done' : 'Cancelled');
       emitTicketTransition({ ticketId: ticketKey, kind, source: 'sidepanel' });
     } catch (e) {
       console.debug('[jira.transitionTicket] event emit failed (non-fatal):', e);
@@ -706,7 +761,16 @@ export async function transitionTicketByName(ticketKey: string, transitionName: 
     const available = transitions.map((t) => `"${t.name}"→${t.to?.name || '?'}`).join(', ');
     throw new Error(`Transition "${transitionName}" not available for ${ticketKey}. Available: ${available || '(none)'}`);
   }
-  await transitionTicket(ticketKey, found.id);
+  await transitionTicket(ticketKey, found.id, ticketLogOptsForStatus(found.to?.name));
+}
+
+/** Ticket Log kind for a destination status name: "Done" logs Done, a "Cancel…" status logs
+ *  Cancelled, anything else (Back Office, Pending, …) is not a resolution and is not logged. */
+function ticketLogOptsForStatus(statusName: string | undefined): { skipLog?: boolean; logKind?: 'Done' | 'Cancelled' } {
+  const name = (statusName || '').trim().toLowerCase();
+  if (name === 'done') return { logKind: 'Done' };
+  if (name.startsWith('cancel')) return { logKind: 'Cancelled' };
+  return { skipLog: true };
 }
 
 // ============ Clone + issue-link helpers (used by Clone/Move flow) ============
@@ -1122,6 +1186,87 @@ export async function getIssueComments(ticketKey: string): Promise<string[]> {
   return comments.map((c) => adfToPlainText(c.body));
 }
 
+export interface JiraCommentDetail {
+  id: string;
+  authorAccountId: string;
+  created: string;
+  text: string;
+}
+
+/**
+ * Plain text of a comment body, for comparing a reply with the agent draft it may be based on.
+ * Unlike extractDescription it keeps mentions ("@Name") and inline/block card URLs, so the text
+ * reads like segmentsToPlain of the draft. Paragraph-level blocks are joined with "\n".
+ */
+export function adfCommentToPlain(body: unknown): string {
+  if (typeof body === 'string') return body;
+  if (!body || typeof body !== 'object') return '';
+  const lines: string[] = [];
+  let line = '';
+  const flush = () => { if (line !== '') lines.push(line); line = ''; };
+  const LINE_BLOCKS = new Set(['paragraph', 'heading', 'codeBlock']);
+  const walk = (node: any): void => {
+    if (!node || typeof node !== 'object') return;
+    if (Array.isArray(node)) { node.forEach(walk); return; }
+    switch (node.type) {
+      case 'text': line += typeof node.text === 'string' ? node.text : ''; return;
+      case 'hardBreak': line += '\n'; return;
+      case 'mention': {
+        const t = String(node.attrs?.text ?? '');
+        if (t) line += t.startsWith('@') ? t : '@' + t;
+        return;
+      }
+      case 'inlineCard': line += String(node.attrs?.url ?? ''); return;
+      case 'blockCard':
+      case 'embedCard':
+        flush();
+        if (node.attrs?.url) lines.push(String(node.attrs.url));
+        return;
+    }
+    if (LINE_BLOCKS.has(node.type)) { flush(); walk(node.content); flush(); return; }
+    walk(node.content);
+  };
+  walk(body);
+  flush();
+  return lines.join('\n').trim();
+}
+
+/**
+ * Fetch comments with id, author accountId, created timestamp and plain text, oldest first.
+ * Capped at 100 per call (oldest 100, or newest 100 with `newest`).
+ * Used to tell whether a human replied after an agent draft was posted.
+ */
+export async function getIssueCommentsDetailed(
+  ticketKey: string,
+  opts: { newest?: boolean } = {},
+): Promise<JiraCommentDetail[]> {
+  // One response is capped at 100. `newest` asks for the newest 100 instead of the oldest 100;
+  // the result is still returned oldest first.
+  const resp = await jiraFetch(
+    `/rest/api/3/issue/${encodeURIComponent(ticketKey)}/comment?maxResults=100&orderBy=${opts.newest ? '-created' : 'created'}`,
+  );
+  if (!resp.ok) {
+    const txt = await resp.text();
+    throw new Error(`getIssueCommentsDetailed failed (HTTP ${resp.status}): ${txt}`);
+  }
+  const data = await resp.json();
+  const raw = (data.comments || []) as Array<{
+    id: string; author?: { accountId?: string }; created?: string; body?: unknown;
+  }>;
+  const rows = raw.map((c) => ({
+    id: String(c.id),
+    authorAccountId: c.author?.accountId || '',
+    created: c.created || '',
+    text: adfCommentToPlain(c.body),
+  }));
+  // Jira returns oldest first by default; sort defensively on the parsed timestamp.
+  const ts = (s: string) => { const t = Date.parse(s.replace(/([+-]\d\d)(\d\d)$/, '$1:$2')); return Number.isNaN(t) ? 0 : t; };
+  return rows
+    .map((r, i) => ({ r, i }))
+    .sort((a, b) => ts(a.r.created) - ts(b.r.created) || a.i - b.i)
+    .map((x) => x.r);
+}
+
 /**
  * Fetch issue status name + all comments in a single round trip. Used by the
  * Wires Pending Posting flow where we want to mark a row posted if the BOSM
@@ -1285,6 +1430,7 @@ function mapJiraIssue(key: string, data: any): WocooTicket {
     summary: f.summary || '',
     description,
     status,
+    ...(f.status?.name ? { jiraStatus: { name: String(f.status.name), bucket: status } } : {}),
     priority: ['Highest', 'High', 'Medium', 'Low', 'Lowest'].includes(priorityName) ? priorityName : 'Medium',
     workType: f.issuetype?.name || 'Other',
     category: f.issuetype?.name || 'Other',

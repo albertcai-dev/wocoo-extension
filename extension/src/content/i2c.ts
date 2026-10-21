@@ -5,8 +5,14 @@
 // retry a few times anyway in case the form is replaced after first paint.
 
 import { gridFromRows, pageSaysNoRecord, readColumnForLast4, readLabelValue, readProgramForLast4 } from '../data/i2cCardDetailsParse';
-import { locateProductColumns, pickCreditProduct, type ProductRow } from '../data/i2cProductSelect';
+import { locateProductColumns, pickCreditProduct, pickProduct, type ProductRow } from '../data/i2cProductSelect';
+import {
+  AGENT_I2C_CHAIN_KEY, AGENT_I2C_MAX_LOGINS, AGENT_I2C_RESULT_ATTR, AGENT_I2C_RESULT_KEY, isSessionErrorPage,
+  parseAgentI2cRequest, readChain, type AgentI2cChain, type AgentI2cResult,
+} from '../data/i2cAgentChain';
+import { I2C_LOGIN_URL } from '../data/i2cCardLookup';
 import { isSignInLabel } from '../data/i2cLogin';
+import { AGENT_TAB_KEY, shouldReport } from '../data/i2cActivity';
 
 export {}; // Module-scoped so helpers don't collide with other content scripts at the TS layer.
 
@@ -1633,4 +1639,252 @@ async function bootstrap() {
   }
 }
 
+// Tell the local draft agent when the user is actively using i2c, so it holds off its own
+// lookups (it shares his login). Checked at event time: the agent sets its tab flag after
+// each navigation, so it may not exist yet at load. Throttled; failures are silent.
+function watchUserActivity() {
+  let lastSentMs = 0;
+  const onActivity = (e: Event) => {
+    let isAgentTab = false;
+    try { isAgentTab = sessionStorage.getItem(AGENT_TAB_KEY) === '1'; } catch { /* storage blocked */ }
+    const now = Date.now();
+    if (!shouldReport(e, isAgentTab, lastSentMs, now)) return;
+    lastSentMs = now;
+    try {
+      chrome.runtime
+        .sendMessage({ type: 'wocoo:i2c-activity', ts: Math.floor(now / 1000) })
+        .catch((err) => console.debug('[wocoo-i2c] activity report failed', err));
+    } catch (err) {
+      console.debug('[wocoo-i2c] activity report failed', err); // e.g. extension context invalidated
+    }
+  };
+  document.addEventListener('keydown', onActivity, { capture: true, passive: true });
+  document.addEventListener('mousedown', onActivity, { capture: true, passive: true });
+  document.addEventListener('wheel', onActivity, { capture: true, passive: true });
+}
+
+// ----- The draft agent's own "open this client" chain ---------------------------------
+// Same steps and DOM hooks as the i2c button's chain above, but started by a window message
+// from the agent's tab and carried in that tab's sessionStorage, so it never runs in the
+// user's own i2c tabs. Each step publishes a JSON result on <html> for the agent to poll.
+
+function isAgentTab(): boolean {
+  try { return sessionStorage.getItem(AGENT_TAB_KEY) === '1'; } catch { return false; }
+}
+
+function publishAgentI2c(result: Omit<AgentI2cResult, 'at'>): void {
+  const full: AgentI2cResult = { ...result, at: Date.now() };
+  try { sessionStorage.setItem(AGENT_I2C_RESULT_KEY, JSON.stringify(full)); } catch { /* fine */ }
+  document.documentElement.setAttribute(AGENT_I2C_RESULT_ATTR, JSON.stringify(full));
+}
+
+function saveChain(chain: AgentI2cChain | null): void {
+  try {
+    if (chain) sessionStorage.setItem(AGENT_I2C_CHAIN_KEY, JSON.stringify(chain));
+    else sessionStorage.removeItem(AGENT_I2C_CHAIN_KEY);
+  } catch { /* fine */ }
+}
+
+function stopAgentChain(reason: string, extra: Partial<AgentI2cResult> = {}): void {
+  saveChain(null);
+  publishAgentI2c({ state: 'stopped', reason, ...extra });
+}
+
+/** The Product Search Result rows with the cells the agent reports, header-matched. */
+function readProductRowsWithCells(): Array<{ el: HTMLTableRowElement; row: ProductRow; program: string; card: string }> | null {
+  for (const table of Array.from(document.querySelectorAll('table'))) {
+    if (table.querySelector('table')) continue;
+    const rowEls = Array.from(table.querySelectorAll('tr'));
+    const cells = rowEls.map((tr) => Array.from(tr.querySelectorAll<HTMLTableCellElement>('th, td')).map((c) => (c.textContent || '').replace(/\s+/g, ' ').trim()));
+    const cols = locateProductColumns(cells);
+    if (!cols) continue;
+    const header = cells[cols.headerAt];
+    const programAt = header.findIndex((c) => /^Program$/i.test(c));
+    const cardAt = header.findIndex((c) => /^Account\/?\s*Card Number$/i.test(c));
+    const out = rowEls
+      .map((el, i) => ({ el, i }))
+      .filter(({ i }) => i > cols.headerAt && cells[i].length > Math.max(cols.categoryAt, cols.statusAt))
+      .map(({ el, i }) => ({
+        el,
+        row: { category: cells[i][cols.categoryAt] || '', status: cells[i][cols.statusAt] || '' },
+        program: programAt >= 0 ? cells[i][programAt] || '' : '',
+        card: cardAt >= 0 ? cells[i][cardAt] || '' : '',
+      }));
+    if (out.length) return out;
+  }
+  return null;
+}
+
+let agentStepRunning = false;
+let agentLoginSeenAt = 0;      // this page load: when the login form first showed
+let agentLoginCounted = false; // this page load: counted toward chain.logins
+let agentSignInClicked = false;
+
+/** Clicks a sidebar link by its exact text (collapsed groups keep their links in the DOM). */
+function clickSidebarLink(text: string): boolean {
+  const want = text.toLowerCase();
+  const link = Array.from(document.querySelectorAll<HTMLElement>('a, span, div, li'))
+    .find((el) => el.children.length === 0 && (el.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase() === want);
+  const target = link?.closest<HTMLElement>('a') ?? link;
+  if (!target) return false;
+  target.click();
+  return true;
+}
+
+/** One pass of the chain on the current page. Returns true when it acted or finished. */
+async function agentChainStep(): Promise<boolean> {
+  if (agentStepRunning || !isAgentTab()) return false;
+  const chain = readChain(sessionStorage.getItem(AGENT_I2C_CHAIN_KEY), Date.now());
+  if (!chain) return false;
+  agentStepRunning = true;
+  try {
+    const body = document.body?.textContent || '';
+
+    // Logged out: the i2c button's way in. Sidekick's autofill (tryAutofill) fills the saved
+    // credentials on every login page; click Sign in here if auto-submit is off. Kill All on
+    // Manage Sessions is tryKillSession's job. Capped so a broken login can't loop.
+    const fields = findFields();
+    if (fields) {
+      if (!agentLoginCounted) {
+        agentLoginCounted = true;
+        agentLoginSeenAt = Date.now();
+        const logins = (chain.logins ?? 0) + 1;
+        if (logins > AGENT_I2C_MAX_LOGINS) { stopAgentChain(`i2c login did not stick after ${AGENT_I2C_MAX_LOGINS} tries`); return true; }
+        saveChain({ ...chain, logins, step: 'search' });
+        publishAgentI2c({ state: 'running', step: 'search', reason: 'logging in' });
+      }
+      const creds = await loadCreds();
+      if (!creds) { stopAgentChain('no saved i2c credentials in Sidekick Settings'); return true; }
+      if (creds.autoSubmit) return false; // tryAutofill submits; never a second submit
+      const filled = !!fields.username.value && !!fields.password.value;
+      if (filled && !agentSignInClicked && Date.now() - agentLoginSeenAt > 1_500) {
+        const btn = findSubmit(fields.password.form);
+        if (btn) { agentSignInClicked = true; btn.click(); return true; }
+      }
+      return false;
+    }
+    if (isSessionErrorPage(body)) {
+      const logins = (chain.logins ?? 0) + 1;
+      if (logins > AGENT_I2C_MAX_LOGINS) { stopAgentChain(`i2c keeps showing a session error after ${AGENT_I2C_MAX_LOGINS} logins`); return true; }
+      saveChain({ ...chain, logins: logins - 1, step: 'search' }); // the login form counts it
+      publishAgentI2c({ state: 'running', step: 'search', reason: 'session error; going to the login page' });
+      location.assign(I2C_LOGIN_URL);
+      return true;
+    }
+    if (/Manage Sessions/i.test(body)) return false; // tryKillSession clicks Kill All
+
+    if (chain.step === 'after-search' && findEmailInput()) {
+      if (/No record(s)? found/i.test(body)) { stopAgentChain('Customer Search: no customer for that email'); return true; }
+    }
+
+    if (chain.step === 'search') {
+      const input = findEmailInput();
+      if (!input) return false;
+      setValue(input, chain.email);
+      const btn = findSectionSearchButton(input);
+      if (!btn) { stopAgentChain('Customer Search: no Search button next to Email Address'); return true; }
+      saveChain({ ...chain, step: 'after-search' });
+      publishAgentI2c({ state: 'running', step: 'after-search' });
+      setTimeout(() => btn.click(), 100);
+      return true;
+    }
+
+    if (/Displays all applicable cardholder products/i.test(body)) {
+      const rows = readProductRowsWithCells();
+      if (!rows) return false;
+      const pick = pickProduct(rows.map((r) => r.row), chain.product, { allowSoleInactive: true });
+      const products = rows.map((r) => ({ program: r.program, category: r.row.category, status: r.row.status, card: r.card }));
+      if (pick === null) {
+        stopAgentChain(`Product Search Result: no single active ${chain.product === 'credit' ? 'credit' : 'retail prepaid (Debit)'} product; choose by hand`, { products });
+        return true;
+      }
+      const link = Array.from(rows[pick].el.querySelectorAll<HTMLElement>('a, button, input[type="button"]'))
+        .find((el) => /^Select\s+Customer$/i.test(((el as HTMLInputElement).value || el.textContent || '').replace(/\s+/g, ' ').trim()) && isVisible(el));
+      if (!link) { stopAgentChain('Product Search Result: no Select Customer link on the chosen row', { products }); return true; }
+      saveChain({ ...chain, step: 'continue' });
+      publishAgentI2c({ state: 'running', step: 'continue', products });
+      setTimeout(() => link.click(), PRODUCT_SELECT_CLICK_DELAY_MS);
+      return true;
+    }
+
+    const cont = Array.from(document.querySelectorAll<HTMLElement>('input[type="submit"], input[type="button"], button'))
+      .find((b) => /^Continue\s+with\s+this\s+Customer$/i.test(((b as HTMLInputElement).value || b.textContent || '').trim()) && isVisible(b));
+    if (cont && chain.step !== 'done') {
+      if (findAccountSelectInputs().length > 1 && !findAccountSelectInputs().some((i) => i.checked)) {
+        stopAgentChain('several accounts on the customer page; tick the right Select box and click Continue with this Customer');
+        return true;
+      }
+      if (!(await ensureAccountSelected())) return false;
+      saveChain({ ...chain, step: 'done' });
+      publishAgentI2c({ state: 'running', step: 'done' });
+      setTimeout(() => cont.click(), CONTINUE_CLICK_DELAY_MS);
+      return true;
+    }
+
+    const postCustomer = !cont && /Account Management|Card Management|Customer Management|Account Summary/i.test(body);
+    if (chain.step === 'page' && postCustomer) {
+      saveChain(null);
+      publishAgentI2c({ state: 'done', step: 'page', reason: chain.page });
+      return true;
+    }
+    if ((chain.step === 'done' || chain.step === 'continue') && postCustomer) {
+      // Past the customer flow: post-customer pages group the sidebar into Customer / Account /
+      // Card Management (pre-customer pages keep a flat list), so wait for that, not just for
+      // the Continue button to be gone (it may simply not have rendered yet).
+      if (chain.page) {
+        if (clickSidebarLink(chain.page)) {
+          saveChain({ ...chain, step: 'page' });
+          publishAgentI2c({ state: 'running', step: 'page', reason: chain.page });
+          // A full page load finishes the chain on arrival; a link that swaps content in place
+          // never reloads, so finish here if this document is still up a few seconds later.
+          setTimeout(() => {
+            const still = readChain(sessionStorage.getItem(AGENT_I2C_CHAIN_KEY), Date.now());
+            if (still?.step === 'page') { saveChain(null); publishAgentI2c({ state: 'done', step: 'page', reason: chain.page }); }
+          }, 5_000);
+          return true;
+        }
+        saveChain(null);
+        publishAgentI2c({ state: 'done', step: 'done', reason: `on the customer, but no "${chain.page}" link found; open it from the sidebar` });
+        return true;
+      }
+      saveChain(null);
+      publishAgentI2c({ state: 'done', step: 'done' });
+      return true;
+    }
+    return false;
+  } finally {
+    agentStepRunning = false;
+  }
+}
+
+/** Retries a step while a page renders (i2c is server-rendered, but alerts and panels lag). */
+async function runAgentChain(): Promise<void> {
+  const end = Date.now() + 10_000;
+  while (Date.now() < end) {
+    if (await agentChainStep()) return;
+    await sleep(300);
+  }
+}
+
+window.addEventListener('message', (ev: MessageEvent) => {
+  if (ev.source !== window) return;
+  const req = parseAgentI2cRequest(ev.data);
+  if (!req) return;
+  if (!isAgentTab()) return;
+  if ('error' in req) { publishAgentI2c({ state: 'stopped', reason: req.error }); return; }
+  saveChain({ email: req.email, product: req.product, page: req.page, startedAt: Date.now(), step: 'search', logins: 0 });
+  publishAgentI2c({ state: 'running', step: 'search' });
+  void runAgentChain();
+});
+
+// On every page load in the agent's tab: re-publish the last result, continue a chain.
+if (isAgentTab()) {
+  try {
+    const last = sessionStorage.getItem(AGENT_I2C_RESULT_KEY);
+    if (last) document.documentElement.setAttribute(AGENT_I2C_RESULT_ATTR, last);
+  } catch { /* fine */ }
+  void runAgentChain();
+}
+
+watchUserActivity();
 bootstrap();

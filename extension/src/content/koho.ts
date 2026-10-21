@@ -8,6 +8,11 @@ export {}; // Module-scoped so helpers don't collide with other content scripts.
 
 console.log('[wocoo-koho] content script loaded on', location.href);
 
+import {
+  AGENT_KOHO_CHAIN_KEY, AGENT_KOHO_RESULT_ATTR, AGENT_KOHO_RESULT_KEY, KOHO_TRANSACTIONS_PAGE, kohoUserId,
+  parseKohoRequest, readKohoChain, type KohoChain, type SiteResult,
+} from '../data/agentSiteChains';
+
 const PENDING_KEY = 'pending_koho_email';
 
 function log(msg: string, ...args: unknown[]) {
@@ -88,15 +93,8 @@ function findNearbySearchButton(input: HTMLElement): HTMLElement | null {
   return null;
 }
 
-let searchRan = false;
-async function tryEmailSearch(): Promise<boolean> {
-  if (searchRan) return true;
-  const res = await chrome.storage.local.get(PENDING_KEY);
-  const email = res[PENDING_KEY];
-  if (!email || typeof email !== 'string') return false;
-  const input = findSearchInput();
-  if (!input) return false;
-
+/** Fills the global search with an email and submits it every way KOHO's React form accepts. */
+async function submitSearch(input: HTMLInputElement, email: string): Promise<void> {
   input.focus();
   await sleep(50);
   setValue(input, email);
@@ -130,7 +128,17 @@ async function tryEmailSearch(): Promise<boolean> {
     log('  → clicking search button:', btn.tagName, btn.getAttribute('aria-label'));
     fireFullClick(btn);
   }
+}
 
+let searchRan = false;
+async function tryEmailSearch(): Promise<boolean> {
+  if (searchRan) return true;
+  const res = await chrome.storage.local.get(PENDING_KEY);
+  const email = res[PENDING_KEY];
+  if (!email || typeof email !== 'string') return false;
+  const input = findSearchInput();
+  if (!input) return false;
+  await submitSearch(input, email);
   searchRan = true;
   try { await chrome.storage.local.remove(PENDING_KEY); } catch { /* fine */ }
   return true;
@@ -144,6 +152,151 @@ async function bootstrap() {
     if (searchRan) break;
     await sleep(500);
   }
+}
+
+// ----- The draft agent's "open this user" chain ----------------------------------------
+// Started by a window message from the agent's own tab: SSO sign-in if KOHO asks for it, the
+// search above, the user, then CST Transactions (Galileo). Carried in that tab's
+// sessionStorage (the SSO round trip reloads the page); progress is published on <html>.
+
+function isAgentTab(): boolean {
+  try { return sessionStorage.getItem('wocoo-agent') === '1'; } catch { return false; }
+}
+
+function publishKoho(result: Omit<SiteResult, 'at'>): void {
+  const full = { ...result, at: Date.now() };
+  try { sessionStorage.setItem(AGENT_KOHO_RESULT_KEY, JSON.stringify(full)); } catch { /* fine */ }
+  document.documentElement.setAttribute(AGENT_KOHO_RESULT_ATTR, JSON.stringify(full));
+}
+
+function saveKohoChain(chain: KohoChain | null): void {
+  try {
+    if (chain) sessionStorage.setItem(AGENT_KOHO_CHAIN_KEY, JSON.stringify({ ...chain }));
+    else sessionStorage.removeItem(AGENT_KOHO_CHAIN_KEY);
+  } catch { /* fine */ }
+}
+
+function setStep(chain: KohoChain, step: KohoChain['step'], extra: Partial<KohoChain> = {}): KohoChain {
+  const next = { ...chain, ...extra, step, stepAt: Date.now() };
+  saveKohoChain(next);
+  publishKoho({ state: 'running', step });
+  return next;
+}
+
+function stopKoho(reason: string): void {
+  saveKohoChain(null);
+  publishKoho({ state: 'stopped', reason });
+}
+
+/** A clickable element whose own text is exactly `text` (KOHO's sidebar uses role=button divs). */
+function findByExactText(text: string): HTMLElement | null {
+  const want = text.toLowerCase();
+  const hits = Array.from(document.querySelectorAll<HTMLElement>('[role="button"], a, button, li, div, span'))
+    .filter((el) => (el.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase() === want);
+  // The innermost match, preferring something clickable.
+  const clickable = hits.find((el) => el.getAttribute('role') === 'button' || el.tagName === 'A' || el.tagName === 'BUTTON');
+  return clickable ?? hits[hits.length - 1] ?? null;
+}
+
+function ssoButton(): HTMLElement | null {
+  return Array.from(document.querySelectorAll<HTMLElement>('button, [role="button"], a'))
+    .find((b) => /continue with sso/i.test((b.textContent || '').trim()) && isVisible(b)) ?? null;
+}
+
+let kohoStepRunning = false;
+async function kohoChainStep(): Promise<'acted' | 'waiting' | 'finished'> {
+  if (kohoStepRunning || !isAgentTab()) return 'finished';
+  let chain = readKohoChain(sessionStorage.getItem(AGENT_KOHO_CHAIN_KEY), Date.now());
+  if (!chain) return 'finished';
+  kohoStepRunning = true;
+  try {
+    const since = Date.now() - (chain.stepAt ?? chain.startedAt);
+
+    // Signed out: KOHO's sign-in screen (email + "Continue with SSO"). A live Okta session
+    // brings the tab straight back; Okta asking for a password is the user's to do.
+    const sso = ssoButton();
+    if (sso) {
+      if (!chain.ssoEmail) { stopKoho('KOHO wants SSO sign-in and no ssoEmail was given'); return 'finished'; }
+      const tries = (chain.ssoTries ?? 0) + 1;
+      if (tries > 2) { stopKoho('KOHO SSO sign-in did not stick (Okta may need a password)'); return 'finished'; }
+      const emailInput = Array.from(document.querySelectorAll<HTMLInputElement>('input'))
+        .find((i) => isVisible(i) && (i.type === 'email' || /email/i.test(i.name + i.placeholder + (i.getAttribute('aria-label') || ''))));
+      if (emailInput) setValue(emailInput, chain.ssoEmail);
+      chain = setStep(chain, 'search', { ssoTries: tries });
+      await sleep(300);
+      fireFullClick(sso);
+      return 'acted';
+    }
+
+    if (chain.step === 'search' || chain.step === 'sso') {
+      const input = findSearchInput();
+      if (!input || !/accountid|search users|email/i.test(input.placeholder || '')) {
+        if (since > 30_000) { stopKoho('KOHO search bar never appeared'); return 'finished'; }
+        return 'waiting';
+      }
+      chain = setStep(chain, 'after-search');
+      await submitSearch(input, chain.email);
+      return 'acted';
+    }
+
+    if (chain.step === 'after-search') {
+      if (kohoUserId(location.pathname)) { chain = setStep(chain, 'page'); return 'acted'; }
+      if (since > 12_000) { stopKoho('the search did not open a single user; pick the right one from the results'); return 'finished'; }
+      return 'waiting';
+    }
+
+    if (chain.step === 'page') {
+      const link = findByExactText(KOHO_TRANSACTIONS_PAGE);
+      if (link && isVisible(link)) {
+        fireFullClick(link);
+        await sleep(2_500);
+        saveKohoChain(null);
+        publishKoho({ state: 'done', step: 'page', reason: KOHO_TRANSACTIONS_PAGE, userId: kohoUserId(location.pathname) });
+        return 'finished';
+      }
+      // The link sits in the collapsed "Transactions" group: open it, then look again.
+      const group = findByExactText('Transactions');
+      if (group && since < 15_000) { fireFullClick(group); await sleep(600); return 'acted'; }
+      if (since > 15_000) {
+        saveKohoChain(null);
+        publishKoho({ state: 'done', step: 'user', reason: `on the user, but no "${KOHO_TRANSACTIONS_PAGE}" link found; open it from the sidebar`, userId: kohoUserId(location.pathname) });
+        return 'finished';
+      }
+      return 'waiting';
+    }
+    return 'finished';
+  } finally {
+    kohoStepRunning = false;
+  }
+}
+
+/** KOHO is an SPA: the chain moves through its steps without page loads, so keep stepping. */
+async function runKohoChain(): Promise<void> {
+  const end = Date.now() + 60_000;
+  while (Date.now() < end) {
+    const r = await kohoChainStep();
+    if (r === 'finished') return;
+    await sleep(r === 'acted' ? 1_200 : 500);
+  }
+}
+
+window.addEventListener('message', (ev: MessageEvent) => {
+  if (ev.source !== window || !isAgentTab()) return;
+  const req = parseKohoRequest(ev.data);
+  if (!req) return;
+  if ('error' in req) { publishKoho({ state: 'stopped', reason: req.error }); return; }
+  const now = Date.now();
+  saveKohoChain({ email: req.email, ssoEmail: req.ssoEmail, startedAt: now, step: 'search', stepAt: now, ssoTries: 0 });
+  publishKoho({ state: 'running', step: 'search' });
+  void runKohoChain();
+});
+
+if (isAgentTab()) {
+  try {
+    const last = sessionStorage.getItem(AGENT_KOHO_RESULT_KEY);
+    if (last) document.documentElement.setAttribute(AGENT_KOHO_RESULT_ATTR, last);
+  } catch { /* fine */ }
+  void runKohoChain();
 }
 
 bootstrap();
