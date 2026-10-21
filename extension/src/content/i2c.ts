@@ -1861,12 +1861,30 @@ async function agentChainStep(): Promise<boolean> {
   }
 }
 
-/** Retries a step while a page renders (i2c is server-rendered, but alerts and panels lag). */
+// Retries a step while a page renders (i2c is server-rendered, but alerts and panels lag).
+// Customer Search's fields can render seconds after load, and a request can arrive while the
+// page is still settling, so keep watching (up to 60 s) until a step acts. A 10 s window left
+// the chain parked on 'search' with the email box still empty (2026-10-20). One runner at a
+// time per page; a new request or page load starts it again.
+let agentRunnerActive = false;
 async function runAgentChain(): Promise<void> {
-  const end = Date.now() + 10_000;
-  while (Date.now() < end) {
-    if (await agentChainStep()) return;
-    await sleep(300);
+  if (agentRunnerActive) return;
+  agentRunnerActive = true;
+  const end = Date.now() + 60_000;
+  let wake: (() => void) | null = null;
+  const obs = new MutationObserver(() => { wake?.(); });
+  if (document.body) obs.observe(document.body, { childList: true, subtree: true });
+  try {
+    while (Date.now() < end) {
+      if (!readChain(sessionStorage.getItem(AGENT_I2C_CHAIN_KEY), Date.now())) return; // finished or stopped
+      if (await agentChainStep()) return;
+      // Re-check on the next DOM change, or after 500 ms, whichever comes first.
+      await new Promise<void>((r) => { wake = r; setTimeout(r, 500); });
+      wake = null;
+    }
+  } finally {
+    obs.disconnect();
+    agentRunnerActive = false;
   }
 }
 
