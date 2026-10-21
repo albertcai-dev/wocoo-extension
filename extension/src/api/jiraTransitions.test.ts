@@ -60,6 +60,58 @@ describe('transitionTicketByName ticket-log kind', () => {
   });
 });
 
+describe('transitionTicketByName via Back Office', () => {
+  const TRIAGE: T[] = [
+    { id: '31', name: 'Done', to: { name: 'Done' } },
+    { id: '51', name: 'Request reviewed', to: { name: 'Back Office' } },
+    { id: '41', name: 'Cancel request', to: { name: 'Cancelled/ No Action' } },
+  ];
+  const BACK_OFFICE: T[] = [
+    { id: '71', name: 'Pending External', to: { name: 'Pending External' } },
+    { id: '31', name: 'Done', to: { name: 'Done' } },
+  ];
+
+  function mockSequence(lists: T[][]) {
+    let n = 0;
+    const fn = vi.fn(async (url: string, init?: RequestInit) => {
+      if (String(url).includes('accessible-resources')) {
+        return new Response(JSON.stringify([{ id: 'cloud-1', url: 'https://wealthsimple.atlassian.net' }]), { status: 200 });
+      }
+      if (String(url).endsWith('/transitions') && (!init || !init.method || init.method === 'GET')) {
+        return new Response(JSON.stringify({ transitions: lists[Math.min(n++, lists.length - 1)] }), { status: 200 });
+      }
+      return new Response(null, { status: 204 });
+    });
+    vi.stubGlobal('fetch', fn);
+    return fn;
+  }
+
+  it('hops through Back Office when the target is not reachable from Triage', async () => {
+    const fn = mockSequence([TRIAGE, BACK_OFFICE]);
+    await transitionTicketByName('WOCOO-1', 'Pending External');
+    expect(posted(fn)).toEqual(['51', '71']);
+    expect(emitTicketTransition).not.toHaveBeenCalled();
+  });
+
+  it('goes straight there when the target is reachable', async () => {
+    const fn = mockSequence([TRIAGE]);
+    await transitionTicketByName('WOCOO-1', 'Done');
+    expect(posted(fn)).toEqual(['31']);
+  });
+
+  it('says it reached Back Office when the target is still missing there', async () => {
+    const fn = mockSequence([TRIAGE, [{ id: '31', name: 'Done', to: { name: 'Done' } }]]);
+    await expect(transitionTicketByName('WOCOO-1', 'Pending External')).rejects.toThrow(/Moved WOCOO-1 to Back Office/);
+    expect(posted(fn)).toEqual(['51']);
+  });
+
+  it('fails without moving when neither the target nor Back Office is offered', async () => {
+    const fn = mockSequence([[{ id: '31', name: 'Done', to: { name: 'Done' } }]]);
+    await expect(transitionTicketByName('WOCOO-1', 'Pending External')).rejects.toThrow(/not available/);
+    expect(posted(fn)).toEqual([]);
+  });
+});
+
 describe('transitionTicket (other callers unchanged)', () => {
   it('still maps 251 to Done and anything else to Cancelled', async () => {
     mockFetch([]);

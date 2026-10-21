@@ -739,27 +739,49 @@ export async function transitionTicketThroughPath(ticketKey: string, ...path: st
 /** Transition a ticket by matching the transition's name (case-insensitive) or the
  *  destination status name. Useful when we don't have the transition ID hardcoded —
  *  IDs vary across Jira instances and can be renumbered, but names are stable. */
+/** Status a ticket must pass through when the target isn't reachable directly: tickets in
+ *  Triage [New Tickets] only offer Back Office, so Pending External etc. need that hop first. */
+export const VIA_STATUS = 'Back Office';
+
 export async function transitionTicketByName(ticketKey: string, transitionName: string): Promise<void> {
   const cloudId = await getCloudId();
   const token = await getValidAccessToken();
   const url = `https://api.atlassian.com/ex/jira/${cloudId}/rest/api/3/issue/${encodeURIComponent(ticketKey)}/transitions`;
-  const listResp = await fetch(url, {
-    headers: { Authorization: 'Bearer ' + token, Accept: 'application/json' },
-  });
-  if (!listResp.ok) {
-    const txt = await listResp.text();
-    throw new Error(`Failed to list transitions for ${ticketKey} (HTTP ${listResp.status}): ${txt}`);
-  }
-  const data = await listResp.json().catch(() => ({} as any));
-  const transitions: Array<{ id: string; name?: string; to?: { name?: string } }> = Array.isArray((data as any).transitions) ? (data as any).transitions : [];
-  const needle = transitionName.toLowerCase();
-  const found = transitions.find((t) =>
-    (t.name || '').toLowerCase() === needle
-    || (t.to?.name || '').toLowerCase() === needle,
-  );
+  type Transition = { id: string; name?: string; to?: { name?: string } };
+  const list = async (): Promise<Transition[]> => {
+    const listResp = await fetch(url, {
+      headers: { Authorization: 'Bearer ' + token, Accept: 'application/json' },
+    });
+    if (!listResp.ok) {
+      const txt = await listResp.text();
+      throw new Error(`Failed to list transitions for ${ticketKey} (HTTP ${listResp.status}): ${txt}`);
+    }
+    const data = await listResp.json().catch(() => ({} as any));
+    return Array.isArray((data as any).transitions) ? (data as any).transitions : [];
+  };
+  const find = (transitions: Transition[], name: string) => {
+    const needle = name.toLowerCase();
+    return transitions.find((t) =>
+      (t.name || '').toLowerCase() === needle
+      || (t.to?.name || '').toLowerCase() === needle,
+    );
+  };
+  const describe = (transitions: Transition[]) =>
+    transitions.map((t) => `"${t.name}"→${t.to?.name || '?'}`).join(', ') || '(none)';
+
+  let transitions = await list();
+  let found = find(transitions, transitionName);
   if (!found) {
-    const available = transitions.map((t) => `"${t.name}"→${t.to?.name || '?'}`).join(', ');
-    throw new Error(`Transition "${transitionName}" not available for ${ticketKey}. Available: ${available || '(none)'}`);
+    const via = transitionName.toLowerCase() === VIA_STATUS.toLowerCase() ? undefined : find(transitions, VIA_STATUS);
+    if (!via) {
+      throw new Error(`Transition "${transitionName}" not available for ${ticketKey}. Available: ${describe(transitions)}`);
+    }
+    await transitionTicket(ticketKey, via.id, ticketLogOptsForStatus(via.to?.name));
+    transitions = await list();
+    found = find(transitions, transitionName);
+    if (!found) {
+      throw new Error(`Moved ${ticketKey} to ${VIA_STATUS}, but "${transitionName}" is still not available from there. Available: ${describe(transitions)}`);
+    }
   }
   await transitionTicket(ticketKey, found.id, ticketLogOptsForStatus(found.to?.name));
 }
