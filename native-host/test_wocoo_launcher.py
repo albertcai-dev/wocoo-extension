@@ -33,6 +33,8 @@ elif args[0] == 'outcome':
     print(json.dumps({"ok": True, "echo": json.loads(sys.stdin.read())}))
 elif args[0] == 'i2c-activity':
     print(json.dumps({"ok": True, "ts": float(args[2])}))
+elif args[0] in ('solve', 'item'):
+    print(json.dumps({"ok": True, "key": args[2], "state": "queued", "solo": args[0] == 'solve'}))
 elif args[0] == 'agent-mode':
     mode = args[2] if len(args) > 2 and args[1] == '--set' else 'running'
     print(json.dumps({"ok": True, "mode": mode, "since": 1700000000.5 if len(args) > 2 else None}))
@@ -99,6 +101,16 @@ class DraftActions(unittest.TestCase):
         for message in ({'action': 'agent_mode_set', 'mode': 'sleeping'}, {'action': 'agent_mode_set'}):
             self.assertEqual(call(message, self.root),
                              {'ok': False, 'error': 'agent_mode_set needs mode running or paused'})
+
+    def test_agent_solve_and_item(self):
+        self.assertEqual(call({'action': 'agent_solve', 'key': 'PROJ-12'}, self.root),
+                         {'ok': True, 'key': 'PROJ-12', 'state': 'queued', 'solo': True})
+        self.assertEqual(call({'action': 'agent_item', 'key': 'PROJ-12'}, self.root)['state'], 'queued')
+
+    def test_agent_solve_rejects_a_bad_key(self):
+        for key in (None, 'proj-1', 'PROJ 1; rm -rf /'):
+            self.assertEqual(call({'action': 'agent_solve', 'key': key}, self.root),
+                             {'ok': False, 'error': 'agent_solve needs a ticket key'})
 
     def test_agent_mode_cli_failure_returns_error(self):
         with open(os.path.join(self.root, 'src', 'store_cli.py'), 'w') as f:

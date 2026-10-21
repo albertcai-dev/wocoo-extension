@@ -25,6 +25,7 @@ import { ReverseFeeCard } from './ReverseFeeCard';
 import type { MoveDestination } from '../data/moveConfig';
 import { CredRouteCard } from './CredRouteCard';
 import { AITriageCard } from './AITriageCard';
+import { SolveWithAgentButton } from './SolveWithAgentButton';
 import { AgentDraftCard } from './AgentDraftCard';
 import type { MovePrefill } from '../data/movePrefill';
 import { OverpaymentTriage } from './OverpaymentTriage';
@@ -299,6 +300,8 @@ function TicketView({ ticket, onTicketUpdate, onGoHome, onOpenSettings }: { tick
 function TicketViewInner({ ticket, onTicketUpdate, onStartTriage, onStartReverseFee, onStartCustomCcStatement, onStartWalletTriage, onStartVisaCompanionRpin, onStartRefundAuthLetter, onGoHome, onOpenSettings }: { ticket: WocooTicket; onTicketUpdate: (t: WocooTicket) => void; onStartTriage: () => void; onStartReverseFee: () => void; onStartCustomCcStatement: () => void; onStartWalletTriage: () => void; onStartVisaCompanionRpin: () => void; onStartRefundAuthLetter: () => void; onGoHome: () => void; onOpenSettings: () => void }) {
   const [showFullDescription, setShowFullDescription] = useState(false);
   const [showComments, setShowComments] = useState(false);
+  // Bumped when "Solve using Sidekick Agent" finishes, so the draft card reloads.
+  const [draftRefresh, setDraftRefresh] = useState(0);
   // Lifted from QuickActions so other surfaces (e.g. CredRouteCard recommendation banner)
   // can open the Clone/Move modal with a specific destination preselected.
   const [moveOpen, setMoveOpen] = useState(false);
@@ -586,6 +589,7 @@ function TicketViewInner({ ticket, onTicketUpdate, onStartTriage, onStartReverse
 
       {/* AGENT DRAFT — reply written by the local draft agent; post + mark status in one click */}
       <AgentDraftCard
+        key={`${ticket.id}:${draftRefresh}`}
         ticket={ticket}
         onTicketUpdate={onTicketUpdate}
         onOpenWorkflow={(w) => { if (w === 'overpayment') onStartTriage(); else onStartReverseFee(); }}
@@ -594,6 +598,9 @@ function TicketViewInner({ ticket, onTicketUpdate, onStartTriage, onStartReverse
 
       {/* AI VERDICT — grounded in the ticket log + Notion playbook */}
       <AITriageCard ticket={ticket} onOpenSettings={onOpenSettings} />
+
+      {/* SOLVE — have the local Sidekick Agent draft this ticket now */}
+      <SolveWithAgentButton ticket={ticket} onSolved={() => setDraftRefresh((n) => n + 1)} />
 
       {/* RECENT COMMENTS (collapsed) */}
       {ticket.recentComments.length > 0 ? (

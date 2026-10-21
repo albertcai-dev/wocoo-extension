@@ -9,10 +9,8 @@ import { clearI2cCredentials, getI2cCredentials, setI2cCredentials,
 import { pingLlmGateway } from '../api/llmGateway';
 import { getAgentMode, isDraftStoreNotSetUp, setAgentMode } from '../api/draftStore';
 import { agentModeHelper, agentModeSince, type AgentModeState } from '../data/agentMode';
-import { checkSiteLogin, focusTab } from '../api/loginCheck';
+import { checkAgentLogins } from '../api/loginCheck';
 import { loginSummary, type LoginSite, type LoginStatus } from '../data/loginCheck';
-
-const AGENT_LOGIN_SITES: LoginSite[] = ['atlas', 'koho'];
 
 export function SettingsView({ onBack, onSignOut }: { onBack: () => void; onSignOut: () => void }) {
   return (
@@ -297,19 +295,7 @@ function DraftAgentSection() {
   // Switching the agent on: make sure the Okta-backed sites it reads are signed in. Signed-in
   // probe tabs close by themselves; any that need the user stay open, the first one in front.
   async function checkLogins() {
-    setLogins(Object.fromEntries(AGENT_LOGIN_SITES.map((s) => [s, 'checking'])));
-    const results = await Promise.all(AGENT_LOGIN_SITES.map(async (site) => {
-      try {
-        const r = await checkSiteLogin(site);
-        setLogins((prev) => ({ ...prev, [site]: r.status }));
-        return r;
-      } catch {
-        setLogins((prev) => ({ ...prev, [site]: 'error' }));
-        return null;
-      }
-    }));
-    const needsUser = results.find((r) => r && r.status !== 'in' && r.tabId != null);
-    if (needsUser?.tabId != null) await focusTab(needsUser.tabId);
+    await checkAgentLogins((site, status) => setLogins((prev) => ({ ...prev, [site]: status })));
   }
 
   useEffect(() => {

@@ -77,3 +77,24 @@ export async function focusTab(tabId: number): Promise<void> {
     if (tab?.windowId != null) await chrome.windows.update(tab.windowId, { focused: true });
   } catch { /* tab gone */ }
 }
+
+/** The sites the Sidekick Agent reads behind Okta. */
+export const AGENT_LOGIN_SITES: LoginSite[] = ['atlas', 'koho'];
+
+/** Checks every agent site at once; `onUpdate` gets each site's status as it lands. Tabs that
+ *  need the user stay open, the first of them brought to the front. */
+export async function checkAgentLogins(onUpdate: (site: LoginSite, status: LoginStatus | 'checking' | 'error') => void): Promise<void> {
+  AGENT_LOGIN_SITES.forEach((s) => onUpdate(s, 'checking'));
+  const results = await Promise.all(AGENT_LOGIN_SITES.map(async (site) => {
+    try {
+      const r = await checkSiteLogin(site);
+      onUpdate(site, r.status);
+      return r;
+    } catch {
+      onUpdate(site, 'error');
+      return null;
+    }
+  }));
+  const needsUser = results.find((r) => r && r.status !== 'in' && r.tabId != null);
+  if (needsUser?.tabId != null) await focusTab(needsUser.tabId);
+}

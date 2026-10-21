@@ -24,7 +24,7 @@ const NOT_SET_UP = [
   /native messaging host not found/i,
   /^host not found/i,
   /^Not found: .*store_cli\.py$/i,
-  /^Unknown action: '?(draft_|i2c_activity|agent_mode_)/i,
+  /^Unknown action: '?(draft_|i2c_activity|agent_mode_|agent_solve|agent_item)/i,
 ];
 
 /** True when the draft store failed only because it isn't set up here, so the UI should render
@@ -95,4 +95,25 @@ export async function getAgentMode(): Promise<AgentModeState> {
 /** Runs or pauses the agent. A paused agent does no drafting and never touches the user's i2c session. */
 export async function setAgentMode(mode: AgentMode): Promise<AgentModeState> {
   return normaliseAgentMode(await call({ action: 'agent_mode_set', mode }));
+}
+
+/** Where a ticket stands with the agent (for the Solve button). */
+export interface AgentItemState {
+  state: string | null;
+  /** The agent is running for this ticket only (a Solve press switched it on). */
+  solo: boolean;
+  /** Pressed Solve and not finished yet. */
+  priority: boolean;
+}
+
+/** "Solve using Sidekick Agent": draft this ticket now. `solo` = the agent was paused and now
+ *  runs for this ticket only, pausing itself when it is solved. */
+export async function solveTicket(key: string): Promise<{ state: string | null; solo: boolean }> {
+  const reply = await call({ action: 'agent_solve', key }) as HostReply & { state?: unknown; solo?: unknown };
+  return { state: typeof reply.state === 'string' ? reply.state : null, solo: reply.solo === true };
+}
+
+export async function getAgentItem(key: string): Promise<AgentItemState> {
+  const reply = await call({ action: 'agent_item', key }) as HostReply & { state?: unknown; solo?: unknown; priority?: unknown };
+  return { state: typeof reply.state === 'string' ? reply.state : null, solo: reply.solo === true, priority: reply.priority === true };
 }

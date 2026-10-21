@@ -16,6 +16,9 @@ Actions:
   {"action": "i2c_activity", "ts": T}   -> {"ok": true}
   {"action": "agent_mode_get"}          -> {"ok": true, "mode": "running"|"paused", "since": N|null}
   {"action": "agent_mode_set", "mode": M}  (M is "running" or "paused") -> same reply as agent_mode_get
+  {"action": "agent_solve", "key": K}   -> {"ok": true, "key": K, "state": S, "solo": bool}
+        draft this ticket now; a paused agent runs for this ticket only, then pauses itself
+  {"action": "agent_item", "key": K}    -> {"ok": true, "key": K, "state": S|null, "solo": bool, "priority": bool}
         The draft_* / i2c_activity / agent_mode_* actions shell out to the local draft agent's store CLI:
         `python3 $WDA_ROOT/src/store_cli.py ...` (WDA_ROOT defaults to ~/projects/wocoo-draft-agent).
 
@@ -24,6 +27,7 @@ Installed by install.sh, which registers the host manifest with Chrome.
 
 import json
 import os
+import re
 import struct
 import subprocess
 import sys
@@ -121,6 +125,14 @@ def draft_action(action, message):
             return {'ok': False, 'error': err}
         data = data if isinstance(data, dict) else {}
         return {'ok': True, 'mode': data.get('mode'), 'since': data.get('since')}
+    if action in ('agent_solve', 'agent_item'):
+        key = message.get('key')
+        if not isinstance(key, str) or not TICKET_KEY.match(key):
+            return {'ok': False, 'error': f'{action} needs a ticket key'}
+        data, err = run_store(['solve' if action == 'agent_solve' else 'item', '--key', key])
+        if err:
+            return {'ok': False, 'error': err}
+        return data if isinstance(data, dict) else {'ok': False, 'error': 'bad store reply'}
     ts = message.get('ts')
     if isinstance(ts, bool) or not isinstance(ts, (int, float)):
         return {'ok': False, 'error': 'i2c_activity needs a numeric ts'}
@@ -129,8 +141,9 @@ def draft_action(action, message):
 
 
 AGENT_MODES = ('running', 'paused')
+TICKET_KEY = re.compile(r'^[A-Z][A-Z0-9]+-\d+$')
 DRAFT_ACTIONS = ('draft_get', 'draft_list', 'draft_outcome', 'i2c_activity',
-                 'agent_mode_get', 'agent_mode_set')
+                 'agent_mode_get', 'agent_mode_set', 'agent_solve', 'agent_item')
 
 
 def main():
