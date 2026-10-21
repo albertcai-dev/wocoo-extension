@@ -32,7 +32,15 @@ export function isCompassPillLabel(label: string | null | undefined): boolean {
 export interface AgentCompassRequest {
   jobId: string;
   text: string;
+  /** Reply in this thread (a follow-up such as "@compass go") instead of a new channel message. */
+  threadTs?: string;
 }
+
+/** Slack message ts, e.g. "1792567274.609639". */
+const THREAD_TS = /^\d{10}\.\d{6}$/;
+
+/** Where a thread reply is typed: the thread pane's own message box, never the channel's. */
+export const THREAD_PANE_SELECTOR = '[data-qa="threads_flexpane"], [data-qa="thread_view"], .p-threads_flexpane, .p-flexpane, [aria-label*="Thread" i][role="complementary"]';
 
 export interface AgentCompassResult {
   jobId: string;
@@ -59,7 +67,9 @@ export function parseAgentCompassRequest(data: unknown): AgentCompassRequest | {
   if (!text.startsWith('@' + COMPASS_MENTION + ' ')) return { error: 'text must start with "@compass "' };
   if (text.trim().length <= COMPASS_MENTION.length + 1) return { error: 'empty question' };
   if (text.length > MAX_TEXT_LENGTH) return { error: `text longer than ${MAX_TEXT_LENGTH} characters` };
-  return { jobId, text };
+  if (d.threadTs === undefined) return { jobId, text };
+  if (typeof d.threadTs !== 'string' || !THREAD_TS.test(d.threadTs)) return { error: 'bad threadTs' };
+  return { jobId, text, threadTs: d.threadTs };
 }
 
 /** sessionStorage key for a job. */

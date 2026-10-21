@@ -69,3 +69,17 @@ describe('isCompassPillLabel', () => {
     expect(isCompassPillLabel(null)).toBe(false);
   });
 });
+
+describe('thread replies', () => {
+  it('accepts a thread ts for a follow-up in that thread', () => {
+    expect(parseAgentCompassRequest(msg({ jobId: 'PROJ-123:f1', text: '@compass go', threadTs: '1792567274.609639' })))
+      .toEqual({ jobId: 'PROJ-123:f1', text: '@compass go', threadTs: '1792567274.609639' });
+  });
+  it('rejects a malformed thread ts', () => {
+    expect(parseAgentCompassRequest(msg({ threadTs: '12345' }))).toEqual({ error: 'bad threadTs' });
+    expect(parseAgentCompassRequest(msg({ threadTs: 5 }))).toEqual({ error: 'bad threadTs' });
+  });
+  it('still only talks to Compass in a thread', () => {
+    expect(parseAgentCompassRequest(msg({ text: 'go', threadTs: '1792567274.609639' }))).toHaveProperty('error');
+  });
+});

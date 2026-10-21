@@ -9,6 +9,7 @@ import {
   AGENT_COMPASS_RESULT_ATTR,
   COMPASS_MENTION,
   MENTION_PILL_SELECTOR,
+  THREAD_PANE_SELECTOR,
   doneKey,
   isCompassPillLabel,
   parseAgentCompassRequest,
@@ -141,6 +142,18 @@ async function navigateViaQuickSwitcher(name: string): Promise<boolean> {
 // ----- composer driving -----
 
 /** Find Slack's message composer (a contenteditable div). */
+/** The message box inside the open thread pane, or null if no thread pane is showing. */
+async function findThreadComposer(): Promise<HTMLElement | null> {
+  return await waitFor(() => {
+    for (const pane of Array.from(document.querySelectorAll<HTMLElement>(THREAD_PANE_SELECTOR))) {
+      if (!isVisible(pane)) continue;
+      const box = pane.querySelector<HTMLElement>('div[role="textbox"][contenteditable="true"], div.ql-editor[contenteditable="true"]');
+      if (box && box.isContentEditable && isVisible(box)) return box;
+    }
+    return null;
+  }, 10_000);
+}
+
 async function findComposer(): Promise<HTMLElement | null> {
   return await waitFor(() => {
     const candidates = [
@@ -295,6 +308,22 @@ async function typeMessage(composer: HTMLElement, job: PostJob): Promise<void> {
 }
 
 /** Find and click Slack's Send button. */
+/** The Send button beside `composer` (the thread pane's own, for a thread reply). */
+async function clickSendNear(composer: HTMLElement): Promise<boolean> {
+  const btn = await waitFor(() => {
+    let node: HTMLElement | null = composer.parentElement;
+    while (node && node !== document.body) {
+      const b = node.querySelector<HTMLElement>('button[data-qa="texty_send_button"], button[aria-label*="Send" i], button[data-qa="message_send_button"]');
+      if (b && isVisible(b) && !(b as HTMLButtonElement).disabled) return b;
+      node = node.parentElement;
+    }
+    return null;
+  }, 5_000);
+  if (!btn) return false;
+  btn.click();
+  return true;
+}
+
 async function clickSend(): Promise<boolean> {
   const btn = await waitFor(() => {
     const sels = [
@@ -359,9 +388,10 @@ async function postAgentCompass(req: AgentCompassRequest): Promise<AgentCompassR
   sessionStorage.setItem(key, JSON.stringify({ jobId: req.jobId, ok: false, reason: 'attempt interrupted' }));
   let result: AgentCompassResult;
   try {
-    const composer = await findComposer();
+    // A follow-up goes only into the open thread's own box; never the channel's.
+    const composer = req.threadTs ? await findThreadComposer() : await findComposer();
     if (!composer) {
-      result = { jobId: req.jobId, ok: false, reason: 'Composer not found' };
+      result = { jobId: req.jobId, ok: false, reason: req.threadTs ? 'Thread pane not open' : 'Composer not found' };
     } else if ((composer.innerText || '').trim() !== '') {
       // Never send someone's half-written message along with the question.
       result = { jobId: req.jobId, ok: false, reason: 'Composer is not empty' };
@@ -376,7 +406,7 @@ async function postAgentCompass(req: AgentCompassRequest): Promise<AgentCompassR
         // and take back what we typed so it doesn't linger as a Slack draft.
         clearComposer(composer);
         result = { jobId: req.jobId, ok: false, reason: 'Compass mention did not become a pill; not sent' };
-      } else if (!(await clickSend())) {
+      } else if (!(await (req.threadTs ? clickSendNear(composer) : clickSend()))) {
         clearComposer(composer);
         result = { jobId: req.jobId, ok: false, reason: 'Send button not found / disabled' };
       } else if (!(await composerCleared(composer))) {
