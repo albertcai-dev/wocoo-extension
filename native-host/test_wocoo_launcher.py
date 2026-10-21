@@ -33,6 +33,8 @@ elif args[0] == 'outcome':
     print(json.dumps({"ok": True, "echo": json.loads(sys.stdin.read())}))
 elif args[0] == 'i2c-activity':
     print(json.dumps({"ok": True, "ts": float(args[2])}))
+elif args[0] == 'lesson-add':
+    print(json.dumps({"ok": True, "id": "L1", "merged": False, "echo": json.loads(sys.stdin.read())}))
 elif args[0] in ('solve', 'item'):
     print(json.dumps({"ok": True, "key": args[2], "state": "queued", "solo": args[0] == 'solve'}))
 elif args[0] == 'agent-mode':
@@ -101,6 +103,12 @@ class DraftActions(unittest.TestCase):
         for message in ({'action': 'agent_mode_set', 'mode': 'sleeping'}, {'action': 'agent_mode_set'}):
             self.assertEqual(call(message, self.root),
                              {'ok': False, 'error': 'agent_mode_set needs mode running or paused'})
+
+    def test_lesson_add_passes_the_lesson(self):
+        reply = call({'action': 'lesson_add', 'lesson': {'text': 'Keep it short.', 'status': 'kept'}}, self.root)
+        self.assertEqual((reply['ok'], reply['id'], reply['echo']['text']), (True, 'L1', 'Keep it short.'))
+        self.assertEqual(call({'action': 'lesson_add'}, self.root),
+                         {'ok': False, 'error': 'lesson_add needs a lesson object'})
 
     def test_agent_solve_and_item(self):
         self.assertEqual(call({'action': 'agent_solve', 'key': 'PROJ-12'}, self.root),

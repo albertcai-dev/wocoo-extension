@@ -24,7 +24,7 @@ const NOT_SET_UP = [
   /native messaging host not found/i,
   /^host not found/i,
   /^Not found: .*store_cli\.py$/i,
-  /^Unknown action: '?(draft_|i2c_activity|agent_mode_|agent_solve|agent_item)/i,
+  /^Unknown action: '?(draft_|lesson_|i2c_activity|agent_mode_|agent_solve|agent_item)/i,
 ];
 
 /** True when the draft store failed only because it isn't set up here, so the UI should render
@@ -116,4 +116,18 @@ export async function solveTicket(key: string): Promise<{ state: string | null; 
 export async function getAgentItem(key: string): Promise<AgentItemState> {
   const reply = await call({ action: 'agent_item', key }) as HostReply & { state?: unknown; solo?: unknown; priority?: unknown };
   return { state: typeof reply.state === 'string' ? reply.state : null, solo: reply.solo === true, priority: reply.priority === true };
+}
+
+/** A lesson from the post-edit note, as the user judged it. */
+export interface LessonVerdict {
+  text: string;
+  status: 'kept' | 'wrong';
+  work_type?: string | null;
+  category?: string;
+  source_key?: string;
+}
+
+/** Saves the user's Keep / Wrong on a proposed lesson. Kept lessons steer future drafts. */
+export async function saveLesson(lesson: LessonVerdict): Promise<void> {
+  await call({ action: 'lesson_add', lesson });
 }

@@ -13,6 +13,8 @@ Actions:
   {"action": "draft_get", "key": K}     -> {"ok": true, "draft": {...}|null}
   {"action": "draft_list"}              -> {"ok": true, "items": [...]}
   {"action": "draft_outcome", "row": R} -> {"ok": true}
+  {"action": "lesson_add", "lesson": L}  -> {"ok": true, "id": I, "merged": bool}
+        L = {"text", "status": "kept"|"wrong", "work_type"?, "category"?, "source_key"?}
   {"action": "i2c_activity", "ts": T}   -> {"ok": true}
   {"action": "agent_mode_get"}          -> {"ok": true, "mode": "running"|"paused", "since": N|null}
   {"action": "agent_mode_set", "mode": M}  (M is "running" or "paused") -> same reply as agent_mode_get
@@ -113,6 +115,14 @@ def draft_action(action, message):
             return {'ok': False, 'error': 'draft_outcome needs a row object'}
         _, err = run_store(['outcome'], stdin=json.dumps(row))
         return {'ok': False, 'error': err} if err else {'ok': True}
+    if action == 'lesson_add':
+        lesson = message.get('lesson')
+        if not isinstance(lesson, dict):
+            return {'ok': False, 'error': 'lesson_add needs a lesson object'}
+        data, err = run_store(['lesson-add'], stdin=json.dumps(lesson))
+        if err:
+            return {'ok': False, 'error': err}
+        return data if isinstance(data, dict) else {'ok': False, 'error': 'bad store reply'}
     if action in ('agent_mode_get', 'agent_mode_set'):
         args = ['agent-mode']
         if action == 'agent_mode_set':
@@ -142,7 +152,7 @@ def draft_action(action, message):
 
 AGENT_MODES = ('running', 'paused')
 TICKET_KEY = re.compile(r'^[A-Z][A-Z0-9]+-\d+$')
-DRAFT_ACTIONS = ('draft_get', 'draft_list', 'draft_outcome', 'i2c_activity',
+DRAFT_ACTIONS = ('draft_get', 'draft_list', 'draft_outcome', 'lesson_add', 'i2c_activity',
                  'agent_mode_get', 'agent_mode_set', 'agent_solve', 'agent_item')
 
 

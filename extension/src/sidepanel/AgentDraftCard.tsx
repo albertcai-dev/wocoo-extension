@@ -20,6 +20,8 @@ import {
 } from '../data/commentPrefill';
 import { JIRA_TAB_URL } from '../data/jiraTab';
 import { errorBanner, primaryButton, secondaryButton } from './toolUi';
+import { LessonReview } from './LessonReview';
+import { worthReviewing } from '../data/draftLessons';
 
 type Load =
   | { kind: 'loading' }
@@ -167,6 +169,8 @@ function DraftBody({ ticket, draft, onOpenWorkflow, onTicketUpdate, onOpenMove }
   const [error, setError] = useState<string | null>(null);
   const [mentions, setMentions] = useState<Mentions>({ kind: 'resolving' });
   const [recordFailed, setRecordFailed] = useState(false);
+  /** What was posted, when it differs enough from the draft to learn from. */
+  const [editedPost, setEditedPost] = useState<string | null>(null);
   const recordedRef = useRef(false);
   const [prefill, setPrefill] = useState<Prefill>({ kind: 'idle' });
   const prefillRef = useRef(prefill);
@@ -320,6 +324,7 @@ function DraftBody({ ticket, draft, onOpenWorkflow, onTicketUpdate, onOpenMove }
         const postedSegments = plainToSegments(text, mentions.segments);
         await postComment(ticket.id, postedSegments, { multiline: true });
         commentPosted = true;
+        if (worthReviewing(segmentsToPlain(draft.segments), text)) setEditedPost(text);
         void markPostedThisSession(ticket.id, draft.created_at);
         void requestClearPrefill(ticket.id, postedSegments);
       }
@@ -535,6 +540,9 @@ function DraftBody({ ticket, draft, onOpenWorkflow, onTicketUpdate, onOpenMove }
             >
               {phase === 'posting' ? 'Posting…' : phase === 'comment-posted' ? 'Retry status change' : postLabel(draft)}
             </button>
+          )}
+          {editedPost !== null && (
+            <LessonReview ticketKey={ticket.id} workType={ticket.workType} draft={segmentsToPlain(draft.segments)} posted={editedPost} evidence={draft.evidence} />
           )}
           {phase === 'idle' && prefill.kind === 'inserted' && !prefill.partial && (
             <div style={mutedStyle}>Draft inserted into the Jira comment box (not saved) — edit it there and click Save.</div>
