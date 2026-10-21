@@ -279,8 +279,12 @@ async function tryEmailSearch(): Promise<boolean> {
 }
 
 function findEmailInput(): HTMLInputElement | null {
-  // i2c Customer Search is server-rendered table markup: label cell + input cell in the
-  // same <tr>. Walk every element whose text is "Email Address" and grab the adjacent input.
+  // The redesigned Customer Search names the field: <input name="email" id="email"> in the
+  // "Search by Customer Profile" box (checked live 2026-10-20). Try that first.
+  const named = document.querySelector<HTMLInputElement>('input[name="email"], input#email');
+  if (named && named.type !== 'password' && isVisible(named)) return named;
+  // Older markup: label cell + input cell in the same <tr>. Walk every element whose text is
+  // "Email Address" and grab the adjacent input.
   const candidates = Array.from(document.querySelectorAll('td, th, label, div, span'));
   for (const el of candidates) {
     const txt = (el.textContent || '').trim();
