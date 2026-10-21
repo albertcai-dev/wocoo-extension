@@ -1,4 +1,4 @@
-// The local draft agent asks Compass (an AI agent in Slack) questions as Albert. Posts made
+// The local draft agent asks Compass (an AI agent in Slack) questions as the user. Posts made
 // through an API relay are flagged by Slack and their @mention is escaped, so Compass's
 // shortcuts never run; the agent instead opens the channel in its own Slack web tab and asks
 // slack.ts to type and send the question there, with a real mention pill.

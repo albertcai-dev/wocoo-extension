@@ -30,7 +30,7 @@ chrome.runtime.onMessage.addListener((msg, _sender) => {
     }
     return;
   }
-  // Albert is active in i2c: tell the local draft agent. Native-host failures (host not
+  // The user is active in i2c: tell the local draft agent. Native-host failures (host not
   // installed, store CLI error) are swallowed; the agent just won't see the activity.
   if (msg?.type === 'wocoo:i2c-activity') {
     if (typeof msg.ts === 'number' && Number.isFinite(msg.ts)) {

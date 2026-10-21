@@ -18,7 +18,7 @@ export const AGENT_I2C_CHAIN_MAX_AGE_MS = 3 * 60_000; // login + search + card +
 
 export type AgentI2cStep = 'search' | 'after-search' | 'continue' | 'done' | 'page';
 
-/** The pages Albert reads; the chain opens one of them after Continue with this Customer. */
+/** The pages the user reads; the chain opens one of them after Continue with this Customer. */
 export const AGENT_I2C_PAGES = ['Account Transactions', 'Declined Transactions', 'Manage Card Tokens'] as const;
 export type AgentI2cPage = typeof AGENT_I2C_PAGES[number];
 

@@ -1,5 +1,5 @@
 // Turns the draft agent's move suggestion into values that seed the Move modal. Pure: it never
-// submits anything, the modal still needs Albert's confirmation.
+// submits anything, the modal still needs the user's confirmation.
 
 import type { CreateMetaField } from '../api/jira';
 import type { DraftMove } from './agentDraftTypes';
@@ -22,7 +22,7 @@ const MODAL_DESTINATIONS: ReadonlySet<string> = new Set<MoveDestination>(
 );
 
 /** null when Sidekick can't do this move (flagged unsupported, or WORS/BOTI): the card then
- *  tells Albert to move it by hand. */
+ *  tells the user to move it by hand. */
 export function toMovePrefill(move: DraftMove): MovePrefill | null {
   if (!move.sidekick_supported || !MODAL_DESTINATIONS.has(move.destination)) return null;
   const fields: Record<string, string> = {};

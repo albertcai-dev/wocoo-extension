@@ -27,7 +27,7 @@ const c = (id: string, author: string, created: string, text = ''): JiraCommentD
   ({ id, authorAccountId: author, created, text });
 
 describe('buildJiraOutcomeRow', () => {
-  it('uses first Albert comment after draft', () => {
+  it("uses the user's first comment after the draft", () => {
     const comments = [
       c('1', ME, '2026-01-01T07:30:00.000-0500', 'My real reply'),
       c('2', ME, '2026-01-01T08:00:00.000-0500', 'A later note'),
@@ -42,7 +42,7 @@ describe('buildJiraOutcomeRow', () => {
     expect(Number.isNaN(Date.parse(row.recorded_at))).toBe(false);
   });
 
-  it('ignores Albert comments before draft', () => {
+  it("ignores the user's comments before the draft", () => {
     const comments = [
       c('1', ME, '2026-01-01T06:59:00.000-0500', 'Written before the draft existed'),
       c('2', ME, '2026-01-01T07:30:00.000-0500', 'After'),

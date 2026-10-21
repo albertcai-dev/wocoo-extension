@@ -7,7 +7,7 @@ describe('parseAgentI2cRequest', () => {
     expect(parseAgentI2cRequest({ type: AGENT_I2C_MSG, email: ' a@b.co ', product: 'prepaid' }))
       .toEqual({ email: 'a@b.co', product: 'prepaid' });
   });
-  it('accepts a page to open afterwards, and only the three Albert uses', () => {
+  it('accepts a page to open afterwards, and only the three pages the user reads', () => {
     expect(parseAgentI2cRequest({ type: AGENT_I2C_MSG, email: 'a@b.co', product: 'credit', page: 'Declined Transactions' }))
       .toEqual({ email: 'a@b.co', product: 'credit', page: 'Declined Transactions' });
     expect(parseAgentI2cRequest({ type: AGENT_I2C_MSG, email: 'a@b.co', product: 'credit', page: 'Account Summary' })).toHaveProperty('error');

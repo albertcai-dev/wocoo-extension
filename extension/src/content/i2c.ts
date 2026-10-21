@@ -1639,7 +1639,7 @@ async function bootstrap() {
   }
 }
 
-// Tell the local draft agent when Albert is actively using i2c, so it holds off its own
+// Tell the local draft agent when the user is actively using i2c, so it holds off its own
 // lookups (it shares his login). Checked at event time: the agent sets its tab flag after
 // each navigation, so it may not exist yet at load. Throttled; failures are silent.
 function watchUserActivity() {
