@@ -8,7 +8,9 @@
 import {
   AGENT_COMPASS_RESULT_ATTR,
   COMPASS_MENTION,
+  MENTION_PILL_SELECTOR,
   doneKey,
+  isCompassPillLabel,
   parseAgentCompassRequest,
   type AgentCompassRequest,
   type AgentCompassResult,
@@ -313,6 +315,18 @@ async function clickSend(): Promise<boolean> {
 
 // ----- agent Compass questions -----
 
+/** Empties the composer (only ever called on text this handler typed into an empty box). */
+function clearComposer(composer: HTMLElement): void {
+  composer.focus();
+  const sel = window.getSelection();
+  if (!sel) return;
+  const range = document.createRange();
+  range.selectNodeContents(composer);
+  sel.removeAllRanges();
+  sel.addRange(range);
+  document.execCommand('delete');
+}
+
 /** True once Slack has cleared the composer, which it does when a message is sent. */
 async function composerCleared(composer: HTMLElement): Promise<boolean> {
   const cleared = await waitFor(() => ((composer.innerText || '').trim() === '' ? true : null), 5_000, 150);
@@ -320,10 +334,10 @@ async function composerCleared(composer: HTMLElement): Promise<boolean> {
 }
 
 /** True when the composer holds a real Compass mention: Slack renders a pill as a
- *  non-editable node reading "@compass", unlike typed text. */
+ *  <ts-mention data-label="@compass">, unlike typed text. */
 function hasCompassPill(composer: HTMLElement): boolean {
-  return Array.from(composer.querySelectorAll<HTMLElement>('[contenteditable="false"], [data-stringify-type="mention"]'))
-    .some((el) => (el.textContent || '').trim().toLowerCase().startsWith('@' + COMPASS_MENTION));
+  return Array.from(composer.querySelectorAll<HTMLElement>(MENTION_PILL_SELECTOR))
+    .some((el) => isCompassPillLabel(el.getAttribute('data-label')) || isCompassPillLabel(el.textContent));
 }
 
 /** Types and sends the agent's Compass question into the channel open in THIS tab. Runs only
@@ -358,10 +372,12 @@ async function postAgentCompass(req: AgentCompassRequest): Promise<AgentCompassR
       });
       await delay(400);
       if (!hasCompassPill(composer)) {
-        // No pill means Compass would get plain text and its shortcuts would not run. Leave the
-        // text in the composer for a human to see rather than send a broken question.
+        // No pill means Compass would get plain text and its shortcuts would not run. Don't send,
+        // and take back what we typed so it doesn't linger as a Slack draft.
+        clearComposer(composer);
         result = { jobId: req.jobId, ok: false, reason: 'Compass mention did not become a pill; not sent' };
       } else if (!(await clickSend())) {
+        clearComposer(composer);
         result = { jobId: req.jobId, ok: false, reason: 'Send button not found / disabled' };
       } else if (!(await composerCleared(composer))) {
         result = { jobId: req.jobId, ok: false, reason: 'Send not confirmed (composer did not clear)' };

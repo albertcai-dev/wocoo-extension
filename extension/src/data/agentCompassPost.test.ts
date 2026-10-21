@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AGENT_COMPASS_MSG, MAX_TEXT_LENGTH, doneKey, parseAgentCompassRequest } from './agentCompassPost';
+import { AGENT_COMPASS_MSG, MAX_TEXT_LENGTH, doneKey, isCompassPillLabel, parseAgentCompassRequest } from './agentCompassPost';
 
 const msg = (over: Record<string, unknown> = {}) => ({
   type: AGENT_COMPASS_MSG,
@@ -54,5 +54,18 @@ describe('parseAgentCompassRequest', () => {
 describe('doneKey', () => {
   it('prefixes the job id', () => {
     expect(doneKey('PROJ-1')).toBe('wocoo-agent-compass:PROJ-1');
+  });
+});
+
+describe('isCompassPillLabel', () => {
+  it('matches the pill Slack renders for the Compass app', () => {
+    expect(isCompassPillLabel('@compass')).toBe(true);
+    expect(isCompassPillLabel(' @Compass ')).toBe(true);
+    expect(isCompassPillLabel('compass')).toBe(true);
+  });
+  it('rejects other mentions', () => {
+    expect(isCompassPillLabel('@compassion')).toBe(false);
+    expect(isCompassPillLabel('@someone')).toBe(false);
+    expect(isCompassPillLabel(null)).toBe(false);
   });
 });

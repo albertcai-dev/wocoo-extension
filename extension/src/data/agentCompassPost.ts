@@ -20,6 +20,15 @@ export const COMPASS_MENTION = 'compass';
 
 export const MAX_TEXT_LENGTH = 4000;
 
+/** Slack's composer renders a picked mention as <ts-mention data-label="@name" class="c-member_slug">
+ *  (checked live 2026-10-20); the other selectors are fallbacks for older markup. */
+export const MENTION_PILL_SELECTOR = 'ts-mention, [data-stringify-type="mention"], .c-member_slug';
+
+/** Whether a pill's label / text names Compass. */
+export function isCompassPillLabel(label: string | null | undefined): boolean {
+  return (label || '').trim().replace(/^@/, '').toLowerCase() === COMPASS_MENTION;
+}
+
 export interface AgentCompassRequest {
   jobId: string;
   text: string;
