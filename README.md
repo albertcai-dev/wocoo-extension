@@ -66,7 +66,7 @@ Sheet writes, Gmail sends, and long-running server-side work happen via a publis
 - `extension/src/api/bridge.ts` — opens the GAS webapp URL, dispatches actions, listens for postMessage replies. All Move/Clone-triggered calls run headless via `chrome.tabs.create({ active: false })` + auto-close so no `script.google.com` tabs flash on the operator.
 - `extension/src/content/gasBridge.ts` — content script on `script.google.com` that forwards the sandbox iframe's postMessage into the extension via `chrome.runtime.sendMessage`.
 
-Actions the bridge expects the GAS project to handle: `logMove`, `logTicket`, `updateTicketLog`, `sendKohoEmail`, `readPendingWires`, `markWirePosted`, `runMobileChequeValidation`, `getMobileChequeValidationStatus`, `markMobileChequeValidationSent`, `parseTranscript`. Changing any of these here without updating the GAS project (or vice-versa) will silently break the corresponding workflow.
+Actions the bridge expects the GAS project to handle: `logMove`, `logTicket`, `updateTicketLog`, `sendKohoEmail`, `readPendingWires`, `markWirePosted`, `runMobileChequeValidation`, `getMobileChequeValidationStatus`, `markMobileChequeValidationSent`. Changing any of these here without updating the GAS project (or vice-versa) will silently break the corresponding workflow.
 
 ## Repo layout
 

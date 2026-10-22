@@ -1469,11 +1469,6 @@ function mapJiraIssue(key: string, data: any): WocooTicket {
     updated: f.updated || f.created || new Date().toISOString(),
     recentComments,
     i2cTicketRef,
-    zendeskTranscript: {
-      // Phase B-1 doesn't include Zendesk scraping; the panel will fall back to a
-      // "couldn't auto-capture" state once the transcript card is wired to live data.
-      state: 'partial',
-    },
   };
 }
 

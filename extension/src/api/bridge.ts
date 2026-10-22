@@ -308,20 +308,6 @@ function callBridge(
   });
 }
 
-/**
- * Parse a pasted Zendesk transcript via the Apps Script bridge → MagicAI.
- * Returns a 3–5 sentence summary + 4–7 bulleted key facts.
- */
-export async function parseTranscriptViaBridge(text: string): Promise<{ summary: string; keyFacts: string[] }> {
-  const res = await callBridge('parseTranscript', { text }, 'transcriptParsed');
-  return {
-    summary: String((res as any).summary ?? ''),
-    keyFacts: Array.isArray((res as any).keyFacts)
-      ? (res as any).keyFacts.map((x: unknown) => String(x))
-      : [],
-  };
-}
-
 // ============ Ticket Log bridge calls (Phase 1 of Ticket Knowledge Loop) ============
 
 /** Append a row to the Ticket Log sheet. Fires immediately on transition; the row is

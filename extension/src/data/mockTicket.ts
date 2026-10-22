@@ -35,11 +35,6 @@ export interface WocooTicket {
    *  Empty when the ticket has no i2c ref. Lets the panel offer the i2c email thread even
    *  when the i2c ticket was raised by hand (no reply-tracking row exists). */
   i2cTicketRef: string;
-  zendeskTranscript: {
-    state: 'success' | 'fetching' | 'partial' | 'error';
-    zendeskTicketId?: string;
-    text?: string;
-  };
 }
 
 export const MOCK_TICKET: WocooTicket = {
@@ -72,18 +67,4 @@ export const MOCK_TICKET: WocooTicket = {
     },
   ],
   i2cTicketRef: '',
-  zendeskTranscript: {
-    state: 'success',
-    zendeskTicketId: '13605113',
-    text: [
-      'AGENT: Hello, am I speaking to Michael?',
-      'CLIENT: Yes, speaking.',
-      "AGENT: Hello, Michael. My name is Morgan. I'm calling on behalf of Wealthsimple regarding the support ticket you opened about your Mastercard. Is now a good time?",
-      'CLIENT: Yes, that works.',
-      "AGENT: Thank you. I can see the card is being declined with a code 51 at one specific merchant. I've confirmed your available balance covers the amount, so this looks like a merchant-side issue rather than a funding issue on our end.",
-      'CLIENT: OK, so what do I do?',
-      "AGENT: I'm going to escalate this to our card operations team so they can investigate why the merchant is rejecting the transaction. You should hear back from us within 2–3 business days.",
-      'CLIENT: Got it. Thank you.',
-    ].join('\n'),
-  },
 };

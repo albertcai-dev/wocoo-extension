@@ -60,8 +60,7 @@ extension/
     ├── background/
     │   └── service-worker.ts # Opens side panel on toolbar-icon click
     ├── components/
-    │   ├── StatusBadge.tsx   # StatusBadge + PriorityIndicator + TierBadge
-    │   └── TranscriptCard.tsx # 4-state transcript card (Phase A renders success only)
+    │   └── StatusBadge.tsx   # StatusBadge + PriorityIndicator + TierBadge
     ├── data/
     │   └── mockTicket.ts     # WOCOO-22597 mock data
     └── styles/

@@ -10,7 +10,6 @@
 import { useEffect, useState } from 'react';
 import { MOCK_TICKET, type WocooTicket } from '../data/mockTicket';
 import { StatusBadge, PriorityIndicator, TierBadge } from '../components/StatusBadge';
-import { TranscriptCard } from '../components/TranscriptCard';
 import { getStoredTokens, clearTokens } from '../auth/oauth';
 import { getTicket, transitionTicket } from '../api/jira';
 import { useCurrentTicketKey } from './useCurrentTicket';
@@ -646,9 +645,6 @@ function TicketViewInner({ ticket, onTicketUpdate, onStartTriage, onStartReverse
           </>
         );
       })()}
-
-      {/* TRANSCRIPT PARSER */}
-      <TranscriptCard />
 
       {/* FOOTER */}
       <footer style={{ fontSize: 'var(--mint-text-nano)', color: 'var(--mint-fg-inactive)', textAlign: 'center', marginTop: 'var(--mint-sp-2)' }}>
