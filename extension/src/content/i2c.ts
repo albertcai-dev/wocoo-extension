@@ -7,7 +7,7 @@
 import { gridFromRows, pageSaysNoRecord, readColumnForLast4, readLabelValue, readProgramForLast4 } from '../data/i2cCardDetailsParse';
 import { locateProductColumns, pickCreditProduct, pickProduct, type ProductRow } from '../data/i2cProductSelect';
 import {
-  AGENT_I2C_CHAIN_KEY, AGENT_I2C_MAX_LOGINS, AGENT_I2C_RESULT_ATTR, AGENT_I2C_RESULT_KEY, isSessionErrorPage,
+  AGENT_I2C_CHAIN_KEY, AGENT_I2C_MAX_LOGINS, AGENT_I2C_RESULT_ATTR, AGENT_I2C_RESULT_KEY, isManageSessionsPage, isSessionErrorPage,
   parseAgentI2cRequest, readChain, type AgentI2cChain, type AgentI2cResult,
 } from '../data/i2cAgentChain';
 import { I2C_LOGIN_URL } from '../data/i2cCardLookup';
@@ -177,8 +177,7 @@ let killSessionRan = false;
 async function tryKillSession(): Promise<boolean> {
   if (killSessionRan) return true;
   const body = document.body?.textContent || '';
-  if (!/Manage Sessions/i.test(body)) return false;
-  if (!/another user.*logged in/i.test(body)) return false;
+  if (!isManageSessionsPage(body)) return false;
   const candidates = Array.from(document.querySelectorAll<HTMLElement>('input[type="submit"], input[type="button"], button'));
   let killAll: HTMLElement | null = null;
   for (const b of candidates) {
@@ -1507,7 +1506,7 @@ async function tryOpenCustomerSearch(): Promise<boolean> {
   // Give a server-rendered page a moment before deciding the form isn't there.
   if (Date.now() - PAGE_LOADED_AT < CUSTOMER_SEARCH_SETTLE_MS) return false;
   if (findFields() || findEmailInput() || pageHasMaskedPan()) return false;
-  if (/Manage Sessions/i.test(document.body?.textContent || '')) return false;
+  if (isManageSessionsPage(document.body?.textContent || '')) return false;
 
   const hasContinue = Array.from(document.querySelectorAll<HTMLElement>('input[type="submit"], input[type="button"], button'))
     .some((b) => /^Continue\s+with\s+this\s+Customer$/i.test(((b as HTMLInputElement).value || b.textContent || '').trim()));
@@ -1775,7 +1774,7 @@ async function agentChainStep(): Promise<boolean> {
       location.assign(I2C_LOGIN_URL);
       return true;
     }
-    if (/Manage Sessions/i.test(body)) return false; // tryKillSession clicks Kill All
+    if (isManageSessionsPage(body)) return false; // tryKillSession clicks Kill All
 
     if (chain.step === 'after-search' && findEmailInput()) {
       if (/No record(s)? found/i.test(body)) { stopAgentChain('Customer Search: no customer for that email'); return true; }

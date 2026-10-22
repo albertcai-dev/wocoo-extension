@@ -64,6 +64,13 @@ export function isSessionErrorPage(bodyText: string): boolean {
   return /Invalid Session|session has expired|You are not logged in|Instance Not Configured|another tab has been opened|do not have enough privileges/i.test(bodyText);
 }
 
+/** i2c's "another session is signed in" page (Kill All / Kill Session). Not just any page
+ *  mentioning "Manage Sessions": the redesigned sidebar links to it on every page, which made
+ *  the agent chain wait on Customer Search for a Kill All that never came (2026-10-21). */
+export function isManageSessionsPage(bodyText: string): boolean {
+  return /Manage Sessions/i.test(bodyText) && /another user[\s\S]*?logged in/i.test(bodyText);
+}
+
 /** The stored chain if it is well-formed and fresh, else null. */
 export function readChain(raw: string | null, now: number): AgentI2cChain | null {
   if (!raw) return null;

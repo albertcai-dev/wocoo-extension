@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AGENT_I2C_CHAIN_MAX_AGE_MS, AGENT_I2C_MSG, isSessionErrorPage, parseAgentI2cRequest, readChain } from './i2cAgentChain';
+import { AGENT_I2C_CHAIN_MAX_AGE_MS, AGENT_I2C_MSG, isManageSessionsPage, isSessionErrorPage, parseAgentI2cRequest, readChain } from './i2cAgentChain';
 import { pickProduct } from './i2cProductSelect';
 
 describe('parseAgentI2cRequest', () => {
@@ -62,5 +62,14 @@ describe('isSessionErrorPage', () => {
       expect(isSessionErrorPage(t)).toBe(true);
     }
     expect(isSessionErrorPage('Customer Search Following are the different options')).toBe(false);
+  });
+});
+
+describe('isManageSessionsPage', () => {
+  it('ignores the sidebar link on Customer Search', () => {
+    expect(isManageSessionsPage('Customer Search Manage Sessions Card Enrollment Disputes Search by Customer Profile Email Address:')).toBe(false);
+  });
+  it('spots the real Kill All page', () => {
+    expect(isManageSessionsPage('Manage Sessions\nAnother user is already\nlogged in with this ID. Kill All')).toBe(true);
   });
 });
