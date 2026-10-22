@@ -20,15 +20,21 @@ const showsTicket = (url: string, key: string) =>
   new RegExp(`(^|[^A-Z0-9-])${key.replace(/[-]/g, '\\-')}(?!\\d)`, 'i').test(url);
 
 /** Navigates the current window's active tab to `url` when it is a Jira tab; otherwise opens a
- *  new tab. A Jira tab already showing the ticket is left alone (no reload, no lost edits). */
+ *  new tab. `newTab` always opens a new one instead. A Jira tab already showing the ticket is
+ *  left alone either way (no reload, no lost edits, no duplicate tab). */
 export async function openTicketInJiraTab(
   url: string,
   key: string,
   tabs: TabsApi,
+  { newTab = false }: { newTab?: boolean } = {},
 ): Promise<'updated' | 'created' | 'already-open'> {
   const [tab] = await tabs.query({ active: true, currentWindow: true });
   if (tab?.id != null && tab.url && JIRA_TAB_URL.test(tab.url)) {
     if (showsTicket(tab.url, key)) return 'already-open';
+    if (newTab) {
+      await tabs.create({ url });
+      return 'created';
+    }
     await tabs.update(tab.id, { url });
     return 'updated';
   }

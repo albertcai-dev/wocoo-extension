@@ -51,6 +51,19 @@ describe('openTicketInJiraTab', () => {
     expect(t.create).not.toHaveBeenCalled();
   });
 
+  it('opens a new tab over a Jira tab when newTab is set', async () => {
+    const t = tabs({ id: 7, url: 'https://wealthsimple.atlassian.net/browse/WOCOO-9' });
+    expect(await openTicketInJiraTab(url, 'WOCOO-5', t, { newTab: true })).toBe('created');
+    expect(t.create).toHaveBeenCalledWith({ url });
+    expect(t.update).not.toHaveBeenCalled();
+  });
+
+  it('does not duplicate a tab already showing the ticket when newTab is set', async () => {
+    const t = tabs({ id: 7, url });
+    expect(await openTicketInJiraTab(url, 'WOCOO-5', t, { newTab: true })).toBe('already-open');
+    expect(t.create).not.toHaveBeenCalled();
+  });
+
   it('does not mistake WOCOO-55 for WOCOO-5', async () => {
     const t = tabs({ id: 7, url: 'https://wealthsimple.atlassian.net/browse/WOCOO-55' });
     expect(await openTicketInJiraTab(url, 'WOCOO-5', t)).toBe('updated');

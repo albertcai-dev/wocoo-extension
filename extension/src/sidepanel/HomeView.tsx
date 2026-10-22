@@ -5,7 +5,8 @@ import { useEffect, useState } from 'react';
 import { searchTickets, type TicketRow } from '../api/jira';
 import { MobileChequeValidationTile } from './MobileChequeValidation';
 import { FetchWireSendWTile } from './FetchWireSendW';
-import { DraftsReadyList } from './DraftsReadyList';
+import { openTicketInNewJiraTab, useReadyDrafts } from './useReadyDrafts';
+import type { ReadyDraftRow } from '../data/agentDraftTypes';
 import {
   backfillI2cViaBridge,
   backfillKohoTrackKeysViaBridge,
@@ -50,6 +51,7 @@ function orderRows(rows: TicketRow[], replies: Record<string, TicketReply[]>, so
 
 export function HomeView({ onOpenTicket, onOpenWiresPending, onOpenEligibility, header }: { onOpenTicket: (ticketKey: string) => void; onOpenWiresPending: () => void; onOpenEligibility: () => void; header: React.ReactNode }) {
   const [state, setState] = useState<LoadState>({ kind: 'loading' });
+  const drafts = useReadyDrafts();
   const [replies, setReplies] = useState<Record<string, TicketReply[]>>({});
   const [refreshing, setRefreshing] = useState(false);
   // Persist sort preference across side-panel opens so the user doesn't have to
@@ -69,7 +71,8 @@ export function HomeView({ onOpenTicket, onOpenWiresPending, onOpenEligibility, 
   useEffect(() => {
     let cancelled = false;
     setState({ kind: 'loading' });
-    searchTickets(ASSIGNED_ACTIVE_JQL)
+    // 100 matches the draft check's search, so every ready draft has a row to badge.
+    searchTickets(ASSIGNED_ACTIVE_JQL, 100)
       .then((rows) => { if (!cancelled) setState({ kind: 'ready', rows }); })
       .catch((e) => { if (!cancelled) setState({ kind: 'error', message: e?.message || String(e) }); });
     return () => { cancelled = true; };
@@ -240,8 +243,6 @@ export function HomeView({ onOpenTicket, onOpenWiresPending, onOpenEligibility, 
         </div>
       ) : null}
 
-      <DraftsReadyList onOpenTicket={onOpenTicket} />
-
       {state.kind === 'ready' ? (
         <>
           <Section
@@ -252,7 +253,18 @@ export function HomeView({ onOpenTicket, onOpenWiresPending, onOpenEligibility, 
             {allAssigned.length === 0 ? (
               <EmptyRow text="No active tickets assigned to you." />
             ) : (
-              allAssigned.map((r) => <TicketListRow key={r.id} row={r} entries={replies[r.id]} onClick={() => onOpenTicket(r.id)} />)
+              allAssigned.map((r) => {
+                const draft = drafts.get(r.id);
+                return (
+                  <TicketListRow
+                    key={r.id}
+                    row={r}
+                    entries={replies[r.id]}
+                    draft={draft}
+                    onClick={() => { onOpenTicket(r.id); void openTicketInNewJiraTab(draft ?? { key: r.id }); }}
+                  />
+                );
+              })
             )}
           </Section>
 
@@ -344,7 +356,7 @@ function EmptyRow({ text }: { text: string }) {
   );
 }
 
-function TicketListRow({ row, entries, onClick }: { row: TicketRow; entries?: TicketReply[]; onClick: () => void }) {
+function TicketListRow({ row, entries, draft, onClick }: { row: TicketRow; entries?: TicketReply[]; draft?: ReadyDraftRow; onClick: () => void }) {
   const hasReply = needsAttention(entries);
   const kind = attentionKind(entries);
   const count = attentionCount(entries);
@@ -392,19 +404,46 @@ function TicketListRow({ row, entries, onClick }: { row: TicketRow; entries?: Ti
       <div style={{ fontSize: 'var(--mint-text-meta)', color: 'var(--mint-fg-strong)', lineHeight: 1.4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {row.summary || <span style={{ color: 'var(--mint-fg-soft)', fontStyle: 'italic' }}>(no summary)</span>}
       </div>
-      {hasReply ? (
-        <div style={{ fontSize: 'var(--mint-text-nano)', color: 'var(--mint-negative-fg-strong)', fontWeight: 600 }}>
-          {glyph}{' '}
-          {kind === 'awaiting'
-            ? `Awaiting your reply — ${leadLabel}${suffix}`
-            : `New reply from ${leadLabel} — ${(lead?.snippet || '').slice(0, 80)}${(lead?.snippet || '').length > 80 ? '…' : ''}${suffix}`}
-        </div>
-      ) : (
-        <div style={{ fontSize: 'var(--mint-text-nano)', color: 'var(--mint-fg-soft)' }}>
-          {row.issueType}
-        </div>
-      )}
+      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6 }}>
+        {hasReply ? (
+          <div style={{ flex: 1, minWidth: 0, fontSize: 'var(--mint-text-nano)', color: 'var(--mint-negative-fg-strong)', fontWeight: 600 }}>
+            {glyph}{' '}
+            {kind === 'awaiting'
+              ? `Awaiting your reply — ${leadLabel}${suffix}`
+              : `New reply from ${leadLabel} — ${(lead?.snippet || '').slice(0, 80)}${(lead?.snippet || '').length > 80 ? '…' : ''}${suffix}`}
+          </div>
+        ) : (
+          <div style={{ flex: 1, minWidth: 0, fontSize: 'var(--mint-text-nano)', color: 'var(--mint-fg-soft)' }}>
+            {row.issueType}
+          </div>
+        )}
+        {draft ? <DraftReadyPill marker={draft.marker} /> : null}
+      </div>
     </button>
+  );
+}
+
+/** Bottom-right badge on a ticket the draft agent has a reply waiting for, led by the digest
+ *  marker (tool needed, flagged, followup) when there is one. */
+function DraftReadyPill({ marker }: { marker: string }) {
+  return (
+    <span
+      title="The draft agent has a reply ready."
+      style={{
+        flexShrink: 0,
+        display: 'inline-flex', alignItems: 'center', gap: 4,
+        padding: '1px 8px',
+        borderRadius: 9999,
+        background: 'var(--mint-highlight-bg-soft)',
+        color: 'var(--mint-highlight-fg-strong)',
+        fontSize: 'var(--mint-text-nano)',
+        fontWeight: 600,
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {marker ? <span>{marker}</span> : null}
+      <span>Draft ready</span>
+    </span>
   );
 }
 
