@@ -1211,6 +1211,12 @@ export async function getIssueComments(ticketKey: string): Promise<string[]> {
 export interface JiraCommentDetail {
   id: string;
   authorAccountId: string;
+  /** Display name; '' when Jira omits the author. */
+  authorName: string;
+  /** Jira's accountType ('atlassian', 'app' for automation/bots, 'customer'); '' when absent. */
+  authorAccountType: string;
+  /** The comment this one replies under (Jira's threaded Reply); null for a top-level comment. */
+  parentId: string | null;
   created: string;
   text: string;
 }
@@ -1273,11 +1279,15 @@ export async function getIssueCommentsDetailed(
   }
   const data = await resp.json();
   const raw = (data.comments || []) as Array<{
-    id: string; author?: { accountId?: string }; created?: string; body?: unknown;
+    id: string; parentId?: string | number; created?: string; body?: unknown;
+    author?: { accountId?: string; displayName?: string; accountType?: string };
   }>;
   const rows = raw.map((c) => ({
     id: String(c.id),
     authorAccountId: c.author?.accountId || '',
+    authorName: c.author?.displayName || '',
+    authorAccountType: c.author?.accountType || '',
+    parentId: c.parentId != null ? String(c.parentId) : null,
     created: c.created || '',
     text: adfCommentToPlain(c.body),
   }));

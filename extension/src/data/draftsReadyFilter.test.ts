@@ -30,7 +30,7 @@ describe('splitReadyRows', () => {
 });
 
 describe('repliedAfterDraft', () => {
-  const c = (author: string, created: string) => ({ id: '1', authorAccountId: author, created, text: '' });
+  const c = (author: string, created: string) => ({ id: '1', authorAccountId: author, authorName: '', authorAccountType: 'atlassian', parentId: null, created, text: '' });
   it('is true only for the user\'s comment after the draft', () => {
     const at = '2026-10-20T18:25:00-0400';
     expect(repliedAfterDraft([c('me', '2026-10-20T18:31:00-0400')], 'me', at)).toBe(true);

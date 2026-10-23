@@ -33,11 +33,24 @@ describe('getIssueCommentsDetailed', () => {
     });
     const rows = await getIssueCommentsDetailed('TEST-1');
     expect(rows).toEqual([
-      { id: '101', authorAccountId: 'acct-a', created: '2026-01-01T10:00:00.000-0500', text: 'First note' },
-      { id: '102', authorAccountId: 'acct-b', created: '2026-01-01T11:00:00.000-0500', text: 'Second note' },
+      { id: '101', authorAccountId: 'acct-a', authorName: '', authorAccountType: '', parentId: null, created: '2026-01-01T10:00:00.000-0500', text: 'First note' },
+      { id: '102', authorAccountId: 'acct-b', authorName: '', authorAccountType: '', parentId: null, created: '2026-01-01T11:00:00.000-0500', text: 'Second note' },
     ]);
     const url = String(fn.mock.calls.find((c) => String(c[0]).includes('/comment'))![0]);
     expect(url).toContain('/ex/jira/cloud-1/rest/api/3/issue/TEST-1/comment');
+  });
+
+  it('maps parentId, author name and account type', async () => {
+    mockFetch({
+      ok: true,
+      body: { comments: [
+        { id: '1', author: { accountId: 'a', displayName: 'Agent A', accountType: 'atlassian' }, created: '2026-01-01T00:00:00.000+0000', body: adf('q') },
+        { id: '2', parentId: 6736037, author: { accountId: 'b', displayName: 'Bot', accountType: 'app' }, created: '2026-01-02T00:00:00.000+0000', body: adf('r') },
+      ] },
+    });
+    const rows = await getIssueCommentsDetailed('TEST-1');
+    expect(rows[0]).toMatchObject({ parentId: null, authorName: 'Agent A', authorAccountType: 'atlassian' });
+    expect(rows[1]).toMatchObject({ parentId: '6736037', authorName: 'Bot', authorAccountType: 'app' });
   });
 
   it('returns oldest first and tolerates missing author / body', async () => {

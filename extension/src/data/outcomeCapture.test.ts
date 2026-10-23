@@ -24,7 +24,7 @@ function draft(over: Partial<AgentDraft> = {}): AgentDraft {
 
 // Jira's own timestamp format (offset without a colon). 12:00Z == 07:00-0500.
 const c = (id: string, author: string, created: string, text = ''): JiraCommentDetail =>
-  ({ id, authorAccountId: author, created, text });
+  ({ id, authorAccountId: author, authorName: '', authorAccountType: 'atlassian', parentId: null, created, text });
 
 describe('buildJiraOutcomeRow', () => {
   it("uses the user's first comment after the draft", () => {
