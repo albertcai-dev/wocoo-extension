@@ -3,6 +3,7 @@
 // Submit flow is wired in the next task; this file renders the UI only.
 
 import { useState, useEffect, useRef } from 'react';
+import { recordCreated } from '../data/usageStore';
 import type { WocooTicket } from '../data/mockTicket';
 import {
   CURRENCY_LABELS,
@@ -149,6 +150,7 @@ export function CreateReimbModal({ ticket, onClose, onCreated }: {
         incidentRelatedId,
       });
 
+      recordCreated(ticket.id, created.key, 'REIMB');
       setReimbKey(created.key);
       setReimbUrl(created.url);
 

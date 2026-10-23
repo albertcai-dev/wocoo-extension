@@ -55,6 +55,7 @@ import {
   transitionTicket,
 } from '../api/jira';
 import { logMoveViaBridge } from '../api/bridge';
+import { recordCreated } from '../data/usageStore';
 import { emitMoveTransition } from './ticketLogEvents';
 import {
   fetchAtlasAccountIdHeadless,
@@ -793,6 +794,7 @@ export function MoveModal({ ticket, onClose, initialDestKey = 'EOC', prefill }: 
       cloneRef.current = reusedClone ?? { key: clone.key, url: clone.url, done: false };
       createdCloneKey = clone.key;
       setCloneKey(clone.key);
+      if (!reusedClone) recordCreated(ticket.id, clone.key, 'Clone');
 
       // --- Hard step 2: link clone --clones--> original ---
       // outwardIssue is the side that "clones"; inwardIssue is the side "cloned by".

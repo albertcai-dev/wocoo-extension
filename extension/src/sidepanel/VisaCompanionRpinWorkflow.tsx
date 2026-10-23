@@ -10,6 +10,7 @@ import { useEffect, useState } from 'react';
 import type { WocooTicket } from '../data/mockTicket';
 import { postComment, transitionTicketThroughPath } from '../api/jira';
 import { stagePresetIdentity } from '../data/presetIdentity';
+import { recordCreated } from '../data/usageStore';
 import { PRESET_DASHBOARD_IDS, presetDashboardUrl } from '../data/presetConfig';
 
 const RPIN_DASHBOARD_URL = presetDashboardUrl(PRESET_DASHBOARD_IDS.visaCompanionRpin);
@@ -125,6 +126,7 @@ export function VisaCompanionRpinWorkflow({ ticket, onClose }: { ticket: WocooTi
         segments.push({ type: 'smartcard', text: url, href: url });
         await postComment(ticket.id, segments);
         setCommentPosted(true);
+        recordCreated(ticket.id, url, 'i2c');
       }
       setMoveDoing(true);
       await transitionTicketThroughPath(ticket.id, ...PENDING_EXTERNAL_PATH);

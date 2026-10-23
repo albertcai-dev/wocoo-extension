@@ -22,6 +22,7 @@
 //   • No write to Moves/Errors sheet (v3 has this; extension parity-later)
 
 import { useEffect, useRef, useState } from 'react';
+import { recordCreated } from '../data/usageStore';
 import type { WocooTicket } from '../data/mockTicket';
 import {
   createReimbTicket,
@@ -321,6 +322,7 @@ export function OverpaymentTriage({ ticket, onClose, onTicketUpdate }: { ticket:
         approver: approverKey,
         tier: effectiveTier,
       });
+      recordCreated(ticket.id, result.key, 'REIMB');
       const commentText = buildCommentText(ticket, result.key, state.amount);
       setS({ busy: false, reimbKey: result.key, reimbUrl: result.url, commentText, step: 4 });
     } catch (e: any) {
@@ -363,6 +365,7 @@ export function OverpaymentTriage({ ticket, onClose, onTicketUpdate }: { ticket:
         issueTypeId: FRAUD_ISSUE_TYPE_ID,
         linkPhrase: FRAUD_LINK_PHRASE,
       });
+      recordCreated(ticket.id, result.key, 'FRAUD');
       finishFraud(result.key, result.url, result.linkError);
     } catch (e: any) {
       setS({

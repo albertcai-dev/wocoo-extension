@@ -56,6 +56,8 @@ import { clearPresetIdentityMirror, mirrorPresetIdentity, stagePresetIdentity } 
 import { stageCardIssuanceSearch } from '../data/cardIssuanceStage';
 import { captureJiraOutcomeLive } from '../data/outcomeCaptureLive';
 import { PRESET_DASHBOARD_IDS, presetDashboardUrl } from '../data/presetConfig';
+import { recordClick, recordOutcome } from '../data/usageStore';
+import { StatsView } from './StatsView';
 
 // Bridge: DOM-observer transition detections come in as chrome.runtime messages from
 // the service worker. Feed them into the local event bus so a single subscribe path
@@ -84,6 +86,7 @@ export function SidePanel() {
   const [ticketKey, setTicketKey] = useCurrentTicketKey();
   const [homeMode, setHomeMode] = useState(false);
   const [settingsMode, setSettingsMode] = useState(false);
+  const [statsMode, setStatsMode] = useState(false);
   const [wiresPendingActive, setWiresPendingActive] = useState(false);
   const [eligibilityActive, setEligibilityActive] = useState(false);
   const [ticket, setTicket] = useState<WocooTicket | null>(null);
@@ -98,9 +101,11 @@ export function SidePanel() {
     setTicketKey(key);
     setHomeMode(false);
     setSettingsMode(false);
+    setStatsMode(false);
   };
-  const onGoHome = () => { setSettingsMode(false); setHomeMode(true); };
-  const onOpenSettings = () => setSettingsMode(true);
+  const onGoHome = () => { setSettingsMode(false); setStatsMode(false); setHomeMode(true); };
+  const onOpenSettings = () => { setStatsMode(false); setSettingsMode(true); };
+  const onOpenStats = () => { setSettingsMode(false); setStatsMode(true); };
   const onCloseSettings = () => setSettingsMode(false);
 
   // Check auth on mount
@@ -132,6 +137,11 @@ export function SidePanel() {
     });
   }, []);
 
+  // Sidekick usage stats: every Done / Cancelled / Moved the bus sees is an outcome.
+  useEffect(() => {
+    return subscribeToTicketTransitions((evt) => recordOutcome(evt.ticketId, evt.kind, evt.movedToBoard));
+  }, []);
+
   // Mirror the open ticket's identity for the Preset content script. A Preset page the
   // user opens by hand (rather than through a workflow button) has no staged identity of
   // its own, and before this it fell back to whatever identity was last left in storage —
@@ -156,6 +166,7 @@ export function SidePanel() {
     if (!ticketKey) return;
     setHomeMode(false);
     setSettingsMode(false);
+    setStatsMode(false);
     setWiresPendingActive(false);
     setEligibilityActive(false);
   }, [ticketKey]);
@@ -167,6 +178,10 @@ export function SidePanel() {
 
   if (settingsMode) {
     return <SettingsView onBack={onCloseSettings} onSignOut={handleSignOut} />;
+  }
+
+  if (statsMode) {
+    return <StatsView onBack={() => setStatsMode(false)} />;
   }
 
   if (wiresPendingActive) {
@@ -184,7 +199,7 @@ export function SidePanel() {
         onOpenTicket={onOpenTicket}
         onOpenWiresPending={() => setWiresPendingActive(true)}
         onOpenEligibility={() => setEligibilityActive(true)}
-        header={<HomeHeader onOpenSettings={onOpenSettings} />}
+        header={<HomeHeader onOpenSettings={onOpenSettings} onOpenStats={onOpenStats} />}
       />
     );
   }
@@ -196,7 +211,7 @@ export function SidePanel() {
         onOpenTicket={onOpenTicket}
         onOpenWiresPending={() => setWiresPendingActive(true)}
         onOpenEligibility={() => setEligibilityActive(true)}
-        header={<HomeHeader onOpenSettings={onOpenSettings} />}
+        header={<HomeHeader onOpenSettings={onOpenSettings} onOpenStats={onOpenStats} />}
       />
     );
   }
@@ -211,19 +226,21 @@ export function SidePanel() {
       onTicketUpdate={(updated) => setTicket(updated)}
       onGoHome={onGoHome}
       onOpenSettings={onOpenSettings}
+      onOpenStats={onOpenStats}
     />
   );
 }
 
-function HomeHeader({ onOpenSettings }: { onOpenSettings: () => void }) {
+function HomeHeader({ onOpenSettings, onOpenStats }: { onOpenSettings: () => void; onOpenStats: () => void }) {
   return (
-    <header style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 'var(--mint-sp-2)' }}>
+    <header style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4 }}>
+      <StatsButton onClick={onOpenStats} />
       <SettingsButton onClick={onOpenSettings} />
     </header>
   );
 }
 
-function TicketView({ ticket, onTicketUpdate, onGoHome, onOpenSettings }: { ticket: WocooTicket; onTicketUpdate: (t: WocooTicket) => void; onGoHome: () => void; onOpenSettings: () => void }) {
+function TicketView({ ticket, onTicketUpdate, onGoHome, onOpenSettings, onOpenStats }: { ticket: WocooTicket; onTicketUpdate: (t: WocooTicket) => void; onGoHome: () => void; onOpenSettings: () => void; onOpenStats: () => void }) {
   const [triageActive, setTriageActive] = useState(false);
   const [reverseFeeActive, setReverseFeeActive] = useState(false);
   const [walletTriageActive, setWalletTriageActive] = useState(false);
@@ -293,11 +310,12 @@ function TicketView({ ticket, onTicketUpdate, onGoHome, onOpenSettings }: { tick
       onStartRefundAuthLetter={() => setRefundAuthLetterActive(true)}
       onGoHome={onGoHome}
       onOpenSettings={onOpenSettings}
+      onOpenStats={onOpenStats}
     />
   );
 }
 
-function TicketViewInner({ ticket, onTicketUpdate, onStartTriage, onStartReverseFee, onStartCustomCcStatement, onStartWalletTriage, onStartVisaCompanionRpin, onStartRefundAuthLetter, onGoHome, onOpenSettings }: { ticket: WocooTicket; onTicketUpdate: (t: WocooTicket) => void; onStartTriage: () => void; onStartReverseFee: () => void; onStartCustomCcStatement: () => void; onStartWalletTriage: () => void; onStartVisaCompanionRpin: () => void; onStartRefundAuthLetter: () => void; onGoHome: () => void; onOpenSettings: () => void }) {
+function TicketViewInner({ ticket, onTicketUpdate, onStartTriage, onStartReverseFee, onStartCustomCcStatement, onStartWalletTriage, onStartVisaCompanionRpin, onStartRefundAuthLetter, onGoHome, onOpenSettings, onOpenStats }: { ticket: WocooTicket; onTicketUpdate: (t: WocooTicket) => void; onStartTriage: () => void; onStartReverseFee: () => void; onStartCustomCcStatement: () => void; onStartWalletTriage: () => void; onStartVisaCompanionRpin: () => void; onStartRefundAuthLetter: () => void; onGoHome: () => void; onOpenSettings: () => void; onOpenStats: () => void }) {
   const [showFullDescription, setShowFullDescription] = useState(false);
   const [showComments, setShowComments] = useState(false);
   // Bumped when "Solve using Sidekick Agent" finishes, so the draft card reloads.
@@ -435,6 +453,7 @@ function TicketViewInner({ ticket, onTicketUpdate, onStartTriage, onStartReverse
           >
             🏠
           </button>
+          <StatsButton onClick={onOpenStats} />
           <SettingsButton onClick={onOpenSettings} />
         </div>
       </header>
@@ -691,10 +710,12 @@ function ExternalToolsRow({ ticket }: { ticket: WocooTicket }) {
 
   const openAtlas = () => {
     if (!ticket.identityId) return;
+    recordClick(ticket.id, 'atlas');
     window.open(ATLAS_URL(ticket.identityId, ticket.id), '_blank', 'noopener,noreferrer');
   };
 
   const openI2c = () => {
+    recordClick(ticket.id, 'i2c');
     if (ticket.clientEmail) {
       void chrome.storage.local.set({
         pending_i2c_email: ticket.clientEmail,
@@ -714,6 +735,7 @@ function ExternalToolsRow({ ticket }: { ticket: WocooTicket }) {
   };
 
   const openKoho = () => {
+    recordClick(ticket.id, 'koho');
     if (ticket.clientEmail) {
       void chrome.storage.local.set({ pending_koho_email: ticket.clientEmail });
     }
@@ -729,6 +751,7 @@ function ExternalToolsRow({ ticket }: { ticket: WocooTicket }) {
   const [fetchPending, setFetchPending] = useState(false);
   const fetchAccountNumber = async () => {
     if (!ticket.identityId || fetchPending) return;
+    recordClick(ticket.id, 'fetch_account');
     setFetchPending(true);
     const args = { identityId: ticket.identityId, sourceTicketId: ticket.id };
     // Captured values are mirrored into state by the storage listeners below; a
@@ -848,6 +871,7 @@ function QuickActions({ ticket, onTicketUpdate, onStartTriage, onStartReverseFee
 
   const handleDone = async () => {
     if (doneState === 'pending' || doneState === 'done') return;
+    recordClick(ticket.id, 'done');
     setDoneState('pending');
     setErrorMsg(null);
     try {
@@ -877,8 +901,8 @@ function QuickActions({ ticket, onTicketUpdate, onStartTriage, onStartReverseFee
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--mint-sp-2)' }}>
       <div style={{ display: 'flex', gap: 'var(--mint-sp-2)' }}>
-        <ActionButton variant="highlight" onClick={() => onOpenCloneMove()}>→ Clone/Move</ActionButton>
-        <ActionButton variant="special" onClick={onStartTriage} title="Start Overpayment Triage">⚡ Triage Overpayment</ActionButton>
+        <ActionButton variant="highlight" onClick={() => { recordClick(ticket.id, 'clone_move'); onOpenCloneMove(); }}>→ Clone/Move</ActionButton>
+        <ActionButton variant="special" onClick={() => { recordClick(ticket.id, 'triage_overpayment'); onStartTriage(); }} title="Start Overpayment Triage">⚡ Triage Overpayment</ActionButton>
         {showDone ? (
           <ActionButton
             variant="positive"
@@ -894,6 +918,7 @@ function QuickActions({ ticket, onTicketUpdate, onStartTriage, onStartReverseFee
           variant="red"
           onClick={() => {
             if (!ticket.identityId) return;
+            recordClick(ticket.id, 'verify_eligible_dd');
             const id = ticket.identityId;
             void stagePresetIdentity(id, ticket.id);
             window.open(VERIFY_ELIGIBLE_DD_URLS[0], '_blank', 'noopener,noreferrer');
@@ -913,23 +938,23 @@ function QuickActions({ ticket, onTicketUpdate, onStartTriage, onStartReverseFee
         </ActionButton>
         <ActionButton
           variant="redorange"
-          onClick={onOpenCreateReimb}
+          onClick={() => { recordClick(ticket.id, 'create_reimb'); onOpenCreateReimb(); }}
           disabled={!ticket.identityId}
           title="Create a new REIMB ticket from this WOCOO ticket"
         >
           💸 Create REIMB Ticket
         </ActionButton>
-        <ActionButton variant="orange" onClick={onStartWalletTriage} disabled={!ticket.identityId} title="Start Wallet Triage workflow (Apple Pay / Google Pay / etc.)">
+        <ActionButton variant="orange" onClick={() => { recordClick(ticket.id, 'wallet_triage'); onStartWalletTriage(); }} disabled={!ticket.identityId} title="Start Wallet Triage workflow (Apple Pay / Google Pay / etc.)">
           💳 Wallet Triage
         </ActionButton>
       </div>
       <div style={{ display: 'flex', gap: 'var(--mint-sp-2)' }}>
-        <ActionButton variant="gold" onClick={onStartVisaCompanionRpin} disabled={!ticket.identityId} title="Visa Companion RPIN diagnostic — open Preset dashboard 7666, then optionally create an i2c ticket to add RPIN">
+        <ActionButton variant="gold" onClick={() => { recordClick(ticket.id, 'visa_companion'); onStartVisaCompanionRpin(); }} disabled={!ticket.identityId} title="Visa Companion RPIN diagnostic — open Preset dashboard 7666, then optionally create an i2c ticket to add RPIN">
           🛫 Visa Companion
         </ActionButton>
         <ActionButton
           variant="green"
-          onClick={() => { void runInterestTool({ identityId: ticket.identityId, ticketId: ticket.id }); }}
+          onClick={() => { recordClick(ticket.id, 'investigate_interest'); void runInterestTool({ identityId: ticket.identityId, ticketId: ticket.id }); }}
           disabled={interestBusy}
           title="Open the Interest Validation tool (localhost:8501) — starts it locally via Start App.command if it isn't already running"
         >
@@ -937,7 +962,7 @@ function QuickActions({ ticket, onTicketUpdate, onStartTriage, onStartReverseFee
         </ActionButton>
         <ActionButton
           variant="teal"
-          onClick={onStartRefundAuthLetter}
+          onClick={() => { recordClick(ticket.id, 'refund_auth_letter'); onStartRefundAuthLetter(); }}
           title="Generate a refund authorization letter — pulls the client's name and mailing address from Atlas, fills the template, exports a PDF and attaches it to this ticket"
         >
           ✉ Refund Auth Letter
@@ -964,7 +989,7 @@ function QuickActions({ ticket, onTicketUpdate, onStartTriage, onStartReverseFee
       <div style={{ display: 'flex', gap: 'var(--mint-sp-2)' }}>
         <ActionButton
           variant="blue"
-          onClick={onStartReverseFee}
+          onClick={() => { recordClick(ticket.id, 'reverse_fee'); onStartReverseFee(); }}
           // Interest tickets (by workType OR by content) don't need a ticket-provided
           // clientEmail — the workflow fetches it from Atlas on entry.
           disabled={
@@ -976,13 +1001,14 @@ function QuickActions({ ticket, onTicketUpdate, onStartTriage, onStartReverseFee
         >
           ↗ Reverse Fee
         </ActionButton>
-        <ActionButton variant="indigo" onClick={onStartCustomCcStatement} title="Start Custom CC Statement workflow (corrected statement from the client's statement PDF)">
+        <ActionButton variant="indigo" onClick={() => { recordClick(ticket.id, 'custom_cc_statement'); onStartCustomCcStatement(); }} title="Start Custom CC Statement workflow (corrected statement from the client's statement PDF)">
           🧾 Custom CC Statement
         </ActionButton>
         <ActionButton
           variant="violet"
           onClick={() => {
             if (!ticket.identityId) return;
+            recordClick(ticket.id, 'card_issuance_mgr');
             void stageCardIssuanceSearch(ticket.identityId, ticket.id);
             window.open(CARD_ISSUANCE_MANAGER_URL, '_blank', 'noopener,noreferrer');
           }}
@@ -1013,6 +1039,29 @@ function QuickActions({ ticket, onTicketUpdate, onStartTriage, onStartReverseFee
         </div>
       ) : null}
     </div>
+  );
+}
+
+// ---------- stats button (📊 → navigates to StatsView) ----------
+
+function StatsButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      title="Sidekick usage stats"
+      aria-label="Stats"
+      style={{
+        width: 32, height: 32, borderRadius: 8,
+        border: 'var(--mint-card-stroke)',
+        background: 'var(--mint-bg-card)',
+        color: 'var(--mint-fg-subdued-title)',
+        cursor: 'pointer',
+        fontSize: 14,
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+      }}
+    >
+      📊
+    </button>
   );
 }
 
