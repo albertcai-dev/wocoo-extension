@@ -1,11 +1,12 @@
 // Wallet Triage workflow constants — URLs the workflow opens, and the
 // comment template fragment used after the @mention.
 
+import { PRESET_DASHBOARD_IDS, presetDashboardUrl } from './presetConfig';
+
 // Dashboard URL stripped of `native_filters_key`. Per [[preset-native-filters-key]]:
 // the Preset content script can't clear filter chips baked into that URL param,
 // so we apply the identity_id filter via chrome.storage.local instead.
-export const WALLET_TRIAGE_DASHBOARD_URL =
-  'https://8a26d867.wealthsimple-aws-mpc.app.preset.io/superset/dashboard/8014/';
+export const WALLET_TRIAGE_DASHBOARD_URL = presetDashboardUrl(PRESET_DASHBOARD_IDS.walletTriage);
 
 // Internal reference doc that agents consult alongside the Preset dashboard
 // when triaging wallet-provisioning issues.

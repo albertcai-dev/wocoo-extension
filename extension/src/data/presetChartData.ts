@@ -3,9 +3,10 @@
 // returned wire carries. Uses /api/v1/chart/data rather than SQL Lab so the dashboard's
 // own dataset logic is reused as-is. Runs in a hidden Preset tab (see presetSql.ts).
 
-import { chromeTabDeps, PRESET_BASE, rowsOrThrow, withPresetTab, type PageSqlResult, type PresetTabDeps } from './presetSql';
+import { PRESET_BASE, WIRE_SENDS_DATASET_ID } from './presetConfig';
+import { chromeTabDeps, lowerKeys, rowsOrThrow, withPresetTab, type PageSqlResult, type PresetTabDeps } from './presetSql';
 
-export const WIRE_SENDS_DATASET_ID = 62667;
+export { WIRE_SENDS_DATASET_ID };
 
 export interface WireSendRow {
   sourceId: string;
@@ -102,14 +103,14 @@ function formatCreatedAt(v: unknown): string {
 }
 
 export function toWireSendRows(rows: Record<string, unknown>[]): WireSendRow[] {
-  return rows.map((r) => ({
+  return rows.map(lowerKeys).map((r) => ({
     sourceId: str(r.source_id),
     identityId: str(r.actor_identity_id),
-    fundingIntentId: str(r['FI canonical id']),
+    fundingIntentId: str(r['fi canonical id']),
     amount: str(r.requested_amount_value),
     currency: str(r.currency),
     createdAt: formatCreatedAt(r.created_at),
-    status: str(r['Wire Send status']),
+    status: str(r['wire send status']),
   }));
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PRESET_BASE, PresetAuthError, pageRunSql, parsePastedResults, rowsOrThrow, runPresetSql, withPresetTab, type PresetSqlDeps, type PresetTabDeps } from './presetSql';
+import { lowerKeys, PRESET_BASE, PresetAuthError, pageRunSql, parsePastedResults, rowsOrThrow, runPresetSql, withPresetTab, type PresetSqlDeps, type PresetTabDeps } from './presetSql';
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -101,7 +101,7 @@ describe('pageRunSql', () => {
   it('is self-contained (executeScript serialises its source)', () => {
     const src = pageRunSql.toString();
     expect(src).not.toContain('PRESET_BASE');
-    expect(src).not.toContain('PANTHEON_DATABASE_ID');
+    expect(src).not.toContain('WAREHOUSE_DATABASE_ID');
     expect(src).not.toContain('PresetAuthError');
   });
 });
@@ -238,6 +238,12 @@ describe('withPresetTab', () => {
     const { deps, removed } = tabDeps();
     await expect(withPresetTab(deps, async () => { throw new Error('body failed'); })).rejects.toThrow('body failed');
     expect(removed).toEqual([9]);
+  });
+});
+
+describe('lowerKeys', () => {
+  it('lower-cases column names and keeps values', () => {
+    expect(lowerKeys({ REQUEST_ID: 'A', 'Wire Send status': 'X', last4: 7 })).toEqual({ request_id: 'A', 'wire send status': 'X', last4: 7 });
   });
 });
 

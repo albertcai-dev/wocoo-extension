@@ -7,8 +7,9 @@
 // request runs in that page via chrome.scripting.executeScript in the MAIN world. The user's
 // session cookies come along; nothing is written to chrome.storage.
 
-export const PRESET_BASE = 'https://8a26d867.wealthsimple-aws-mpc.app.preset.io';
-export const PANTHEON_DATABASE_ID = 3;
+import { PRESET_BASE, WAREHOUSE_DATABASE_ID } from './presetConfig';
+
+export { PRESET_BASE };
 /** Direct = run the SQL automatically from a hidden Preset tab (spike S1,
  *  docs/superpowers/specs/2026-10-05-insurance-eligibility-spikes.md). */
 export const PRESET_DIRECT_ENABLED = true;
@@ -137,6 +138,17 @@ const chromeDeps: PresetSqlDeps = {
   },
 };
 
+/**
+ * Lower-cases every column name. Snowflake upper-cases unquoted identifiers (`request_id`
+ * comes back as `REQUEST_ID`) where Redshift lower-cases them, so row readers go through this
+ * and work against either warehouse.
+ */
+export function lowerKeys(row: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(row)) out[k.toLowerCase()] = v;
+  return out;
+}
+
 /** A page function's result → rows, or the matching error. */
 export function rowsOrThrow(result: PageSqlResult | undefined): Record<string, unknown>[] {
   if (!result) throw new Error('Preset tab returned no result.');
@@ -180,7 +192,7 @@ export async function runPresetSql(
   deps: PresetSqlDeps = chromeDeps,
 ): Promise<Record<string, unknown>[]> {
   return withPresetTab(deps, async (tabId) =>
-    rowsOrThrow(await deps.executeScript(tabId, [PRESET_BASE, PANTHEON_DATABASE_ID, sql])));
+    rowsOrThrow(await deps.executeScript(tabId, [PRESET_BASE, WAREHOUSE_DATABASE_ID, sql])));
 }
 
 /** Parse CSV or tab-separated values with quote handling. */

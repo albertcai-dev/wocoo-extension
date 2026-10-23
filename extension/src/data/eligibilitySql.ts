@@ -3,6 +3,7 @@
 
 import { normalizeName } from './eligibilityParse';
 import type { EligibilityRequest, WarehouseRow } from './eligibilityTypes';
+import { lowerKeys } from './presetSql';
 
 export const CREDIT_PRODUCT_IDS = [
   'ws_visa_infinite_privilege',
@@ -116,7 +117,7 @@ function bool(v: unknown): boolean | null {
 }
 
 export function toWarehouseRows(rows: Record<string, unknown>[]): WarehouseRow[] {
-  return rows.map((r) => ({
+  return rows.map(lowerKeys).map((r) => ({
     requestId: str(r.request_id),
     matchRule: str(r.match_rule) === 'name' ? 'name' : 'email',
     identityId: str(r.identity_id),

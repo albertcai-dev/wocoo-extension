@@ -37,6 +37,7 @@ import { fetchAtlasAccountIdHeadless } from '../data/atlasAccountLookup';
 import { needsWNumberLookup } from '../data/reimbConfig';
 import { markWorkflowHandled } from '../data/outcomeCapture';
 import { stagePresetIdentity as stageIdentityForPreset } from '../data/presetIdentity';
+import { PRESET_DASHBOARD_IDS, presetDashboardUrl } from '../data/presetConfig';
 
 const TRANSITION_TO_DONE_ID = '251';
 
@@ -1042,7 +1043,7 @@ function Step3Body(props: {
   showContinue: boolean;
   onVerify: () => void;
 }) {
-  const presetUrl = 'https://8a26d867.wealthsimple-aws-mpc.app.preset.io/superset/dashboard/5790/';
+  const presetUrl = presetDashboardUrl(PRESET_DASHBOARD_IDS.overpayment);
   const atlasUrl = `https://atlas.wealthsimple.com/identity/${props.ticket.identityId}/overview/?ticketId=${props.ticket.id}`;
   const i2cUrl = 'https://wealthsimplecs.mycardplace.com/customerservice/wealthsimplelogin.jsp';
   const stageI2cEmail = () => {

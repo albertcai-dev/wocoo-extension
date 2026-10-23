@@ -86,6 +86,11 @@ describe('toWireSendRows', () => {
       amount: '56295.89', currency: 'CAD', createdAt: '2026-10-07 01:58:55 UTC', status: 'ACCEPTED',
     }]);
   });
+  it('reads Snowflake-style UPPERCASE column names', () => {
+    const upper = Object.fromEntries(Object.entries(ROW).map(([k, v]) => [k.toUpperCase(), v]));
+    expect(toWireSendRows([upper])).toEqual(toWireSendRows([ROW]));
+    expect(toWireSendRows([upper])[0].status).toBe('ACCEPTED');
+  });
   it('keeps a string created_at and blanks missing fields', () => {
     expect(toWireSendRows([{ created_at: '2026-10-07 01:58:55.123', source_id: null }])[0]).toMatchObject({
       createdAt: '2026-10-07 01:58:55', sourceId: '', currency: '',

@@ -70,4 +70,16 @@ describe('toWarehouseRows', () => {
     expect(rows[1].isDelinquent).toBeNull();
     expect(rows[1].matchRule).toBe('name');
   });
+  it('reads Snowflake-style UPPERCASE column names', () => {
+    const [row] = toWarehouseRows([
+      { REQUEST_ID: 'abc123', MATCH_RULE: 'name', IDENTITY_ID: 'identity-X', CLIENT_EMAIL: 'P@Example.com',
+        FIRST_NAME: 'Priya', LAST_NAME: 'Ramanathan', LAST4: '1763', CARD_PRODUCT: 'ws_visa_infinite_plus',
+        CREATED_DATE: '01/02/2026', IS_DELINQUENT: true },
+    ]);
+    expect(row).toEqual({
+      requestId: 'abc123', matchRule: 'name', identityId: 'identity-X', clientEmail: 'p@example.com',
+      firstName: 'Priya', lastName: 'Ramanathan', last4: '1763', cardProduct: 'ws_visa_infinite_plus',
+      createdDate: '01/02/2026', isDelinquent: true,
+    });
+  });
 });

@@ -55,6 +55,7 @@ import type { TicketTransitionKind } from '../data/ticketLogTypes';
 import { clearPresetIdentityMirror, mirrorPresetIdentity, stagePresetIdentity } from '../data/presetIdentity';
 import { stageCardIssuanceSearch } from '../data/cardIssuanceStage';
 import { captureJiraOutcomeLive } from '../data/outcomeCaptureLive';
+import { PRESET_DASHBOARD_IDS, presetDashboardUrl } from '../data/presetConfig';
 
 // Bridge: DOM-observer transition detections come in as chrome.runtime messages from
 // the service worker. Feed them into the local event bus so a single subscribe path
@@ -664,10 +665,7 @@ const KOHO_ADMIN_URL = 'https://admin.koho.ca/';
 // state with prior identities, which the content script can't reliably clear (they
 // render as a "+ N ..." overflow chip, not as individual chips). Loading the
 // dashboard cold gives a clean slate for the content script to type into.
-const VERIFY_ELIGIBLE_DD_URLS = [
-  'https://8a26d867.wealthsimple-aws-mpc.app.preset.io/superset/dashboard/7320/',
-  'https://8a26d867.wealthsimple-aws-mpc.app.preset.io/superset/dashboard/8324/',
-];
+const VERIFY_ELIGIBLE_DD_URLS = PRESET_DASHBOARD_IDS.verifyEligibleDd.map(presetDashboardUrl);
 
 // Atlas's Card Issuance Manager. The identity is staged in storage rather than passed as
 // a query param — the tool reads its Identity ID from a form field, not the URL.

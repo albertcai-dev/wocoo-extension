@@ -10,8 +10,9 @@ import { useEffect, useState } from 'react';
 import type { WocooTicket } from '../data/mockTicket';
 import { postComment, transitionTicketThroughPath } from '../api/jira';
 import { stagePresetIdentity } from '../data/presetIdentity';
+import { PRESET_DASHBOARD_IDS, presetDashboardUrl } from '../data/presetConfig';
 
-const RPIN_DASHBOARD_URL = 'https://8a26d867.wealthsimple-aws-mpc.app.preset.io/superset/dashboard/7666/';
+const RPIN_DASHBOARD_URL = presetDashboardUrl(PRESET_DASHBOARD_IDS.visaCompanionRpin);
 const I2C_FORM_URL = 'https://tracking.i2cinc.com/servicedesk/customer/portal/2/create/17';
 // WOCOO workflow requires Triage → Back Office → Pending External; there's no direct
 // Triage → Pending External transition. We walk the chain via transitionTicketThroughPath,
