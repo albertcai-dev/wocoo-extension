@@ -11,7 +11,12 @@ import type { WocooTicket } from '../data/mockTicket';
 
 const POLL_MS = 8_000;
 
-export function SolveWithAgentButton({ ticket, onSolved }: { ticket: WocooTicket; onSolved: () => void }) {
+/** `solveRequest`: bumped by the draft card's "Solve again" to press Solve from there. */
+export function SolveWithAgentButton({ ticket, onSolved, solveRequest = 0 }: {
+  ticket: WocooTicket;
+  onSolved: () => void;
+  solveRequest?: number;
+}) {
   const [item, setItem] = useState<AgentItemState | null>(null);
   const [available, setAvailable] = useState(false);
   const [pressed, setPressed] = useState(false);
@@ -49,9 +54,17 @@ export function SolveWithAgentButton({ ticket, onSolved }: { ticket: WocooTicket
     return () => clearInterval(timer);
   }, [view.kind, ticket.id]);
 
+  // "Solve again" on the draft card: same press, then reload the card (the queued ticket has no draft).
+  const lastRequest = useRef(solveRequest);
+  useEffect(() => {
+    if (solveRequest === lastRequest.current) return;
+    lastRequest.current = solveRequest;
+    void solve().then((ok) => { if (ok) onSolvedRef.current(); });
+  }, [solveRequest]);
+
   if (!available || !solveOffered(ticket.workType)) return null;
 
-  async function solve() {
+  async function solve(): Promise<boolean> {
     setBusy(true);
     setError(null);
     try {
@@ -60,8 +73,10 @@ export function SolveWithAgentButton({ ticket, onSolved }: { ticket: WocooTicket
       setItem({ state: res.state, solo: res.solo, priority: true });
       // The agent was off and is now on (for this ticket): same sign-in check as the toggle.
       if (res.solo) void checkAgentLogins((site, status) => setLogins((prev) => ({ ...prev, [site]: status })));
+      return true;
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+      return false;
     } finally {
       setBusy(false);
     }

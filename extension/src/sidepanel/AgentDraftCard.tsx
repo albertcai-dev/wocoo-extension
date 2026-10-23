@@ -107,12 +107,14 @@ const INSERT_FORCE: Partial<Record<Extract<Prefill, { kind: 'skipped' }>['reason
 
 const STATUSES: ReadonlyArray<WocooTicket['status']> = ['Triage', 'Back Office', 'Pending', 'Done', 'Cancelled', 'Other'];
 
-export function AgentDraftCard({ ticket, onOpenWorkflow, onTicketUpdate, onOpenMove }: {
+export function AgentDraftCard({ ticket, onOpenWorkflow, onTicketUpdate, onOpenMove, onSolveAgain }: {
   ticket: WocooTicket;
   onOpenWorkflow: (workflow: NonNullable<DraftActionNeeded['workflow']>) => void;
   onTicketUpdate?: (t: WocooTicket) => void;
   /** Opens the Move modal pre-filled from the agent's move suggestion. */
   onOpenMove?: (prefill: MovePrefill) => void;
+  /** Re-queues the ticket with the agent (e.g. after a new message); this draft is replaced. */
+  onSolveAgain?: () => void;
 }) {
   const [load, setLoad] = useState<Load>({ kind: 'loading' });
 
@@ -151,16 +153,18 @@ export function AgentDraftCard({ ticket, onOpenWorkflow, onTicketUpdate, onOpenM
       onOpenWorkflow={onOpenWorkflow}
       onTicketUpdate={onTicketUpdate}
       onOpenMove={onOpenMove}
+      onSolveAgain={onSolveAgain}
     />
   );
 }
 
-function DraftBody({ ticket, draft, onOpenWorkflow, onTicketUpdate, onOpenMove }: {
+function DraftBody({ ticket, draft, onOpenWorkflow, onTicketUpdate, onOpenMove, onSolveAgain }: {
   ticket: WocooTicket;
   draft: AgentDraft;
   onOpenWorkflow: (workflow: NonNullable<DraftActionNeeded['workflow']>) => void;
   onTicketUpdate?: (t: WocooTicket) => void;
   onOpenMove?: (prefill: MovePrefill) => void;
+  onSolveAgain?: () => void;
 }) {
   const editable = draft.outcome === 'draft' || draft.outcome === 'needs_info';
   const [text, setText] = useState(() => segmentsToPlain(draft.segments));
@@ -420,7 +424,19 @@ function DraftBody({ ticket, draft, onOpenWorkflow, onTicketUpdate, onOpenMove }
 
   return (
     <div style={cardStyle}>
-      <div style={{ fontSize: 'var(--mint-text-meta)', fontWeight: 700, color: 'var(--mint-fg-strong)' }}>{header}</div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+        <div style={{ fontSize: 'var(--mint-text-meta)', fontWeight: 700, color: 'var(--mint-fg-strong)' }}>{header}</div>
+        {onSolveAgain && (
+          <button
+            type="button"
+            style={{ ...secondaryButton, padding: '4px 8px', fontSize: 'var(--mint-text-nano)', flexShrink: 0 }}
+            title="Have the Sidekick Agent redo this ticket, e.g. after a new message. Replaces this draft."
+            onClick={onSolveAgain}
+          >
+            ↻ Solve again
+          </button>
+        )}
+      </div>
       {draft.summary && <div style={mutedStyle}>{draft.summary}</div>}
 
       {draft.action_needed && (

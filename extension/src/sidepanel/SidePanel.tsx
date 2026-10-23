@@ -301,6 +301,7 @@ function TicketViewInner({ ticket, onTicketUpdate, onStartTriage, onStartReverse
   const [showComments, setShowComments] = useState(false);
   // Bumped when "Solve using Sidekick Agent" finishes, so the draft card reloads.
   const [draftRefresh, setDraftRefresh] = useState(0);
+  const [solveRequest, setSolveRequest] = useState(0);
   // Lifted from QuickActions so other surfaces (e.g. CredRouteCard recommendation banner)
   // can open the Clone/Move modal with a specific destination preselected.
   const [moveOpen, setMoveOpen] = useState(false);
@@ -593,13 +594,14 @@ function TicketViewInner({ ticket, onTicketUpdate, onStartTriage, onStartReverse
         onTicketUpdate={onTicketUpdate}
         onOpenWorkflow={(w) => { if (w === 'overpayment') onStartTriage(); else onStartReverseFee(); }}
         onOpenMove={openPrefilledMove}
+        onSolveAgain={() => setSolveRequest((n) => n + 1)}
       />
 
       {/* AI VERDICT — grounded in the ticket log + Notion playbook */}
       <AITriageCard ticket={ticket} onOpenSettings={onOpenSettings} />
 
       {/* SOLVE — have the local Sidekick Agent draft this ticket now */}
-      <SolveWithAgentButton ticket={ticket} onSolved={() => setDraftRefresh((n) => n + 1)} />
+      <SolveWithAgentButton ticket={ticket} solveRequest={solveRequest} onSolved={() => setDraftRefresh((n) => n + 1)} />
 
       {/* RECENT COMMENTS (collapsed) */}
       {ticket.recentComments.length > 0 ? (
