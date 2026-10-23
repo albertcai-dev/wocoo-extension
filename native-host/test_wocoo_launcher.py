@@ -37,6 +37,8 @@ elif args[0] == 'lesson-add':
     print(json.dumps({"ok": True, "id": "L1", "merged": False, "echo": json.loads(sys.stdin.read())}))
 elif args[0] in ('solve', 'item'):
     print(json.dumps({"ok": True, "key": args[2], "state": "queued", "solo": args[0] == 'solve'}))
+elif args[0] == 'team':
+    print(json.dumps({"team": ["acct-team-1", "acct-team-2"]}))
 elif args[0] == 'agent-mode':
     mode = args[2] if len(args) > 2 and args[1] == '--set' else 'running'
     print(json.dumps({"ok": True, "mode": mode, "since": 1700000000.5 if len(args) > 2 else None}))
@@ -90,6 +92,10 @@ class DraftActions(unittest.TestCase):
 
     def test_i2c_activity_passes_ts(self):
         self.assertEqual(call({'action': 'i2c_activity', 'ts': 1700000000}, self.root), {'ok': True})
+
+    def test_agent_team_shells_to_store_cli(self):
+        self.assertEqual(call({'action': 'agent_team'}, self.root),
+                         {'ok': True, 'team': ['acct-team-1', 'acct-team-2']})
 
     def test_agent_mode_get(self):
         self.assertEqual(call({'action': 'agent_mode_get'}, self.root),

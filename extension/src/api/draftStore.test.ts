@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
-  DraftStoreUnavailable, getDraft, isDraftStoreNotSetUp, listReadyDrafts, recordOutcome, reportI2cActivity,
+  DraftStoreUnavailable, getDraft, getTeam, isDraftStoreNotSetUp, listReadyDrafts, recordOutcome, reportI2cActivity,
+  resetTeamCacheForTest,
 } from './draftStore';
 import type { DraftOutcomeRow } from '../data/agentDraftTypes';
 
@@ -111,5 +112,27 @@ describe('isDraftStoreNotSetUp', () => {
     expect(isDraftStoreNotSetUp(await getDraft('TEST-1').catch((x) => x))).toBe(true);
     mockNative(undefined, 'Access to the specified native messaging host is forbidden.');
     expect(isDraftStoreNotSetUp(await getDraft('TEST-1').catch((x) => x))).toBe(false);
+  });
+});
+
+describe('getTeam', () => {
+  afterEach(() => { resetTeamCacheForTest(); });
+
+  it('getTeam returns a set and caches', async () => {
+    const send = mockNative({ ok: true, team: ['acct-team-1', 'acct-team-2'] });
+    const a = await getTeam();
+    const b = await getTeam();
+    expect([...a]).toEqual(['acct-team-1', 'acct-team-2']);
+    expect(b).toBe(a);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0][1]).toEqual({ action: 'agent_team' });
+  });
+
+  it('throws DraftStoreUnavailable and does not cache a failure', async () => {
+    mockNative(undefined, 'Specified native messaging host not found.');
+    await expect(getTeam()).rejects.toBeInstanceOf(DraftStoreUnavailable);
+    const send = mockNative({ ok: true, team: ['acct-team-1'] });
+    expect([...(await getTeam())]).toEqual(['acct-team-1']);
+    expect(send).toHaveBeenCalledTimes(1);
   });
 });
