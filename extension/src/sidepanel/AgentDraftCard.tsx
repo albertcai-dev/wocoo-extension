@@ -5,7 +5,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { WocooTicket } from '../data/mockTicket';
 import type { AgentDraft, DraftActionNeeded, DraftSegment } from '../data/agentDraftTypes';
 import { toMovePrefill, type MovePrefill } from '../data/movePrefill';
-import { DraftStoreUnavailable, getDraft, isDraftStoreNotSetUp, recordOutcome } from '../api/draftStore';
+import { DraftStoreUnavailable, getDraft, getTeam, isDraftStoreNotSetUp, recordOutcome } from '../api/draftStore';
 import { buildJiraOutcomeRow, rememberDraft, type ExistingReply } from '../data/outcomeCapture';
 import { checkExistingReplyLive, lookupAssignedAtLive } from '../data/outcomeCaptureLive';
 import { getIssuePeople, postComment, searchJiraUsers, transitionTicketByName } from '../api/jira';
@@ -22,6 +22,8 @@ import { JIRA_TAB_URL } from '../data/jiraTab';
 import { errorBanner, primaryButton, secondaryButton } from './toolUi';
 import { LessonReview } from './LessonReview';
 import { worthReviewing } from '../data/draftLessons';
+import { greetTarget, pickReplyTarget, replyParentId, type ReplyTarget } from '../data/replyTarget';
+import { planPost } from '../data/postPlan';
 
 type Load =
   | { kind: 'loading' }
@@ -181,6 +183,13 @@ function DraftBody({ ticket, draft, onOpenWorkflow, onTicketUpdate, onOpenMove }
   const phaseRef = useRef(phase);
   phaseRef.current = phase;
   const [gate, setGate] = useState<Gate>({ kind: 'checking' });
+  /** Whose comment Post replies under ('loading' until comments + team are read). */
+  const [target, setTarget] = useState<{ kind: 'loading' } | { kind: 'ready'; target: ReplyTarget | null; teamMissing: boolean }>({ kind: 'loading' });
+  const targetRef = useRef(target);
+  targetRef.current = target;
+  /** Set when Post found a different target and the user has seen it: '' = new comment. */
+  const [confirmedTarget, setConfirmedTarget] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const gateRef = useRef(gate);
   gateRef.current = gate;
 
@@ -204,11 +213,14 @@ function DraftBody({ ticket, draft, onOpenWorkflow, onTicketUpdate, onOpenMove }
       try {
         const existing = await checkExistingReplyLive(draft);
         if (!cancelled) setGate(existing.reply ? { kind: 'already-replied', existing } : { kind: 'open' });
+        const t = await resolveTarget(existing);
+        if (!cancelled) setTarget({ kind: 'ready', ...t });
       } catch (e) {
         // Fail closed for the automatic prefill (it would land on a ticket he may already have
         // answered); Insert draft and Post stay available, and Post checks again before posting.
         console.warn('[AgentDraftCard] could not check for an earlier reply', e);
         if (!cancelled) setGate({ kind: 'unchecked' });
+        if (!cancelled) setTarget({ kind: 'ready', target: null, teamMissing: false });
       }
     })();
     return () => { cancelled = true; };
@@ -252,6 +264,16 @@ function DraftBody({ ticket, draft, onOpenWorkflow, onTicketUpdate, onOpenMove }
     }, PREFILL_RETRY_DELAY_MS);
   };
 
+  // Never guess a target without the team list: replying under a teammate is the one mistake
+  // the rule exists to avoid, so a missing list falls back to a new comment.
+  const resolveTarget = async (existing: ExistingReply): Promise<{ target: ReplyTarget | null; teamMissing: boolean }> => {
+    try {
+      return { target: pickReplyTarget(existing.comments, await getTeam()), teamMissing: false };
+    } catch {
+      return { target: null, teamMissing: true };
+    }
+  };
+
   // Pre-fill the Jira comment box with the (mention-resolved, possibly edited) draft. Never saves.
   const sendPrefill = async (force: boolean, auto = false) => {
     if (mentions.kind !== 'done') return;
@@ -293,6 +315,9 @@ function DraftBody({ ticket, draft, onOpenWorkflow, onTicketUpdate, onOpenMove }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editable, gate.kind, mentions.kind]);
 
+  /** The target Post settled on (kept for the outcome row and a retried status change). */
+  const postTargetRef = useRef<ReplyTarget | null>(null);
+
   const resolving = mentions.kind === 'resolving';
   const allowed = editable && !resolving && canPost(draft, actionDone, text);
   const flags = useMemo(() => draft.flags.filter((f) => !(draft.outcome === 'no_new_angle' && f === 'no_new_angle')), [draft]);
@@ -300,6 +325,7 @@ function DraftBody({ ticket, draft, onOpenWorkflow, onTicketUpdate, onOpenMove }
   const onPost = async () => {
     if (mentions.kind !== 'done') return;
     setError(null);
+    setNotice(null);
     let commentPosted = phase === 'comment-posted';
     // 'posting' holds until the transition settles, so Retry is never live mid-flight.
     setPhase('posting');
@@ -318,13 +344,36 @@ function DraftBody({ ticket, draft, onOpenWorkflow, onTicketUpdate, onOpenMove }
         setGate({ kind: 'already-replied', existing });
         return;
       }
+      // A comment that arrived since the card loaded changes who this replies under: show it,
+      // and only post on a second click.
+      const shown = targetRef.current.kind === 'ready' ? targetRef.current.target : null;
+      const fresh = await resolveTarget(existing);
+      const plan = planPost({ shown, fresh: fresh.target, confirmedId: confirmedTarget });
+      setTarget({ kind: 'ready', ...fresh });
+      if (plan.kind === 'targetChanged') {
+        setConfirmedTarget(plan.target?.commentId ?? '');
+        setPhase('idle');
+        setNotice(plan.target
+          ? `${plan.target.name} commented since this draft was written. Post again to reply to them.`
+          : 'The comment this was replying to is gone. Post again to send it as a new comment.');
+        return;
+      }
+      postTargetRef.current = plan.target;
     }
     try {
       if (!commentPosted) {
-        const postedSegments = plainToSegments(text, mentions.segments);
-        await postComment(ticket.id, postedSegments, { multiline: true });
+        const t = postTargetRef.current;
+        const base = plainToSegments(text, mentions.segments);
+        const postedSegments = t ? greetTarget(base, t) : base;
+        const parentId = t ? replyParentId(t) : undefined;
+        const posted = await postComment(ticket.id, postedSegments, { multiline: true, parentId });
         commentPosted = true;
-        if (worthReviewing(segmentsToPlain(draft.segments), text)) setEditedPost(text);
+        setNotice(parentId && posted.parentId == null
+          ? "Posted, but Jira didn't thread it: it went in as a normal comment."
+          : null);
+        if (worthReviewing(segmentsToPlain(t ? greetTarget(draft.segments, t) : draft.segments), segmentsToPlain(postedSegments), t?.name ?? null)) {
+          setEditedPost(segmentsToPlain(postedSegments));
+        }
         void markPostedThisSession(ticket.id, draft.created_at);
         void requestClearPrefill(ticket.id, postedSegments);
       }
@@ -352,7 +401,9 @@ function DraftBody({ ticket, draft, onOpenWorkflow, onTicketUpdate, onOpenMove }
       recordedRef.current = true;
       try {
         const assignedAt = await lookupAssignedAtLive(ticket.id);
-        await recordOutcome(buildOutcomeRow(draft, text, ticket, actualStatus, { assignedAt }));
+        const t = postTargetRef.current;
+        const sent = t ? segmentsToPlain(greetTarget(plainToSegments(text, mentions.segments), t)) : text;
+        await recordOutcome(buildOutcomeRow(draft, sent, ticket, actualStatus, { assignedAt, replyTarget: t }));
       } catch (e) {
         console.warn('Could not record the draft outcome', e);
         setRecordFailed(true);
@@ -521,6 +572,17 @@ function DraftBody({ ticket, draft, onOpenWorkflow, onTicketUpdate, onOpenMove }
             style={textareaStyle}
             aria-label="Draft reply"
           />
+          {target.kind === 'ready' && (
+            <div style={mutedStyle}>
+              {target.target ? (
+                <>Replying to <a href={`https://wealthsimple.atlassian.net/browse/${ticket.id}?focusedCommentId=${target.target.commentId}`} target="_blank" rel="noreferrer">{target.target.name || 'this person'}'s comment</a></>
+              ) : 'New comment'}
+            </div>
+          )}
+          {target.kind === 'ready' && target.teamMissing && (
+            <div style={warnStyle}>Couldn't load your team list, so this posts as a new comment.</div>
+          )}
+          {notice && <div style={warnStyle}>{notice}</div>}
           {mentions.kind === 'done' && mentions.unresolved.map((m) => (
             <div key={m} style={warnStyle}>Couldn't resolve {m} — check before posting</div>
           ))}
@@ -542,7 +604,7 @@ function DraftBody({ ticket, draft, onOpenWorkflow, onTicketUpdate, onOpenMove }
             </button>
           )}
           {editedPost !== null && (
-            <LessonReview ticketKey={ticket.id} workType={ticket.workType} draft={segmentsToPlain(draft.segments)} posted={editedPost} evidence={draft.evidence} />
+            <LessonReview ticketKey={ticket.id} workType={ticket.workType} draft={segmentsToPlain(postTargetRef.current ? greetTarget(draft.segments, postTargetRef.current) : draft.segments)} posted={editedPost} evidence={draft.evidence} />
           )}
           {phase === 'idle' && prefill.kind === 'inserted' && !prefill.partial && (
             <div style={mutedStyle}>Draft inserted into the Jira comment box (not saved) — edit it there and click Save.</div>
