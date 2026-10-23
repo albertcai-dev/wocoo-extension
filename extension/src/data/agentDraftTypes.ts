@@ -24,7 +24,7 @@ export type DraftFlag =
 export type DraftMoveDestination =
   | 'EOC' | 'DBO' | 'CRED' | 'FRAUD' | 'PRR' | 'PFO' | 'BOPSFUND' | 'WORS' | 'BOTI';
 
-export type DraftEvidenceKind = 'ticket' | 'i2c' | 'koho' | 'atlas' | 'precedent' | 'doc' | 'cxo' | 'compass';
+export type DraftEvidenceKind = 'ticket' | 'i2c' | 'koho' | 'atlas' | 'preset' | 'precedent' | 'doc' | 'cxo' | 'compass';
 
 export type DraftWorkflow = 'reverse_fee' | 'reverse_interest_fee' | 'overpayment';
 
