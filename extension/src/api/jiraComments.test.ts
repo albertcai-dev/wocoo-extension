@@ -217,6 +217,30 @@ describe('buildCommentAdf', () => {
     expect(norm(back)).toBe(norm(plain));
   });
 
+  const sentBody = (fn: ReturnType<typeof mockFetch>) => {
+    const call = fn.mock.calls.filter((c) => String(c[0]).endsWith('/comment')).pop()!;
+    return JSON.parse(String((call as unknown as [string, RequestInit])[1].body));
+  };
+
+  it('postComment sends parentId as a number', async () => {
+    const fn = mockFetch({ ok: true, body: { id: '777', parentId: 6736037 } });
+    await postComment('TEST-1', [{ type: 'text', text: 'hi' }], { parentId: '6736037' });
+    expect(sentBody(fn).parentId).toBe(6736037);
+  });
+
+  it('postComment without parentId sends no parentId key', async () => {
+    const fn = mockFetch({ ok: true, body: { id: '778' } });
+    await postComment('TEST-1', [{ type: 'text', text: 'hi' }]);
+    expect('parentId' in sentBody(fn)).toBe(false);
+  });
+
+  it('returns echoed parentId', async () => {
+    mockFetch({ ok: true, body: { id: '779', parentId: 42 } });
+    expect(await postComment('TEST-1', [{ type: 'text', text: 'hi' }], { parentId: '42' })).toEqual({ id: '779', parentId: '42' });
+    mockFetch({ ok: true, body: { id: '780' } });
+    expect(await postComment('TEST-1', [{ type: 'text', text: 'hi' }], { parentId: '42' })).toEqual({ id: '780', parentId: null });
+  });
+
   it('postComment passes multiline through and defaults it off', async () => {
     const fn = mockFetch({ ok: true, body: {} });
     await postComment('TEST-1', [{ type: 'text', text: 'a\n\nb' }]);

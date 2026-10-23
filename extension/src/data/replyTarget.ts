@@ -25,6 +25,12 @@ export function pickReplyTarget(comments: JiraCommentDetail[], team: ReadonlySet
   return null;
 }
 
+/** The `parentId` to send when replying under `target`. Provisional: the target's own id, until
+ *  Task 6 checks what Jira's Reply sends for a comment that is itself inside a thread. */
+export function replyParentId(target: ReplyTarget): string {
+  return target.commentId;
+}
+
 const GREETING_PREFIX = /^\s*(hi|hey|hello)?\s*$/i;
 
 /** Index of the draft's greeting mention: the first mention, if only a greeting word precedes it. */

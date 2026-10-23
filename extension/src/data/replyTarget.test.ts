@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { JiraCommentDetail } from '../api/jira';
 import type { DraftSegment } from './agentDraftTypes';
-import { greetTarget, pickReplyTarget, stripReplyGreeting, type ReplyTarget } from './replyTarget';
+import { greetTarget, pickReplyTarget, replyParentId, stripReplyGreeting, type ReplyTarget } from './replyTarget';
 
 const TEAM = new Set(['acct-team-1', 'acct-team-2']);
 
@@ -118,5 +118,16 @@ describe('stripReplyGreeting', () => {
 
   it('leaves text alone with no target name', () => {
     expect(stripReplyGreeting('@Jenn Hi, x', null)).toBe('@Jenn Hi, x');
+  });
+});
+
+describe('replyParentId', () => {
+  it('reply to a top-level comment uses its id', () => {
+    expect(replyParentId({ commentId: '9', parentId: null, accountId: 'a', name: 'A' })).toBe('9');
+  });
+
+  it('reply to a reply uses replyParentId', () => {
+    // Provisional until Task 6 checks what Jira's own Reply sends for a reply inside a thread.
+    expect(replyParentId({ commentId: '9', parentId: '5', accountId: 'a', name: 'A' })).toBe('9');
   });
 });
