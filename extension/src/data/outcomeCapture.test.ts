@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { AgentDraft, ReadyDraftRow } from './agentDraftTypes';
 import type { JiraCommentDetail } from '../api/jira';
-import { markPostedThisSession, resetPostedMemoryForTests } from './agentDraftView';
+import { buildOutcomeRow, markPostedThisSession, resetPostedMemoryForTests } from './agentDraftView';
 import {
   buildJiraOutcomeRow, mergeComments, fetchCommentsForOutcome, rememberDraft,
   captureJiraOutcome, resetOutcomeCaptureState, type CaptureDeps,
@@ -25,6 +25,38 @@ function draft(over: Partial<AgentDraft> = {}): AgentDraft {
 // Jira's own timestamp format (offset without a colon). 12:00Z == 07:00-0500.
 const c = (id: string, author: string, created: string, text = ''): JiraCommentDetail =>
   ({ id, authorAccountId: author, authorName: '', authorAccountType: 'atlassian', parentId: null, created, text });
+
+describe('reply greeting in outcome rows', () => {
+  const T = { commentId: '50', parentId: null, accountId: 'acct-jenn', name: 'Jenn' };
+  const greeted = draft({ segments: [{ type: 'text', text: 'Hi ' }, { type: 'mention', text: '@Reporter', accountId: 'acct-r' }, { type: 'text', text: ', ok' }] });
+
+  it('firstReplyAfterDraft counts a threaded reply', () => {
+    const reply = { ...c('2', ME, '2026-01-01T07:30:00.000-0500', 'Hi @Jenn, ok'), parentId: '50' };
+    expect(firstReplyAfterDraft(draft(), [c('1', OTHER, '2026-01-01T06:00:00.000-0500', 'q'), reply], ME)?.id).toBe('2');
+  });
+
+  it("jira outcome row strips Jira's leading mention", () => {
+    const comments = [
+      { ...c('50', 'acct-jenn', '2026-01-01T06:00:00.000-0500', 'question'), authorName: 'Jenn' },
+      { ...c('51', ME, '2026-01-01T07:30:00.000-0500', '@Jenn Hi @Jenn, ok'), parentId: '50' },
+    ];
+    const row = buildJiraOutcomeRow(greeted, comments, ME, 'Done');
+    expect(row.posted_text).toBe('Hi @Jenn, ok');
+    expect(row.draft_text).toBe('Hi @Jenn, ok');
+  });
+
+  it('jira outcome row leaves a top-level reply alone', () => {
+    const row = buildJiraOutcomeRow(greeted, [c('51', ME, '2026-01-01T07:30:00.000-0500', 'Hi @Reporter, ok')], ME, 'Done');
+    expect(row.posted_text).toBe('Hi @Reporter, ok');
+    expect(row.draft_text).toBe('Hi @Reporter, ok');
+  });
+
+  it('card outcome row uses the greeted draft as draft_text', () => {
+    const row = buildOutcomeRow(greeted, 'Hi @Jenn, ok', { id: 'TEST-1' }, 'Done', { replyTarget: T });
+    expect(row.draft_text).toBe('Hi @Jenn, ok');
+    expect(row.posted_text).toBe('Hi @Jenn, ok');
+  });
+});
 
 describe('buildJiraOutcomeRow', () => {
   it("uses the user's first comment after the draft", () => {

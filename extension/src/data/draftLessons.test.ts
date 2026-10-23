@@ -7,6 +7,11 @@ describe('worthReviewing', () => {
     expect(worthReviewing('Hi, it posted.', 'hi,  it  posted.')).toBe(false);
     expect(worthReviewing('Hi, it posted on Oct 4.', 'Hi, it posted on Oct 5.')).toBe(false);
   });
+  it('worthReviewing ignores the reply greeting', () => {
+    const n = 'Jennifer Longname-Example';
+    expect(worthReviewing(`Hi @${n}, ok`, `@${n} Hi @${n}, ok`)).toBe(true);
+    expect(worthReviewing(`Hi @${n}, ok`, `@${n} Hi @${n}, ok`, n)).toBe(false);
+  });
   it('reviews a real rewrite', () => {
     expect(worthReviewing(
       'Hi, KOHO replied. They found nothing, and also the debit backouts are unrelated, please retry at another ATM.',

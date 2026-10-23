@@ -43,7 +43,12 @@ export function buildJiraOutcomeRow(
 ): DraftOutcomeRow {
   const reply = firstReplyAfterDraft(draft, comments, myAccountId);
   const posted = reply ? reply.text ?? '' : null;
-  return buildOutcomeRow(draft, posted, { id: draft.ticket }, actualStatus, { via: 'jira', assignedAt });
+  // A reply saved with Jira's Reply: whose comment it went under (the person it greets).
+  const parent = reply?.parentId ? comments.find((c) => c.id === reply.parentId) : undefined;
+  const replyTarget = parent
+    ? { commentId: parent.id, parentId: parent.parentId, accountId: parent.authorAccountId, name: parent.authorName }
+    : null;
+  return buildOutcomeRow(draft, posted, { id: draft.ticket }, actualStatus, { via: 'jira', assignedAt, replyTarget });
 }
 
 /** When the ticket was assigned, from the store's ready list (epoch seconds -> ISO). null when

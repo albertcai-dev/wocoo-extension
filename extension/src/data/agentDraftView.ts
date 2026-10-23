@@ -4,6 +4,7 @@
 import type { AgentDraft, DraftFlag, DraftOutcomeRow, DraftSegment } from './agentDraftTypes';
 import type { WocooTicket } from './mockTicket';
 import { createSessionMarks } from './sessionMarks';
+import { greetTarget, stripReplyGreeting, type ReplyTarget } from './replyTarget';
 
 /** Text a segment shows in the editor. Mention text already carries its "@". A smartcard shows its
  *  href (that is what gets posted as the block card), falling back to text only when it has none. */
@@ -84,16 +85,20 @@ export function buildOutcomeRow(
   postedText: string | null,
   ticket: { id: string },
   actualStatus: string | null,
-  opts: { via?: DraftOutcomeRow['via']; assignedAt?: string | null } = {},
+  opts: { via?: DraftOutcomeRow['via']; assignedAt?: string | null; replyTarget?: ReplyTarget | null } = {},
 ): DraftOutcomeRow {
+  // A threaded reply: compare against the draft as greeted for that person, and without the tag
+  // Jira's Reply puts in front, so neither counts as the user's edit.
+  const target = opts.replyTarget ?? null;
+  const segments = target ? greetTarget(draft.segments, target) : draft.segments;
   return {
     key: ticket.id,
     work_type: draft.work_type,
     draft_created_at: draft.created_at,
     recorded_at: new Date().toISOString(),
     via: opts.via ?? 'sidekick',
-    draft_text: segmentsToPlain(draft.segments),
-    posted_text: postedText,
+    draft_text: segmentsToPlain(segments),
+    posted_text: postedText == null ? null : stripReplyGreeting(postedText, target?.name ?? null),
     suggested_status: draft.suggested_status,
     actual_status: actualStatus,
     flags: draft.flags,
