@@ -82,10 +82,12 @@ export type CardView = {
     typicalS: number | null;
     /** The current attempt number; null on a first attempt. */
     attempt: number | null;
+    maxAttempts: number;
     rows: { id: StepId; label: string; state: RowState; seconds: number | null }[];
     /** done / (6 - skipped), 0..100. */
     barPct: number;
-    slow: null | { stepMin: number; cutoffMin: number; attempt: number; maxAttempts: number };
+    /** cutoffMin is null when the session has no deadline. */
+    slow: null | { stepMin: number; cutoffMin: number | null; attempt: number; maxAttempts: number };
   };
   /** The "nothing being worked" line. */
   idleLine: null | { tone: 'neutral' | 'warning' | 'negative'; text: string; aside: string | null };
@@ -237,7 +239,7 @@ function buildCurrent(c: Cur, s: AgentStatus, now: number): NonNullable<CardView
     const stepStart = c.steps.length > 0 ? c.steps[c.steps.length - 1].at : c.begunAt;
     slow = {
       stepMin: minutesUp(stepStart === null ? 0 : now - stepStart),
-      cutoffMin: c.deadlineAt === null ? 0 : Math.max(0, Math.ceil((c.deadlineAt - now) / 60)),
+      cutoffMin: c.deadlineAt === null ? null : Math.max(0, Math.ceil((c.deadlineAt - now) / 60)),
       attempt: c.attempts + 1,
       maxAttempts: c.maxAttempts,
     };
@@ -250,6 +252,7 @@ function buildCurrent(c: Cur, s: AgentStatus, now: number): NonNullable<CardView
     elapsedS,
     typicalS: s.typicalS,
     attempt: c.attempts > 0 ? c.attempts + 1 : null,
+    maxAttempts: c.maxAttempts,
     rows,
     barPct,
     slow,

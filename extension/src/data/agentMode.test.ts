@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { agentModeHelper, agentModeSince, normaliseAgentMode } from './agentMode';
+import { agentLocalTime, agentModeHelper, agentModeSince, normaliseAgentMode } from './agentMode';
 
 describe('normaliseAgentMode', () => {
   it('passes through running and paused with since', () => {
@@ -36,5 +36,16 @@ describe('agentModeSince', () => {
 
   it('prefixes a formatted local time', () => {
     expect(agentModeSince(1700000000)).toMatch(/^since .+/);
+  });
+});
+
+describe('agentLocalTime', () => {
+  it('is null when unset', () => {
+    expect(agentLocalTime(null)).toBeNull();
+    expect(agentLocalTime(Infinity)).toBeNull();
+  });
+
+  it('is agentModeSince without the prefix', () => {
+    expect(agentModeSince(1700000000)).toBe(`since ${agentLocalTime(1700000000)}`);
   });
 });

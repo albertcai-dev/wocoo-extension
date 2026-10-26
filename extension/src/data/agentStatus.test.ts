@@ -281,13 +281,14 @@ describe('agentCardView: attempt and slow', () => {
   it('shows attempt only when attempts > 0', () => {
     expect(agentCardView(status({ current: current({ attempts: 0 }) }), NOW).current!.attempt).toBeNull();
     expect(agentCardView(status({ current: current({ attempts: 1 }) }), NOW).current!.attempt).toBe(2);
+    expect(agentCardView(status({ current: current({ maxAttempts: 4 }) }), NOW).current!.maxAttempts).toBe(4);
   });
 
   it('is slow past 3 x typical', () => {
     const base = { begunAt: NOW - 901, steps: [{ step: 'read' as const, at: NOW - 125 }] };
     const v = agentCardView(status({ typicalS: 300, current: current({ ...base, attempts: 1 }) }), NOW);
     expect(v.current!.typicalS).toBe(300);
-    expect(v.current!.slow).toEqual({ stepMin: 3, cutoffMin: 0, attempt: 2, maxAttempts: 3 });
+    expect(v.current!.slow).toEqual({ stepMin: 3, cutoffMin: null, attempt: 2, maxAttempts: 3 });
     // exactly 3x is not slow
     const ok = agentCardView(status({ typicalS: 300, current: current({ begunAt: NOW - 900 }) }), NOW);
     expect(ok.current!.slow).toBeNull();

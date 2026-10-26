@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
-  DraftStoreUnavailable, getDraft, isDraftStoreNotSetUp, listReadyDrafts, recordOutcome, reportI2cActivity,
+  DraftStoreUnavailable, getAgentStatus, getDraft, isDraftStoreNotSetUp, listReadyDrafts, recordOutcome, reportI2cActivity,
 } from './draftStore';
 import type { DraftOutcomeRow } from '../data/agentDraftTypes';
 
@@ -89,6 +89,8 @@ describe('isDraftStoreNotSetUp', () => {
     expect(isDraftStoreNotSetUp(err('Not found: /Users/someone/projects/wocoo-draft-agent/src/store_cli.py'))).toBe(true);
     // An older launcher (interest tool only) that predates the draft actions.
     expect(isDraftStoreNotSetUp(err("Unknown action: 'draft_get'"))).toBe(true);
+    // A launcher from before the progress card.
+    expect(isDraftStoreNotSetUp(err("Unknown action: 'agent_status'"))).toBe(true);
   });
 
   it('is false for a real failure worth a one-line message', () => {
@@ -111,5 +113,23 @@ describe('isDraftStoreNotSetUp', () => {
     expect(isDraftStoreNotSetUp(await getDraft('TEST-1').catch((x) => x))).toBe(true);
     mockNative(undefined, 'Access to the specified native messaging host is forbidden.');
     expect(isDraftStoreNotSetUp(await getDraft('TEST-1').catch((x) => x))).toBe(false);
+  });
+});
+
+describe('getAgentStatus', () => {
+  it('asks the host for agent_status and normalises the reply', async () => {
+    const send = mockNative({ ok: true, mode: 'running', queue: [{ key: 'Q-1', summary: 'One', tag: 'solve' }] });
+    const s = await getAgentStatus();
+    expect(send.mock.calls[0][1]).toEqual({ action: 'agent_status' });
+    expect(s.mode).toBe('running');
+    expect(s.queue).toEqual([{ key: 'Q-1', summary: 'One', tag: 'solve' }]);
+    expect(s.current).toBeNull();
+  });
+
+  it('throws DraftStoreUnavailable when the host fails', async () => {
+    mockNative({ ok: false, error: "Unknown action: 'agent_status'" });
+    const e = await getAgentStatus().catch((x) => x);
+    expect(e).toBeInstanceOf(DraftStoreUnavailable);
+    expect(isDraftStoreNotSetUp(e)).toBe(true);
   });
 });

@@ -3,6 +3,7 @@
 
 import type { AgentDraft, DraftOutcomeRow, ReadyDraftRow } from '../data/agentDraftTypes';
 import { normaliseAgentMode, type AgentMode, type AgentModeState } from '../data/agentMode';
+import { normaliseAgentStatus, type AgentStatus } from '../data/agentStatus';
 
 export type { AgentMode };
 
@@ -24,7 +25,7 @@ const NOT_SET_UP = [
   /native messaging host not found/i,
   /^host not found/i,
   /^Not found: .*store_cli\.py$/i,
-  /^Unknown action: '?(draft_|lesson_|i2c_activity|agent_mode_|agent_solve|agent_item)/i,
+  /^Unknown action: '?(draft_|lesson_|i2c_activity|agent_mode_|agent_solve|agent_item|agent_status)/i,
 ];
 
 /** True when the draft store failed only because it isn't set up here, so the UI should render
@@ -130,4 +131,10 @@ export interface LessonVerdict {
 /** Saves the user's Keep / Wrong on a proposed lesson. Kept lessons steer future drafts. */
 export async function saveLesson(lesson: LessonVerdict): Promise<void> {
   await call({ action: 'lesson_add', lesson });
+}
+
+/** The agent's live status for the Settings progress card: current ticket and steps, Compass
+ *  waits, queue and last tick. */
+export async function getAgentStatus(): Promise<AgentStatus> {
+  return normaliseAgentStatus(await call({ action: 'agent_status' }));
 }

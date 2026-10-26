@@ -11,6 +11,8 @@ import { getAgentMode, isDraftStoreNotSetUp, setAgentMode } from '../api/draftSt
 import { agentModeHelper, agentModeSince, type AgentModeState } from '../data/agentMode';
 import { checkAgentLogins } from '../api/loginCheck';
 import { loginSummary, type LoginSite, type LoginStatus } from '../data/loginCheck';
+import { AgentProgress } from './AgentProgress';
+import { useAgentStatus } from './useAgentStatus';
 
 export function SettingsView({ onBack, onSignOut }: { onBack: () => void; onSignOut: () => void }) {
   return (
@@ -291,6 +293,7 @@ function DraftAgentSection() {
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [logins, setLogins] = useState<Partial<Record<LoginSite, LoginStatus | 'checking' | 'error'>>>({});
+  const progress = useAgentStatus();
 
   // Switching the agent on: make sure the Okta-backed sites it reads are signed in. Signed-in
   // probe tabs close by themselves; any that need the user stay open, the first one in front.
@@ -315,6 +318,7 @@ function DraftAgentSection() {
     try {
       const next = await setAgentMode(state.mode === 'running' ? 'paused' : 'running');
       setState(next);
+      progress.refresh();
       if (next.mode === 'running') void checkLogins();
       else setLogins({});
     } catch (e) {
@@ -359,6 +363,14 @@ function DraftAgentSection() {
 
         {error ? (
           <div style={{ marginTop: 6, fontSize: 'var(--mint-text-nano)', lineHeight: 1.4, color: 'var(--mint-negative-fg-strong)' }}>{error}</div>
+        ) : null}
+
+        {progress.view ? <AgentProgress view={progress.view} now={progress.now} /> : null}
+
+        {progress.failed ? (
+          <div style={{ marginTop: 6, fontSize: 'var(--mint-text-nano)', lineHeight: 1.4, color: 'var(--mint-fg-soft)' }}>
+            Couldn't refresh agent status.
+          </div>
         ) : null}
       </div>
     </Section>
