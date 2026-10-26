@@ -157,12 +157,13 @@ describe('normaliseAgentStatus', () => {
     const s = normaliseAgentStatus({
       mode: 'running',
       current: { summary: 'keyless' },
-      queue: [{ key: 'Q-1', tag: 'urgent' }, { key: 'Q-2', tag: 'reply' }],
+      queue: [{ key: 'Q-1', tag: 'urgent' }, { key: 'Q-2', tag: 'reply' }, { key: 'Q-3', tag: 'compass_timeout' }],
     });
     expect(s.current).toBeNull();
     expect(s.queue).toEqual([
       { key: 'Q-1', summary: '', tag: null },
       { key: 'Q-2', summary: '', tag: 'reply' },
+      { key: 'Q-3', summary: '', tag: 'compass_timeout' },
     ]);
   });
 });
@@ -261,15 +262,38 @@ describe('agentCardView: working rows and bar', () => {
     expect(v.current!.barPct).toBe(83); // 5 / 6, never 0
   });
 
-  it('on a compass resume, ignores reported gather steps and follows only write', () => {
-    const before = status({
-      current: current({ resumeReason: 'compass_timeout', stage: 'gather', steps: [{ step: 'lookup', at: NOW - 5 }] }),
-    });
+  it('on a compass resume before any stage, reads through compass as done and write todo', () => {
+    const before = status({ current: current({ resumeReason: 'compass_timeout', stage: null, steps: [] }) });
     expect(rowStates(before)).toEqual({
       read: 'done', preset: 'done', lookup: 'done', precedent: 'done', compass: 'done', write: 'todo',
     });
-    expect(agentCardView(before, NOW).current!.rows.find((r) => r.id === 'lookup')!.seconds).toBeNull();
+    expect(agentCardView(before, NOW).current!.rows.find((r) => r.id === 'read')!.seconds).toBeNull();
+  });
 
+  it('on a compass resume where gather runs anyway (no bundle), uses the normal row rules', () => {
+    const s = status({
+      current: current({
+        resumeReason: 'compass_reply', stage: 'gather',
+        steps: [{ step: 'read', at: NOW - 40 }, { step: 'lookup', at: NOW - 5 }],
+      }),
+    });
+    expect(rowStates(s)).toEqual({
+      read: 'done', preset: 'skipped', lookup: 'now', precedent: 'todo', compass: 'todo', write: 'todo',
+    });
+    const rows = agentCardView(s, NOW).current!.rows;
+    expect(rows.find((r) => r.id === 'read')!.seconds).toBe(35);
+    expect(rows.find((r) => r.id === 'lookup')!.seconds).toBe(5);
+    const fresh = status({ current: current({ resumeReason: 'compass_timeout', stage: 'gather', steps: [] }) });
+    expect(Object.values(rowStates(fresh)).every((st) => st === 'todo')).toBe(true);
+  });
+
+  it('on a compass resume, follows only write once in the write stage', () => {
+    const stray = status({
+      current: current({ resumeReason: 'compass_reply', stage: 'write', steps: [{ step: 'lookup', at: NOW - 5 }] }),
+    });
+    expect(rowStates(stray)).toEqual({
+      read: 'done', preset: 'done', lookup: 'done', precedent: 'done', compass: 'done', write: 'todo',
+    });
     const writing = status({
       current: current({ resumeReason: 'compass_answered', stage: 'write', steps: [{ step: 'write', at: NOW - 5 }] }),
     });
@@ -288,7 +312,7 @@ describe('agentCardView: attempt and slow', () => {
     const base = { begunAt: NOW - 901, steps: [{ step: 'read' as const, at: NOW - 125 }] };
     const v = agentCardView(status({ typicalS: 300, current: current({ ...base, attempts: 1 }) }), NOW);
     expect(v.current!.typicalS).toBe(300);
-    expect(v.current!.slow).toEqual({ stepMin: 3, cutoffMin: null, attempt: 2, maxAttempts: 3 });
+    expect(v.current!.slow).toEqual({ stepMin: 2, cutoffMin: null, attempt: 2, maxAttempts: 3 });
     // exactly 3x is not slow
     const ok = agentCardView(status({ typicalS: 300, current: current({ begunAt: NOW - 900 }) }), NOW);
     expect(ok.current!.slow).toBeNull();
@@ -299,7 +323,7 @@ describe('agentCardView: attempt and slow', () => {
       status({ current: current({ begunAt: NOW - 1250, deadlineAt: NOW + 250 }) }),
       NOW,
     );
-    expect(v.current!.slow).toEqual({ stepMin: 21, cutoffMin: 5, attempt: 1, maxAttempts: 3 });
+    expect(v.current!.slow).toEqual({ stepMin: 20, cutoffMin: 5, attempt: 1, maxAttempts: 3 });
     const ok = agentCardView(status({ current: current({ deadlineAt: NOW + 300 }) }), NOW);
     expect(ok.current!.slow).toBeNull();
   });
@@ -307,6 +331,44 @@ describe('agentCardView: attempt and slow', () => {
   it('is never slow when both typical and deadline are null', () => {
     const v = agentCardView(status({ current: current({ begunAt: NOW - 100_000 }) }), NOW);
     expect(v.current!.slow).toBeNull();
+  });
+
+  it('floors stepMin so it matches the m:ss step clock', () => {
+    const v = agentCardView(
+      status({ current: current({ deadlineAt: NOW + 10, steps: [{ step: 'read', at: NOW - (17 * 60 + 25) }] }) }),
+      NOW,
+    );
+    expect(v.current!.rows.find((r) => r.id === 'read')!.seconds).toBe(17 * 60 + 25);
+    expect(v.current!.slow!.stepMin).toBe(17);
+  });
+
+  it('times stepMin from the step shown as current on a compass resume', () => {
+    // A stray gather step reported after write would not be the shown row: write is.
+    const v = agentCardView(
+      status({
+        current: current({
+          resumeReason: 'compass_reply', stage: 'write', begunAt: NOW - 1300, deadlineAt: NOW + 100,
+          steps: [{ step: 'write', at: NOW - 600 }, { step: 'lookup', at: NOW - 30 }],
+        }),
+      }),
+      NOW,
+    );
+    expect(v.current!.rows.find((r) => r.id === 'write')).toMatchObject({ state: 'now', seconds: 600 });
+    expect(v.current!.slow!.stepMin).toBe(10);
+  });
+
+  it('times stepMin from begun_at when no step is shown as current', () => {
+    const v = agentCardView(
+      status({
+        current: current({
+          resumeReason: 'compass_reply', stage: 'write', begunAt: NOW - 1250, deadlineAt: NOW + 100,
+          steps: [{ step: 'lookup', at: NOW - 30 }],
+        }),
+      }),
+      NOW,
+    );
+    expect(v.current!.rows.every((r) => r.state !== 'now')).toBe(true);
+    expect(v.current!.slow!.stepMin).toBe(20);
   });
 
   it('gives stepMin at least 1', () => {
@@ -382,9 +444,20 @@ describe('agentCardView: idle line', () => {
       .toEqual({ tone: 'negative', text: 'Check failed · VPN or MCPLocker may be down', aside: null });
   });
 
-  it('polling', () => {
-    expect(agentCardView(status({ tick: tick({ phase: 'polling', nextCheckAt: null }) }), NOW).idleLine)
-      .toEqual({ tone: 'neutral', text: 'Checking for new tickets', aside: null });
+  it('poll failed more than once in a row says for how long', () => {
+    expect(agentCardView(status({ tick: tick({ phase: 'poll_failed', pollFailures: 1, nextCheckAt: NOW + 61 }) }), NOW).idleLine!.text)
+      .toBe('Check failed · VPN or MCPLocker may be down · retrying in 2m');
+    expect(agentCardView(status({ tick: tick({ phase: 'poll_failed', pollFailures: 2, nextCheckAt: NOW + 61 }) }), NOW).idleLine)
+      .toEqual({ tone: 'negative', text: 'Check failed · VPN or MCPLocker may be down · retrying in 2m · failing for ~10 min', aside: null });
+    expect(agentCardView(status({ tick: tick({ phase: 'poll_failed', pollFailures: 7, nextCheckAt: null }) }), NOW).idleLine!.text)
+      .toBe('Check failed · VPN or MCPLocker may be down · failing for ~35 min');
+  });
+
+  it('polling and polled both read as checking for new tickets', () => {
+    for (const phase of ['polling', 'polled']) {
+      expect(agentCardView(status({ tick: tick({ phase, nextCheckAt: null }) }), NOW).idleLine)
+        .toEqual({ tone: 'neutral', text: 'Checking for new tickets', aside: null });
+    }
   });
 
   it('deferred for a foreign browser session', () => {

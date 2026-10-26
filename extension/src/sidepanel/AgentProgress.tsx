@@ -13,11 +13,12 @@ type IdleLine = NonNullable<CardView['idleLine']>;
 
 /** `now` (epoch seconds) is the clock the view was computed at; timers are already in `view`. */
 export function AgentProgress({ view }: { view: CardView; now: number }) {
-  const sections: React.ReactNode[] = [];
+  // Keyed by name: an index key would remount (and collapse "+N more") when Waiting appears.
+  const sections: { name: string; node: React.ReactNode }[] = [];
 
   if (view.current || view.idleLine || view.finishing) {
-    sections.push(
-      <div key="current">
+    sections.push({ name: 'current', node: (
+      <div>
         {view.finishing ? (
           <div style={{ ...nano, marginBottom: view.current ? 6 : 0 }}>
             Finishing <b style={{ color: 'var(--mint-fg-subdued-title)' }}>{view.finishing}</b>, then stopping
@@ -25,30 +26,30 @@ export function AgentProgress({ view }: { view: CardView; now: number }) {
         ) : null}
         {view.current ? <CurrentTicket c={view.current} /> : null}
         {!view.current && view.idleLine ? <Idle line={view.idleLine} footer={view.emptyFooter} /> : null}
-      </div>,
-    );
+      </div>
+    ) });
   }
 
-  if (view.waiting.length > 0) sections.push(<Waiting key="waiting" rows={view.waiting} />);
+  if (view.waiting.length > 0) sections.push({ name: 'waiting', node: <Waiting rows={view.waiting} /> });
 
   if (view.solo) {
-    sections.push(
-      <div key="solo" style={nano}>
+    sections.push({ name: 'solo', node: (
+      <div style={nano}>
         Solving only <b style={{ color: 'var(--mint-fg-subdued-title)' }}>{view.solo}</b>, then pausing.
-      </div>,
-    );
+      </div>
+    ) });
   } else if (view.queue.length > 0) {
-    sections.push(<Queue key="queue" label={view.queueLabel} rows={view.queue} />);
+    sections.push({ name: 'queue', node: <Queue label={view.queueLabel} rows={view.queue} /> });
   }
 
   if (sections.length === 0) return null;
   return (
     <>
       <style>{PULSE_CSS}</style>
-      {sections.map((s, i) => (
-        <div key={i}>
+      {sections.map((s) => (
+        <div key={s.name}>
           <div style={divider} />
-          {s}
+          {s.node}
         </div>
       ))}
     </>
@@ -199,7 +200,7 @@ function Queue({ label: text, rows }: { label: CardView['queueLabel']; rows: Car
         </div>
       ))}
       {more > 0 ? (
-        <button onClick={() => setExpanded(true)} style={moreBtn}>+{more} more</button>
+        <button type="button" onClick={() => setExpanded(true)} style={moreBtn}>+{more} more</button>
       ) : null}
     </div>
   );
@@ -250,6 +251,7 @@ const bump: React.CSSProperties = {
 const BUMP: Record<QueueTag, React.CSSProperties> = {
   solve: { color: 'var(--mint-highlight-fg-strong)', background: 'var(--mint-highlight-bg-soft)' },
   compass: { color: 'var(--mint-warning-fg-strong)', background: 'var(--mint-warning-bg-soft)' },
+  compass_timeout: { color: 'var(--mint-warning-fg-strong)', background: 'var(--mint-warning-bg-soft)' },
   reply: { color: 'var(--mint-positive-fg-strong)', background: 'var(--mint-positive-bg-soft)' },
 };
 const note: React.CSSProperties = {

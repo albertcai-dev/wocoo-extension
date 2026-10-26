@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { agentLocalTime } from './agentMode';
-import { currentMeta, emptyFooterText, formatClock, slowNote, waitingNote } from './agentProgressText';
+import { QUEUE_TAG_LABEL, currentMeta, emptyFooterText, formatClock, slowNote, waitingNote } from './agentProgressText';
 
 describe('formatClock', () => {
   it('formats m:ss under an hour', () => {
@@ -79,5 +79,16 @@ describe('emptyFooterText', () => {
 
   it('drops the Last part with no last draft', () => {
     expect(emptyFooterText({ lastKey: null, lastAt: null, draftedToday: 0 })).toEqual({ key: null, tail: '0 drafted today' });
+  });
+});
+
+describe('QUEUE_TAG_LABEL', () => {
+  it('labels every queue tag, telling a Compass reply from a timeout', () => {
+    expect(QUEUE_TAG_LABEL).toEqual({
+      solve: 'Solve',
+      compass: 'Compass replied',
+      compass_timeout: 'Compass timed out',
+      reply: 'Reply in',
+    });
   });
 });

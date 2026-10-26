@@ -48,6 +48,7 @@ export function emptyFooterText(f: NonNullable<CardView['emptyFooter']>): { key:
 export const QUEUE_TAG_LABEL: Record<QueueTag, string> = {
   solve: 'Solve',
   compass: 'Compass replied',
+  compass_timeout: 'Compass timed out',
   reply: 'Reply in',
 };
 

@@ -34,3 +34,19 @@ export function agentModeSince(since: number | null): string | null {
   const when = agentLocalTime(since);
   return when === null ? null : `since ${when}`;
 }
+
+/** The header's mode while the progress card polls: the polled status once one has been
+ *  requested after the last local change (the initial read or a toggle), else the local state.
+ *  So the header follows the agent (e.g. it pausing itself after a solo solve), and a poll that
+ *  was already in flight when the toggle landed cannot undo the toggle. Times are any one clock. */
+export function liveAgentMode(
+  local: AgentModeState | null,
+  localAt: number,
+  polled: AgentModeState | null,
+  polledRequestedAt: number | null,
+): AgentModeState | null {
+  if (polled !== null && polledRequestedAt !== null && polledRequestedAt >= localAt) {
+    return { mode: polled.mode, since: polled.since };
+  }
+  return local;
+}

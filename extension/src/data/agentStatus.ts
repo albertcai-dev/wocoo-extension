@@ -3,7 +3,8 @@
 
 export type StepId = 'read' | 'preset' | 'lookup' | 'precedent' | 'compass' | 'write';
 export type RowState = 'done' | 'now' | 'skipped' | 'todo';
-export type QueueTag = 'solve' | 'compass' | 'reply';
+/** compass = Compass replied; compass_timeout = it did not answer in time. */
+export type QueueTag = 'solve' | 'compass' | 'compass_timeout' | 'reply';
 
 /** Checklist rows in table order. */
 export const STEP_ROWS: { id: StepId; label: string }[] = [
@@ -16,7 +17,7 @@ export const STEP_ROWS: { id: StepId; label: string }[] = [
 ];
 
 const STEP_IDS = new Set<string>(STEP_ROWS.map((r) => r.id));
-const QUEUE_TAGS = new Set<string>(['solve', 'compass', 'reply']);
+const QUEUE_TAGS = new Set<string>(['solve', 'compass', 'compass_timeout', 'reply']);
 const DEFAULT_MAX_ATTEMPTS = 3;
 const SLOW_FACTOR = 3;
 const SLOW_CUTOFF_S = 300;
@@ -187,6 +188,14 @@ function minutesUp(seconds: number): number {
   return Math.max(1, Math.ceil(seconds / 60));
 }
 
+/** Whole minutes, rounded down, at least 1: matches an m:ss clock showing the same span. */
+function minutesDown(seconds: number): number {
+  return Math.max(1, Math.floor(seconds / 60));
+}
+
+/** Minutes of poll failures per consecutive failed tick (the launchd interval). */
+const POLL_EVERY_MIN = 5;
+
 type Cur = NonNullable<AgentStatus['current']>;
 type Row = NonNullable<CardView['current']>['rows'][number];
 
@@ -194,9 +203,10 @@ function buildRows(c: Cur, now: number): Row[] {
   const steps = c.steps;
   const last = steps.length > 0 ? steps[steps.length - 1] : null;
 
-  if (c.resumeReason !== null && c.resumeReason.startsWith('compass_')) {
+  if (c.resumeReason !== null && c.resumeReason.startsWith('compass_') && c.stage !== 'gather') {
     // Gathering and the Compass question happened before the agent parked the ticket; only the
-    // write step is live on a resume.
+    // write step is live on a resume. When the bundle is missing run.sh gathers again, so a
+    // gather stage falls through to the normal rules below.
     const writes = steps.filter((s) => s.step === 'write');
     const writeNow = writes.length > 0 || (steps.length === 0 && c.stage === 'write');
     return STEP_ROWS.map(({ id, label }) => {
@@ -236,9 +246,11 @@ function buildCurrent(c: Cur, s: AgentStatus, now: number): NonNullable<CardView
   const nearCutoff = c.deadlineAt !== null && c.deadlineAt - now < SLOW_CUTOFF_S;
   let slow: NonNullable<CardView['current']>['slow'] = null;
   if (overTypical || nearCutoff) {
-    const stepStart = c.steps.length > 0 ? c.steps[c.steps.length - 1].at : c.begunAt;
+    // Time the step the checklist shows as current (its seconds), else the whole ticket.
+    const nowRow = rows.find((r) => r.state === 'now');
+    const stepS = nowRow && nowRow.seconds !== null ? nowRow.seconds : c.begunAt === null ? 0 : Math.max(0, now - c.begunAt);
     slow = {
-      stepMin: minutesUp(stepStart === null ? 0 : now - stepStart),
+      stepMin: minutesDown(stepS),
       cutoffMin: c.deadlineAt === null ? null : Math.max(0, Math.ceil((c.deadlineAt - now) / 60)),
       attempt: c.attempts + 1,
       maxAttempts: c.maxAttempts,
@@ -271,10 +283,13 @@ function buildIdle(s: AgentStatus, now: number): Pick<CardView, 'idleLine' | 'em
     return line('negative', `Agent hasn't checked in for ${minutesUp(tick.at === null ? 0 : now - tick.at)} min`);
   }
   if (tick.phase === 'poll_failed') {
-    const base = 'Check failed · VPN or MCPLocker may be down';
-    return line('negative', next === null ? base : `${base} · retrying in ${next}m`);
+    let text = 'Check failed · VPN or MCPLocker may be down';
+    if (next !== null) text += ` · retrying in ${next}m`;
+    if (tick.pollFailures >= 2) text += ` · failing for ~${tick.pollFailures * POLL_EVERY_MIN} min`;
+    return line('negative', text);
   }
-  if (tick.phase === 'polling') return line('neutral', 'Checking for new tickets');
+  // polled: the poll is in, the drain has not started yet.
+  if (tick.phase === 'polling' || tick.phase === 'polled') return line('neutral', 'Checking for new tickets');
   if (tick.phase === 'deferred_foreign_pw') return line('warning', 'Waiting for your browser session to close');
   if (s.queue.length === 0) {
     return {

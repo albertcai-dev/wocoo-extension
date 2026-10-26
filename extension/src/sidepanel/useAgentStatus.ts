@@ -14,6 +14,9 @@ const visible = () => document.visibilityState === 'visible';
 export interface AgentStatusView {
   /** Null until the first status arrives, and for good once the store turns out not to be set up. */
   view: CardView | null;
+  /** The last good status (null as for view), and when (Date.now() ms) its request was sent. */
+  status: AgentStatus | null;
+  requestedAt: number | null;
   /** Epoch seconds the view was computed at. */
   now: number;
   /** The last refresh failed; the view (if any) is the last good one. */
@@ -24,6 +27,7 @@ export interface AgentStatusView {
 
 export function useAgentStatus(): AgentStatusView {
   const [status, setStatus] = useState<AgentStatus | null>(null);
+  const [requestedAt, setRequestedAt] = useState<number | null>(null);
   const [now, setNow] = useState(nowS);
   const [failed, setFailed] = useState(false);
   const stopped = useRef(false); // not set up here: never ask again
@@ -42,10 +46,12 @@ export function useAgentStatus(): AgentStatusView {
     if (stopped.current) return;
     if (inFlight.current) { again.current = true; return; }
     inFlight.current = true;
+    const sentAt = Date.now();
     getAgentStatus()
       .then((s) => {
         if (!mounted.current) return;
         setStatus(s);
+        setRequestedAt(sentAt);
         setNow(nowS());
         setFailed(false);
       })
@@ -93,5 +99,5 @@ export function useAgentStatus(): AgentStatusView {
   }, [refresh, stopTimers]);
 
   const view = useMemo(() => (status === null ? null : agentCardView(status, now)), [status, now]);
-  return { view, now, failed, refresh };
+  return { view, status, requestedAt, now, failed, refresh };
 }

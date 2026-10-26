@@ -91,6 +91,11 @@ describe('isDraftStoreNotSetUp', () => {
     expect(isDraftStoreNotSetUp(err("Unknown action: 'draft_get'"))).toBe(true);
     // A launcher from before the progress card.
     expect(isDraftStoreNotSetUp(err("Unknown action: 'agent_status'"))).toBe(true);
+    // A new launcher with an agent checkout from before `store_cli status` (argparse rejects it).
+    expect(isDraftStoreNotSetUp(err(
+      "store_cli failed: usage: store_cli.py [-h] {get,list,next} ...\n"
+      + "store_cli.py: error: argument cmd: invalid choice: 'status' (choose from 'get', 'list', 'next')",
+    ))).toBe(true);
   });
 
   it('is false for a real failure worth a one-line message', () => {
@@ -98,6 +103,8 @@ describe('isDraftStoreNotSetUp', () => {
     expect(isDraftStoreNotSetUp(err('store_cli failed: boom'))).toBe(false);
     expect(isDraftStoreNotSetUp(err('store_cli timed out after 5s'))).toBe(false);
     expect(isDraftStoreNotSetUp(err('The draft store did not respond.'))).toBe(false);
+    // Another command missing is a real version mismatch, not "not set up".
+    expect(isDraftStoreNotSetUp(err("store_cli failed: store_cli.py: error: argument cmd: invalid choice: 'stage'"))).toBe(false);
   });
 
   it('is false for anything that is not a DraftStoreUnavailable', () => {
