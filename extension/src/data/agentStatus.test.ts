@@ -439,16 +439,16 @@ describe('agentCardView: idle line', () => {
 
   it('poll failed, with and without a next check', () => {
     expect(agentCardView(status({ tick: tick({ phase: 'poll_failed', nextCheckAt: NOW + 61 }) }), NOW).idleLine)
-      .toEqual({ tone: 'negative', text: 'Check failed · VPN or MCPLocker may be down · retrying in 2m', aside: null });
+      .toEqual({ tone: 'negative', text: 'Check failed · VPN or MCPLocker may be down · retrying in 1:01', aside: null });
     expect(agentCardView(status({ tick: tick({ phase: 'poll_failed', nextCheckAt: null }) }), NOW).idleLine)
       .toEqual({ tone: 'negative', text: 'Check failed · VPN or MCPLocker may be down', aside: null });
   });
 
   it('poll failed more than once in a row says for how long', () => {
     expect(agentCardView(status({ tick: tick({ phase: 'poll_failed', pollFailures: 1, nextCheckAt: NOW + 61 }) }), NOW).idleLine!.text)
-      .toBe('Check failed · VPN or MCPLocker may be down · retrying in 2m');
+      .toBe('Check failed · VPN or MCPLocker may be down · retrying in 1:01');
     expect(agentCardView(status({ tick: tick({ phase: 'poll_failed', pollFailures: 2, nextCheckAt: NOW + 61 }) }), NOW).idleLine)
-      .toEqual({ tone: 'negative', text: 'Check failed · VPN or MCPLocker may be down · retrying in 2m · failing for ~10 min', aside: null });
+      .toEqual({ tone: 'negative', text: 'Check failed · VPN or MCPLocker may be down · retrying in 1:01 · failing for ~10 min', aside: null });
     expect(agentCardView(status({ tick: tick({ phase: 'poll_failed', pollFailures: 7, nextCheckAt: null }) }), NOW).idleLine!.text)
       .toBe('Check failed · VPN or MCPLocker may be down · failing for ~35 min');
   });
@@ -470,18 +470,18 @@ describe('agentCardView: idle line', () => {
       status({ queue: [], lastDrafted: { key: 'L-1', at: NOW - 600 }, draftedToday: 5 }),
       NOW,
     );
-    expect(v.idleLine).toEqual({ tone: 'neutral', text: 'Queue empty', aside: 'checks again in 4m' });
+    expect(v.idleLine).toEqual({ tone: 'neutral', text: 'Queue empty', aside: 'checks again in 4:00' });
     expect(v.emptyFooter).toEqual({ lastKey: 'L-1', lastAt: NOW - 600, draftedToday: 5 });
     const noNext = agentCardView(status({ queue: [], tick: tick({ nextCheckAt: null }) }), NOW);
     expect(noNext.idleLine!.aside).toBeNull();
     expect(noNext.emptyFooter).toEqual({ lastKey: null, lastAt: null, draftedToday: 0 });
   });
 
-  it('between checks, with and without a next check, minimum 1m', () => {
+  it('between checks, with and without a next check, overdue', () => {
     expect(agentCardView(status(), NOW).idleLine)
-      .toEqual({ tone: 'neutral', text: 'Between checks · next check in 4m', aside: null });
+      .toEqual({ tone: 'neutral', text: 'Between checks · next check in 4:00', aside: null });
     expect(agentCardView(status({ tick: tick({ nextCheckAt: NOW - 5 }) }), NOW).idleLine!.text)
-      .toBe('Between checks · next check in 1m');
+      .toBe('Between checks · next check any moment now');
     expect(agentCardView(status({ tick: tick({ nextCheckAt: null }) }), NOW).idleLine!.text)
       .toBe('Between checks');
     expect(agentCardView(status(), NOW).emptyFooter).toBeNull();

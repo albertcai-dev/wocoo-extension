@@ -193,6 +193,13 @@ function minutesDown(seconds: number): number {
   return Math.max(1, Math.floor(seconds / 60));
 }
 
+/** Countdown phrase for a span in seconds: "in 3:42", or "any moment now" once it has passed. */
+function countdown(seconds: number): string {
+  const s = Math.ceil(seconds);
+  if (s <= 0) return 'any moment now';
+  return `in ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
 /** Minutes of poll failures per consecutive failed tick (the launchd interval). */
 const POLL_EVERY_MIN = 5;
 
@@ -273,7 +280,7 @@ function buildCurrent(c: Cur, s: AgentStatus, now: number): NonNullable<CardView
 
 function buildIdle(s: AgentStatus, now: number): Pick<CardView, 'idleLine' | 'emptyFooter'> {
   const { tick } = s;
-  const next = tick.nextCheckAt === null ? null : minutesUp(tick.nextCheckAt - now);
+  const next = tick.nextCheckAt === null ? null : countdown(tick.nextCheckAt - now);
   const line = (tone: 'neutral' | 'warning' | 'negative', text: string, aside: string | null = null) => ({
     idleLine: { tone, text, aside },
     emptyFooter: null,
@@ -284,7 +291,7 @@ function buildIdle(s: AgentStatus, now: number): Pick<CardView, 'idleLine' | 'em
   }
   if (tick.phase === 'poll_failed') {
     let text = 'Check failed · VPN or MCPLocker may be down';
-    if (next !== null) text += ` · retrying in ${next}m`;
+    if (next !== null) text += ` · retrying ${next}`;
     if (tick.pollFailures >= 2) text += ` · failing for ~${tick.pollFailures * POLL_EVERY_MIN} min`;
     return line('negative', text);
   }
@@ -293,11 +300,11 @@ function buildIdle(s: AgentStatus, now: number): Pick<CardView, 'idleLine' | 'em
   if (tick.phase === 'deferred_foreign_pw') return line('warning', 'Waiting for your browser session to close');
   if (s.queue.length === 0) {
     return {
-      idleLine: { tone: 'neutral', text: 'Queue empty', aside: next === null ? null : `checks again in ${next}m` },
+      idleLine: { tone: 'neutral', text: 'Queue empty', aside: next === null ? null : `checks again ${next}` },
       emptyFooter: { lastKey: s.lastDrafted?.key ?? null, lastAt: s.lastDrafted?.at ?? null, draftedToday: s.draftedToday },
     };
   }
-  return line('neutral', next === null ? 'Between checks' : `Between checks · next check in ${next}m`);
+  return line('neutral', next === null ? 'Between checks' : `Between checks · next check ${next}`);
 }
 
 /** The progress card's view of a status at `now` (epoch seconds). Pure. */
