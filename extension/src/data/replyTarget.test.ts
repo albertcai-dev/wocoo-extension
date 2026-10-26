@@ -126,8 +126,8 @@ describe('replyParentId', () => {
     expect(replyParentId({ commentId: '9', parentId: null, accountId: 'a', name: 'A' })).toBe('9');
   });
 
-  it('reply to a reply uses replyParentId', () => {
-    // Provisional until Task 6 checks what Jira's own Reply sends for a reply inside a thread.
-    expect(replyParentId({ commentId: '9', parentId: '5', accountId: 'a', name: 'A' })).toBe('9');
+  it('reply to a reply uses the thread root', () => {
+    // Jira threads are one level deep: parentId must be a top-level comment (WOCOO-29976 400'd).
+    expect(replyParentId({ commentId: '9', parentId: '5', accountId: 'a', name: 'A' })).toBe('5');
   });
 });

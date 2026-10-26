@@ -25,10 +25,11 @@ export function pickReplyTarget(comments: JiraCommentDetail[], team: ReadonlySet
   return null;
 }
 
-/** The `parentId` to send when replying under `target`. Provisional: the target's own id, until
- *  Task 6 checks what Jira's Reply sends for a comment that is itself inside a thread. */
+/** The `parentId` to send when replying under `target`. Jira threads are one level deep, so a
+ *  target that is itself a reply is answered under its thread root; sending the reply's own id
+ *  400s with "Parent comment not found, and no child comments exist" (WOCOO-29976, 2026-10-26). */
 export function replyParentId(target: ReplyTarget): string {
-  return target.commentId;
+  return target.parentId ?? target.commentId;
 }
 
 const GREETING_PREFIX = /^\s*(hi|hey|hello)?\s*$/i;
