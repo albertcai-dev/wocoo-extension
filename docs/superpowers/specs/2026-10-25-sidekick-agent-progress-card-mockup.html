@@ -1,0 +1,159 @@
+<style>
+  .sk { --bg:#f5f5f4; --card:#fff; --subtle:#fafaf9; --fg:#14110c; --fg2:#4d4842; --soft:#6b665e; --inact:#a39e96; --line:#dfdcd6;
+        --pos:#148256; --posfg:#0e6f48; --posbg:rgba(20,130,86,.10); --warn:#b2691c; --warnfg:#8a4f15; --warnbg:rgba(178,105,28,.10);
+        --neg:#c13c3c; --negfg:#a02f2f; --negbg:rgba(193,60,60,.10); --hl:#4b5cc3; --hlfg:#3a479c; --hlbg:rgba(75,92,195,.10);
+        font-family: -apple-system, BlinkMacSystemFont, "Inter", sans-serif; color:var(--fg); background:var(--bg);
+        width:380px; padding:14px; border-radius:10px; box-sizing:border-box; text-align:left; }
+  .sk h4 { margin:0 0 8px; font-size:15px; font-weight:700; }
+  .sk .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px; }
+  .sk .row { display:flex; align-items:center; gap:6px; }
+  .sk .title { font-size:13px; font-weight:700; }
+  .sk .meta { font-size:11px; color:var(--soft); font-variant-numeric:tabular-nums; }
+  .sk .nano { font-size:11px; color:var(--soft); line-height:1.4; }
+  .sk .key { font-size:11px; font-weight:700; color:var(--hlfg); font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .sk .sum { font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
+  .sk .divider { height:1px; background:var(--line); margin:10px 0; }
+  .sk .label { font-size:10px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--inact); margin-bottom:6px; }
+  .sk .tag { font-size:10px; font-weight:700; padding:1px 6px; border-radius:999px; background:var(--subtle); border:1px solid var(--line); color:var(--fg2); white-space:nowrap; }
+  .sk .thin { height:4px; background:#ebe9e5; border-radius:2px; margin-top:8px; overflow:hidden; }
+  .sk .thin > div { height:100%; border-radius:2px; }
+  .sk .steps { margin:8px 0 0; padding:0; list-style:none; }
+  .sk .steps li { display:flex; gap:8px; align-items:center; font-size:12px; padding:3px 0; color:var(--fg2); }
+  .sk .dot { width:14px; height:14px; border-radius:50%; flex:none; display:flex; align-items:center; justify-content:center; font-size:9px; color:#fff; box-sizing:border-box; }
+  .sk .d-done { background:var(--pos); }
+  .sk .d-now { background:var(--hl); box-shadow:0 0 0 3px var(--hlbg); animation:pulse 1.6s infinite; }
+  .sk .d-wait { background:var(--warn); box-shadow:0 0 0 3px var(--warnbg); }
+  .sk .d-slow { background:var(--neg); box-shadow:0 0 0 3px var(--negbg); }
+  .sk .d-skip { background:#fff; border:1.5px dashed var(--line); }
+  .sk .d-todo { background:#fff; border:1.5px solid var(--line); }
+  .sk .todo { color:var(--inact); }
+  .sk .now { color:var(--fg); font-weight:700; }
+  .sk .t { margin-left:auto; font-size:10px; color:var(--soft); font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .sk .q { display:flex; gap:8px; align-items:baseline; padding:3px 0; }
+  .sk .q .n { font-size:10px; color:var(--inact); width:10px; flex:none; }
+  .sk .bump { font-size:10px; padding:1px 5px; border-radius:4px; margin-left:auto; white-space:nowrap; flex:none; }
+  .sk .b-solve { color:var(--hlfg); background:var(--hlbg); }
+  .sk .b-compass { color:var(--warnfg); background:var(--warnbg); }
+  .sk .b-reply { color:var(--posfg); background:var(--posbg); }
+  .sk .more { font-size:11px; color:var(--hlfg); }
+  .sk .note { margin-top:8px; font-size:11px; line-height:1.4; padding:6px 8px; border-radius:6px; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.55} }
+  .grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap:20px; align-items:start; }
+  .grid figure { margin:0; }
+  .grid figcaption { font-size:13px; margin:0 0 6px; font-weight:600; }
+  .grid figcaption span { font-weight:400; opacity:.75; }
+</style>
+
+<h2>Design B, with A's queue: how it looks in each state</h2>
+<p class="subtitle">Route is gone. The system it picked is now a tag next to the ticket key. The steps are grouped into six friendly rows. Ticket keys and summaries are made up.</p>
+
+<div class="grid">
+
+<!-- 1 WORKING -->
+<figure>
+<figcaption>1 · Working <span>(normal)</span></figcaption>
+<div class="sk"><h4>Sidekick Agent</h4><div class="card">
+  <div class="row"><input type="checkbox" checked><span class="title">Sidekick Agent running</span><span class="meta" style="margin-left:auto">since Oct 25, 7:39 PM</span></div>
+  <div class="divider"></div>
+  <div class="row"><span class="key">WOCOO-4821</span><span class="tag">KOHO prepaid</span><span class="meta" style="margin-left:auto">3:12 · usually ~6m</span></div>
+  <div class="sum" style="margin-top:3px">ATM fee charged twice on KOHO prepaid card</div>
+  <div class="thin"><div style="width:30%;background:var(--hl)"></div></div>
+  <ul class="steps">
+    <li><span class="dot d-done">✓</span>Read ticket &amp; client email<span class="t">0:55</span></li>
+    <li><span class="dot d-now"></span><span class="now">Checking Preset</span><span class="t">0:48</span></li>
+    <li><span class="dot d-todo"></span><span class="todo">i2c / KOHO lookup</span></li>
+    <li><span class="dot d-todo"></span><span class="todo">Precedent &amp; guides</span></li>
+    <li><span class="dot d-todo"></span><span class="todo">Ask Compass <span style="font-size:10px">(if needed)</span></span></li>
+    <li><span class="dot d-todo"></span><span class="todo">Write draft</span></li>
+  </ul>
+  <div class="divider"></div>
+  <div class="label">Up next · 4</div>
+  <div class="q"><span class="n">1</span><span class="key">WOCOO-4830</span><span class="sum">Direct deposit not credited</span><span class="bump b-solve">Solve</span></div>
+  <div class="q"><span class="n">2</span><span class="key">WOCOO-4790</span><span class="sum">Card replacement status in i2c</span><span class="bump b-compass">Compass replied</span></div>
+  <div class="q"><span class="n">3</span><span class="key">WOCOO-4812</span><span class="sum">Overdraft interest question</span></div>
+  <div class="more" style="margin-top:2px">+1 more</div>
+</div></div>
+</figure>
+
+<!-- 2 WAITING ON COMPASS -->
+<figure>
+<figcaption>2 · A ticket is waiting on Compass <span>(the agent parks it and moves on)</span></figcaption>
+<div class="sk"><h4>Sidekick Agent</h4><div class="card">
+  <div class="row"><input type="checkbox" checked><span class="title">Sidekick Agent running</span><span class="meta" style="margin-left:auto">since Oct 25, 7:39 PM</span></div>
+  <div class="divider"></div>
+  <div class="row"><span class="key">WOCOO-4812</span><span class="tag">i2c credit</span><span class="meta" style="margin-left:auto">0:40 · usually ~6m</span></div>
+  <div class="sum" style="margin-top:3px">Overdraft interest question</div>
+  <div class="thin"><div style="width:8%;background:var(--hl)"></div></div>
+  <ul class="steps">
+    <li><span class="dot d-now"></span><span class="now">Read ticket &amp; client email</span><span class="t">0:40</span></li>
+    <li><span class="dot d-todo"></span><span class="todo">Checking Preset</span></li>
+    <li><span class="dot d-todo"></span><span class="todo">i2c / KOHO lookup</span></li>
+    <li><span class="dot d-todo"></span><span class="todo">Precedent &amp; guides</span></li>
+    <li><span class="dot d-todo"></span><span class="todo">Ask Compass <span style="font-size:10px">(if needed)</span></span></li>
+    <li><span class="dot d-todo"></span><span class="todo">Write draft</span></li>
+  </ul>
+  <div class="divider"></div>
+  <div class="label" style="color:var(--warnfg)">Waiting on Compass · 1</div>
+  <div class="q"><span class="dot d-wait" style="width:10px;height:10px;font-size:7px">…</span><span class="key">WOCOO-4790</span><span class="sum">Card replacement status in i2c</span><span class="bump b-compass">22m left</span></div>
+  <div class="nano" style="margin:2px 0 0 18px">Asked 8m ago. Jumps to the front when Compass answers, or drafts without it when time runs out.</div>
+  <div class="divider"></div>
+  <div class="label">Up next · 3</div>
+  <div class="q"><span class="n">1</span><span class="key">WOCOO-4799</span><span class="sum">Statement shows wrong address</span></div>
+  <div class="q"><span class="n">2</span><span class="key">WOCOO-4805</span><span class="sum">Refund for disputed purchase</span><span class="bump b-reply">Reply in</span></div>
+  <div class="q"><span class="n">3</span><span class="key">WOCOO-4801</span><span class="sum">Pre-authorized debit reversal</span></div>
+</div></div>
+</figure>
+
+<!-- 3 SLOW / STUCK -->
+<figure>
+<figcaption>3 · Taking too long <span>(heading for the 25-min cutoff)</span></figcaption>
+<div class="sk"><h4>Sidekick Agent</h4><div class="card">
+  <div class="row"><input type="checkbox" checked><span class="title">Sidekick Agent running</span><span class="meta" style="margin-left:auto">since Oct 25, 7:39 PM</span></div>
+  <div class="divider"></div>
+  <div class="row"><span class="key">WOCOO-4821</span><span class="tag">KOHO prepaid</span><span class="meta" style="margin-left:auto;color:var(--negfg)">19:40 · usually ~6m</span></div>
+  <div class="sum" style="margin-top:3px">ATM fee charged twice on KOHO prepaid card</div>
+  <div class="thin"><div style="width:50%;background:var(--neg)"></div></div>
+  <ul class="steps">
+    <li><span class="dot d-done">✓</span>Read ticket &amp; client email<span class="t">0:55</span></li>
+    <li><span class="dot d-done">✓</span>Checking Preset<span class="t">1:20</span></li>
+    <li><span class="dot d-slow">!</span><span class="now" style="color:var(--negfg)">i2c / KOHO lookup</span><span class="t" style="color:var(--negfg)">17:25</span></li>
+    <li><span class="dot d-todo"></span><span class="todo">Precedent &amp; guides</span></li>
+    <li><span class="dot d-todo"></span><span class="todo">Ask Compass <span style="font-size:10px">(if needed)</span></span></li>
+    <li><span class="dot d-todo"></span><span class="todo">Write draft</span></li>
+  </ul>
+  <div class="note" style="background:var(--negbg);color:var(--negfg)">Same step for 17 min. Might be stuck on a login. Gets cut off in 5m and retried (attempt 1 of 3).</div>
+  <div class="divider"></div>
+  <div class="label">Up next · 4</div>
+  <div class="q"><span class="n">1</span><span class="key">WOCOO-4830</span><span class="sum">Direct deposit not credited</span><span class="bump b-solve">Solve</span></div>
+  <div class="q"><span class="n">2</span><span class="key">WOCOO-4812</span><span class="sum">Overdraft interest question</span></div>
+  <div class="more" style="margin-top:2px">+2 more</div>
+</div></div>
+</figure>
+
+<!-- 4 IDLE -->
+<figure>
+<figcaption>4 · Running, nothing to do</figcaption>
+<div class="sk"><h4>Sidekick Agent</h4><div class="card">
+  <div class="row"><input type="checkbox" checked><span class="title">Sidekick Agent running</span><span class="meta" style="margin-left:auto">since Oct 25, 7:39 PM</span></div>
+  <div class="divider"></div>
+  <div class="row"><span class="dot d-done" style="width:10px;height:10px">&nbsp;</span><span style="font-size:12px;font-weight:700">Queue empty</span><span class="meta" style="margin-left:auto">checks again in 3m</span></div>
+  <div class="nano" style="margin-top:4px">Last: <b style="color:var(--fg2)">WOCOO-4812</b> drafted at 9:41 PM · 7 drafted today</div>
+  <div class="note" style="background:var(--warnbg);color:var(--warnfg)">Waiting on Compass: WOCOO-4790 (22m left)</div>
+</div></div>
+</figure>
+
+<!-- 5 PAUSED -->
+<figure>
+<figcaption>5 · Paused</figcaption>
+<div class="sk"><h4>Sidekick Agent</h4><div class="card">
+  <div class="row"><input type="checkbox"><span class="title">Sidekick Agent Paused</span><span class="meta" style="margin-left:auto">since Oct 25, 10:02 PM</span></div>
+  <div class="divider"></div>
+  <div class="label">Queued · 4</div>
+  <div class="q"><span class="n">1</span><span class="key">WOCOO-4830</span><span class="sum">Direct deposit not credited</span><span class="bump b-solve">Solve</span></div>
+  <div class="q"><span class="n">2</span><span class="key">WOCOO-4790</span><span class="sum">Card replacement status in i2c</span><span class="bump b-compass">Compass replied</span></div>
+  <div class="q"><span class="n">3</span><span class="key">WOCOO-4812</span><span class="sum">Overdraft interest question</span></div>
+  <div class="more" style="margin-top:2px">+1 more</div>
+</div></div>
+</figure>
+
+</div>
