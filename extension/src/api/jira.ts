@@ -621,9 +621,12 @@ export function buildCommentAdf(
 export async function postComment(
   ticketKey: string,
   segments: CommentSegment[],
-  opts: { multiline?: boolean } = {},
-): Promise<void> {
-  const payload = { body: buildCommentAdf(segments, opts) };
+  opts: { multiline?: boolean; parentId?: string } = {},
+): Promise<{ id: string; parentId: string | null }> {
+  // `parentId` makes a threaded reply under that comment (what Jira's Reply does). It isn't in
+  // Atlassian's published schema, so callers check the echoed value (verified live 2026-10-23).
+  const payload: { body: unknown; parentId?: number } = { body: buildCommentAdf(segments, opts) };
+  if (opts.parentId) payload.parentId = Number(opts.parentId);
   const resp = await jiraFetch(`/rest/api/3/issue/${encodeURIComponent(ticketKey)}/comment`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -633,6 +636,8 @@ export async function postComment(
     const txt = await resp.text();
     throw new Error(`Comment post failed (HTTP ${resp.status}): ${txt}`);
   }
+  const data = await resp.json().catch(() => ({})) as { id?: string | number; parentId?: string | number };
+  return { id: data.id != null ? String(data.id) : '', parentId: data.parentId != null ? String(data.parentId) : null };
 }
 
 /** Build a MoveField from a single string value, the shape bulk-issues-move expects. */
@@ -1211,6 +1216,12 @@ export async function getIssueComments(ticketKey: string): Promise<string[]> {
 export interface JiraCommentDetail {
   id: string;
   authorAccountId: string;
+  /** Display name; '' when Jira omits the author. */
+  authorName: string;
+  /** Jira's accountType ('atlassian', 'app' for automation/bots, 'customer'); '' when absent. */
+  authorAccountType: string;
+  /** The comment this one replies under (Jira's threaded Reply); null for a top-level comment. */
+  parentId: string | null;
   created: string;
   text: string;
 }
@@ -1273,11 +1284,15 @@ export async function getIssueCommentsDetailed(
   }
   const data = await resp.json();
   const raw = (data.comments || []) as Array<{
-    id: string; author?: { accountId?: string }; created?: string; body?: unknown;
+    id: string; parentId?: string | number; created?: string; body?: unknown;
+    author?: { accountId?: string; displayName?: string; accountType?: string };
   }>;
   const rows = raw.map((c) => ({
     id: String(c.id),
     authorAccountId: c.author?.accountId || '',
+    authorName: c.author?.displayName || '',
+    authorAccountType: c.author?.accountType || '',
+    parentId: c.parentId != null ? String(c.parentId) : null,
     created: c.created || '',
     text: adfCommentToPlain(c.body),
   }));

@@ -26,7 +26,7 @@ const NOT_SET_UP = [
   /native messaging host not found/i,
   /^host not found/i,
   /^Not found: .*store_cli\.py$/i,
-  /^Unknown action: '?(draft_|lesson_|i2c_activity|agent_mode_|agent_solve|agent_item|agent_status)/i,
+  /^Unknown action: '?(draft_|lesson_|i2c_activity|agent_mode_|agent_solve|agent_item|agent_status|agent_team)/i,
   // A current launcher with an agent checkout from before the progress card: store_cli's
   // argparse rejects the `status` command.
   /invalid choice: 'status'/,
@@ -142,3 +142,20 @@ export async function saveLesson(lesson: LessonVerdict): Promise<void> {
 export async function getAgentStatus(): Promise<AgentStatus> {
   return normaliseAgentStatus(await call({ action: 'agent_status' }));
 }
+
+let teamCache: Promise<Set<string>> | null = null;
+
+/** Jira account ids of the user's team, from the draft agent's private config. Cached for the
+ *  panel's lifetime; a failure is not cached, so the next call asks again. */
+export function getTeam(): Promise<Set<string>> {
+  if (!teamCache) {
+    teamCache = call({ action: 'agent_team' }).then((reply) => {
+      const ids = (reply as HostReply & { team?: unknown }).team;
+      return new Set(Array.isArray(ids) ? ids.filter((x): x is string => typeof x === 'string') : []);
+    });
+    teamCache.catch(() => { teamCache = null; });
+  }
+  return teamCache;
+}
+
+export function resetTeamCacheForTest(): void { teamCache = null; }

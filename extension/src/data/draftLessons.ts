@@ -3,6 +3,7 @@
 // "Learned: …" note with Keep / Wrong; only kept lessons reach future drafts.
 
 import type { LlmMessage } from '../api/llmGateway';
+import { stripReplyGreeting } from './replyTarget';
 
 export const LESSON_CATEGORIES = ['tone', 'facts', 'next_step', 'routing', 'other'] as const;
 export type LessonCategory = typeof LESSON_CATEGORIES[number];
@@ -20,7 +21,8 @@ const LESSON_MAX = 300;
 const TEXT_CAP = 3000;
 
 /** Whether the edit is big enough to learn from (ignores whitespace and case). */
-export function worthReviewing(draft: string, posted: string): boolean {
+export function worthReviewing(draft: string, posted: string, replyTargetName: string | null = null): boolean {
+  posted = stripReplyGreeting(posted, replyTargetName);
   const norm = (s: string) => s.replace(/\s+/g, ' ').trim().toLowerCase();
   const a = norm(draft);
   const b = norm(posted);

@@ -33,11 +33,24 @@ describe('getIssueCommentsDetailed', () => {
     });
     const rows = await getIssueCommentsDetailed('TEST-1');
     expect(rows).toEqual([
-      { id: '101', authorAccountId: 'acct-a', created: '2026-01-01T10:00:00.000-0500', text: 'First note' },
-      { id: '102', authorAccountId: 'acct-b', created: '2026-01-01T11:00:00.000-0500', text: 'Second note' },
+      { id: '101', authorAccountId: 'acct-a', authorName: '', authorAccountType: '', parentId: null, created: '2026-01-01T10:00:00.000-0500', text: 'First note' },
+      { id: '102', authorAccountId: 'acct-b', authorName: '', authorAccountType: '', parentId: null, created: '2026-01-01T11:00:00.000-0500', text: 'Second note' },
     ]);
     const url = String(fn.mock.calls.find((c) => String(c[0]).includes('/comment'))![0]);
     expect(url).toContain('/ex/jira/cloud-1/rest/api/3/issue/TEST-1/comment');
+  });
+
+  it('maps parentId, author name and account type', async () => {
+    mockFetch({
+      ok: true,
+      body: { comments: [
+        { id: '1', author: { accountId: 'a', displayName: 'Agent A', accountType: 'atlassian' }, created: '2026-01-01T00:00:00.000+0000', body: adf('q') },
+        { id: '2', parentId: 6736037, author: { accountId: 'b', displayName: 'Bot', accountType: 'app' }, created: '2026-01-02T00:00:00.000+0000', body: adf('r') },
+      ] },
+    });
+    const rows = await getIssueCommentsDetailed('TEST-1');
+    expect(rows[0]).toMatchObject({ parentId: null, authorName: 'Agent A', authorAccountType: 'atlassian' });
+    expect(rows[1]).toMatchObject({ parentId: '6736037', authorName: 'Bot', authorAccountType: 'app' });
   });
 
   it('returns oldest first and tolerates missing author / body', async () => {
@@ -202,6 +215,30 @@ describe('buildCommentAdf', () => {
     const back = adfCommentToPlain(buildCommentAdf(segs, { multiline: true }));
     const norm = (s: string) => s.split(/\s+/).join(' ').trim();
     expect(norm(back)).toBe(norm(plain));
+  });
+
+  const sentBody = (fn: ReturnType<typeof mockFetch>) => {
+    const call = fn.mock.calls.filter((c) => String(c[0]).endsWith('/comment')).pop()!;
+    return JSON.parse(String((call as unknown as [string, RequestInit])[1].body));
+  };
+
+  it('postComment sends parentId as a number', async () => {
+    const fn = mockFetch({ ok: true, body: { id: '777', parentId: 6736037 } });
+    await postComment('TEST-1', [{ type: 'text', text: 'hi' }], { parentId: '6736037' });
+    expect(sentBody(fn).parentId).toBe(6736037);
+  });
+
+  it('postComment without parentId sends no parentId key', async () => {
+    const fn = mockFetch({ ok: true, body: { id: '778' } });
+    await postComment('TEST-1', [{ type: 'text', text: 'hi' }]);
+    expect('parentId' in sentBody(fn)).toBe(false);
+  });
+
+  it('returns echoed parentId', async () => {
+    mockFetch({ ok: true, body: { id: '779', parentId: 42 } });
+    expect(await postComment('TEST-1', [{ type: 'text', text: 'hi' }], { parentId: '42' })).toEqual({ id: '779', parentId: '42' });
+    mockFetch({ ok: true, body: { id: '780' } });
+    expect(await postComment('TEST-1', [{ type: 'text', text: 'hi' }], { parentId: '42' })).toEqual({ id: '780', parentId: null });
   });
 
   it('postComment passes multiline through and defaults it off', async () => {

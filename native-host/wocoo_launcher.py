@@ -124,6 +124,12 @@ def draft_action(action, message):
         if err:
             return {'ok': False, 'error': err}
         return data if isinstance(data, dict) else {'ok': False, 'error': 'bad store reply'}
+    if action == 'agent_team':
+        data, err = run_store(['team'])
+        if err:
+            return {'ok': False, 'error': err}
+        team = data.get('team') if isinstance(data, dict) else None
+        return {'ok': True, 'team': team if isinstance(team, list) else []}
     if action in ('agent_mode_get', 'agent_mode_set'):
         args = ['agent-mode']
         if action == 'agent_mode_set':
@@ -159,7 +165,8 @@ def draft_action(action, message):
 AGENT_MODES = ('running', 'paused')
 TICKET_KEY = re.compile(r'^[A-Z][A-Z0-9]+-\d+$')
 DRAFT_ACTIONS = ('draft_get', 'draft_list', 'draft_outcome', 'lesson_add', 'i2c_activity',
-                 'agent_mode_get', 'agent_mode_set', 'agent_solve', 'agent_item', 'agent_status')
+                 'agent_mode_get', 'agent_mode_set', 'agent_solve', 'agent_item', 'agent_status',
+                 'agent_team')
 
 
 def main():
