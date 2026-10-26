@@ -21,10 +21,32 @@ export function agentModeHelper(mode: AgentMode): string {
     : '';
 }
 
+/** Local "Oct 25, 7:39 PM" for epoch seconds, or null when unset or invalid. */
+export function agentLocalTime(at: number | null): string | null {
+  if (at === null || !Number.isFinite(at)) return null;
+  const when = new Date(at * 1000);
+  if (Number.isNaN(when.getTime())) return null;
+  return when.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+
 /** "since <local time>" for a mode-change timestamp in epoch seconds, or null when unset. */
 export function agentModeSince(since: number | null): string | null {
-  if (since === null || !Number.isFinite(since)) return null;
-  const when = new Date(since * 1000);
-  if (Number.isNaN(when.getTime())) return null;
-  return `since ${when.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`;
+  const when = agentLocalTime(since);
+  return when === null ? null : `since ${when}`;
+}
+
+/** The header's mode while the progress card polls: the polled status once one has been
+ *  requested after the last local change (the initial read or a toggle), else the local state.
+ *  So the header follows the agent (e.g. it pausing itself after a solo solve), and a poll that
+ *  was already in flight when the toggle landed cannot undo the toggle. Times are any one clock. */
+export function liveAgentMode(
+  local: AgentModeState | null,
+  localAt: number,
+  polled: AgentModeState | null,
+  polledRequestedAt: number | null,
+): AgentModeState | null {
+  if (polled !== null && polledRequestedAt !== null && polledRequestedAt >= localAt) {
+    return { mode: polled.mode, since: polled.since };
+  }
+  return local;
 }

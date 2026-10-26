@@ -8,9 +8,11 @@ import { clearI2cCredentials, getI2cCredentials, setI2cCredentials,
   clearLlmGatewayKey, getLlmGatewayKey, setLlmGatewayKey } from '../auth/credentials';
 import { pingLlmGateway } from '../api/llmGateway';
 import { getAgentMode, isDraftStoreNotSetUp, setAgentMode } from '../api/draftStore';
-import { agentModeHelper, agentModeSince, type AgentModeState } from '../data/agentMode';
+import { agentModeHelper, agentModeSince, liveAgentMode, type AgentModeState } from '../data/agentMode';
 import { checkAgentLogins } from '../api/loginCheck';
 import { loginSummary, type LoginSite, type LoginStatus } from '../data/loginCheck';
+import { AgentProgress } from './AgentProgress';
+import { useAgentStatus } from './useAgentStatus';
 
 export function SettingsView({ onBack, onSignOut }: { onBack: () => void; onSignOut: () => void }) {
   return (
@@ -285,12 +287,17 @@ function LlmGatewayRow() {
 
 // Run/pause toggle for the local draft agent. Renders nothing on machines without the agent.
 function DraftAgentSection() {
-  const [state, setState] = useState<AgentModeState | null>(null);
+  // The last mode this section read or set itself, and when (Date.now() ms). Once the progress
+  // card has a newer status, the header follows that instead (liveAgentMode).
+  const [local, setLocal] = useState<{ state: AgentModeState | null; at: number }>({ state: null, at: 0 });
   const [hidden, setHidden] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [logins, setLogins] = useState<Partial<Record<LoginSite, LoginStatus | 'checking' | 'error'>>>({});
+  const progress = useAgentStatus();
+  const polledMode = progress.status ? { mode: progress.status.mode, since: progress.status.since } : null;
+  const state = liveAgentMode(local.state, local.at, polledMode, progress.requestedAt);
 
   // Switching the agent on: make sure the Okta-backed sites it reads are signed in. Signed-in
   // probe tabs close by themselves; any that need the user stay open, the first one in front.
@@ -300,7 +307,7 @@ function DraftAgentSection() {
 
   useEffect(() => {
     getAgentMode()
-      .then(setState)
+      .then((st) => setLocal((prev) => (prev.at === 0 ? { state: st, at: 0 } : prev)))
       .catch((e) => {
         if (isDraftStoreNotSetUp(e)) setHidden(true);
         else setError(e instanceof Error ? e.message : String(e));
@@ -314,7 +321,8 @@ function DraftAgentSection() {
     setError(null);
     try {
       const next = await setAgentMode(state.mode === 'running' ? 'paused' : 'running');
-      setState(next);
+      setLocal({ state: next, at: Date.now() });
+      progress.refresh();
       if (next.mode === 'running') void checkLogins();
       else setLogins({});
     } catch (e) {
@@ -359,6 +367,14 @@ function DraftAgentSection() {
 
         {error ? (
           <div style={{ marginTop: 6, fontSize: 'var(--mint-text-nano)', lineHeight: 1.4, color: 'var(--mint-negative-fg-strong)' }}>{error}</div>
+        ) : null}
+
+        {progress.view ? <AgentProgress view={progress.view} now={progress.now} /> : null}
+
+        {progress.failed ? (
+          <div style={{ marginTop: 6, fontSize: 'var(--mint-text-nano)', lineHeight: 1.4, color: 'var(--mint-fg-soft)' }}>
+            Couldn't refresh agent status.
+          </div>
         ) : null}
       </div>
     </Section>

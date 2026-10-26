@@ -21,6 +21,7 @@ Actions:
   {"action": "agent_solve", "key": K}   -> {"ok": true, "key": K, "state": S, "solo": bool}
         draft this ticket now; a paused agent runs for this ticket only, then pauses itself
   {"action": "agent_item", "key": K}    -> {"ok": true, "key": K, "state": S|null, "solo": bool, "priority": bool}
+  {"action": "agent_status"}            -> the agent's status dict, passed through unchanged
         The draft_* / i2c_activity / agent_mode_* actions shell out to the local draft agent's store CLI:
         `python3 $WDA_ROOT/src/store_cli.py ...` (WDA_ROOT defaults to ~/projects/wocoo-draft-agent).
 
@@ -143,6 +144,11 @@ def draft_action(action, message):
         if err:
             return {'ok': False, 'error': err}
         return data if isinstance(data, dict) else {'ok': False, 'error': 'bad store reply'}
+    if action == 'agent_status':
+        data, err = run_store(['status'])
+        if err:
+            return {'ok': False, 'error': err}
+        return data if isinstance(data, dict) else {'ok': False, 'error': 'bad store reply'}
     ts = message.get('ts')
     if isinstance(ts, bool) or not isinstance(ts, (int, float)):
         return {'ok': False, 'error': 'i2c_activity needs a numeric ts'}
@@ -153,7 +159,7 @@ def draft_action(action, message):
 AGENT_MODES = ('running', 'paused')
 TICKET_KEY = re.compile(r'^[A-Z][A-Z0-9]+-\d+$')
 DRAFT_ACTIONS = ('draft_get', 'draft_list', 'draft_outcome', 'lesson_add', 'i2c_activity',
-                 'agent_mode_get', 'agent_mode_set', 'agent_solve', 'agent_item')
+                 'agent_mode_get', 'agent_mode_set', 'agent_solve', 'agent_item', 'agent_status')
 
 
 def main():

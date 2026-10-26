@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { agentModeHelper, agentModeSince, normaliseAgentMode } from './agentMode';
+import { agentLocalTime, agentModeHelper, agentModeSince, liveAgentMode, normaliseAgentMode } from './agentMode';
 
 describe('normaliseAgentMode', () => {
   it('passes through running and paused with since', () => {
@@ -36,5 +36,37 @@ describe('agentModeSince', () => {
 
   it('prefixes a formatted local time', () => {
     expect(agentModeSince(1700000000)).toMatch(/^since .+/);
+  });
+});
+
+describe('agentLocalTime', () => {
+  it('is null when unset', () => {
+    expect(agentLocalTime(null)).toBeNull();
+    expect(agentLocalTime(Infinity)).toBeNull();
+  });
+
+  it('is agentModeSince without the prefix', () => {
+    expect(agentModeSince(1700000000)).toBe(`since ${agentLocalTime(1700000000)}`);
+  });
+});
+
+describe('liveAgentMode', () => {
+  const running = { mode: 'running' as const, since: 100 };
+  const paused = { mode: 'paused' as const, since: 200 };
+
+  it('uses the local state until a status arrives', () => {
+    expect(liveAgentMode(running, 10, null, null)).toEqual(running);
+    expect(liveAgentMode(null, 0, null, null)).toBeNull();
+  });
+
+  it('follows a status requested after the last local change, e.g. the agent pausing itself', () => {
+    expect(liveAgentMode(running, 10, paused, 20)).toEqual(paused);
+    expect(liveAgentMode(running, 10, paused, 10)).toEqual(paused);
+    expect(liveAgentMode(null, 0, paused, 5)).toEqual(paused);
+  });
+
+  it('keeps the optimistic toggle over a status requested before it', () => {
+    // toggled to paused at 30; a poll sent at 25 still says running
+    expect(liveAgentMode(paused, 30, running, 25)).toEqual(paused);
   });
 });

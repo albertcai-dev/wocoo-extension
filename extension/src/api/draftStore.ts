@@ -3,6 +3,7 @@
 
 import type { AgentDraft, DraftOutcomeRow, ReadyDraftRow } from '../data/agentDraftTypes';
 import { normaliseAgentMode, type AgentMode, type AgentModeState } from '../data/agentMode';
+import { normaliseAgentStatus, type AgentStatus } from '../data/agentStatus';
 
 export type { AgentMode };
 
@@ -18,13 +19,17 @@ export class DraftStoreUnavailable extends Error {
 
 /** Errors meaning this machine has no draft agent set up: the native host isn't installed
  *  ("…host not found"), the host can't find the agent's store CLI ("Not found: …store_cli.py"),
- *  or an older launcher predates the draft actions ("Unknown action: 'draft_…'"). Teammates
+ *  an older launcher predates the draft actions ("Unknown action: 'draft_…'"), or an older agent
+ *  predates `store_cli status` ("invalid choice: 'status'"). Teammates
  *  sharing the extension without the agent hit these on every ticket. */
 const NOT_SET_UP = [
   /native messaging host not found/i,
   /^host not found/i,
   /^Not found: .*store_cli\.py$/i,
-  /^Unknown action: '?(draft_|lesson_|i2c_activity|agent_mode_|agent_solve|agent_item)/i,
+  /^Unknown action: '?(draft_|lesson_|i2c_activity|agent_mode_|agent_solve|agent_item|agent_status)/i,
+  // A current launcher with an agent checkout from before the progress card: store_cli's
+  // argparse rejects the `status` command.
+  /invalid choice: 'status'/,
 ];
 
 /** True when the draft store failed only because it isn't set up here, so the UI should render
@@ -130,4 +135,10 @@ export interface LessonVerdict {
 /** Saves the user's Keep / Wrong on a proposed lesson. Kept lessons steer future drafts. */
 export async function saveLesson(lesson: LessonVerdict): Promise<void> {
   await call({ action: 'lesson_add', lesson });
+}
+
+/** The agent's live status for the Settings progress card: current ticket and steps, Compass
+ *  waits, queue and last tick. */
+export async function getAgentStatus(): Promise<AgentStatus> {
+  return normaliseAgentStatus(await call({ action: 'agent_status' }));
 }
