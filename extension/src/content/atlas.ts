@@ -46,43 +46,57 @@ window.addEventListener('message', (ev: MessageEvent) => {
 // pre-fills the Ticket # input from that param. This script auto-clicks the Submit button
 // in that case, removing the manual confirmation step.
 //
+// Atlas is an SPA: after an Okta login it routes back to the profile client-side, so this
+// script may first run on /login and only later see the dialog. We therefore watch for the
+// whole page lifetime (re-reading location on each check) instead of deciding once at load,
+// and remember the ticket in sessionStorage so the context survives the login round-trip.
+//
 // SAFETY GATES (all must be true before we click):
-//   1. URL has a `ticketId=WOCOO-N` query parameter — signals a context-driven nav from the
-//      WOCOO extension/site (not an ad-hoc Atlas browse).
+//   1. A `WOCOO-N` ticket was seen in this tab's Atlas URL (current URL, or remembered from
+//      an earlier URL in this tab such as the /login redirect) — signals a context-driven
+//      nav from Sidekick, not an ad-hoc Atlas browse.
 //   2. The "Please log the reason" dialog is actually in the DOM.
-//   3. The Ticket # input has a non-empty value matching our ticketId.
+//   3. The Ticket # input has a non-empty value matching that ticket.
 //   4. A Submit button is present and not disabled.
-//   5. We've only clicked ONCE per page load (no loops).
+//   5. We click at most once per dialog instance (no loops).
 //
 // If any gate fails, we leave the dialog alone so the agent can interact manually.
 
 (function () {
-  const url = new URL(location.href);
-  const ticketId = url.searchParams.get('ticketId');
-  if (!ticketId || !/^WOCOO-\d+$/.test(ticketId)) {
-    // No WOCOO context → don't touch the dialog.
-    return;
-  }
-
-  let fired = false;
-  let givenUp = false;
+  const TICKET_KEY = 'sidekick-atlas-ticket';
+  const TICKET_RE = /WOCOO-\d+/;
 
   // Title text on the dialog. Substring-tolerant so minor copy edits don't break us.
   const DIALOG_TITLE_FRAGMENT = 'log the reason';
 
-  function tryAutoSubmit(): boolean {
-    if (fired) return true;
+  function contextTicket(): string | null {
+    // Scan the whole (decoded) href so a ticket inside a /login?redirect=... param counts too.
+    let href = location.href;
+    try { href = decodeURIComponent(href); } catch { /* keep raw */ }
+    const fromUrl = href.match(TICKET_RE)?.[0] ?? null;
+    try {
+      if (fromUrl) sessionStorage.setItem(TICKET_KEY, fromUrl);
+      return fromUrl ?? sessionStorage.getItem(TICKET_KEY);
+    } catch {
+      return fromUrl;
+    }
+  }
+
+  // Dialog-root elements we've already submitted, so a re-render doesn't double-click.
+  const submitted = new WeakSet<HTMLElement>();
+
+  function tryAutoSubmit(): void {
+    const ticketId = contextTicket();
+    if (!ticketId) return;
 
     // Find the dialog by its identifying title text.
     const dialogTitle = Array.from(document.querySelectorAll('*')).find((el) => {
-      // Only look at direct text content of element (not deep descendants) to avoid
-      // matching the wrapper that contains everything on the page.
       const text = (el.textContent || '').trim();
       if (!text.includes(DIALOG_TITLE_FRAGMENT)) return false;
       // Filter to elements that are short — long matches are usually outer wrappers.
       return text.length < 500;
     });
-    if (!dialogTitle) return false;
+    if (!dialogTitle) return;
 
     // The dialog's "scope" is the dialog root — climb up until we find a dialog-like ancestor
     // (role=dialog or class containing 'modal'/'dialog'), or just use the immediate parent area.
@@ -93,48 +107,44 @@ window.addEventListener('message', (ev: MessageEvent) => {
       if (role === 'dialog' || /modal|dialog/i.test(typeof cls === 'string' ? cls : '')) break;
       dialogRoot = dialogRoot.parentElement;
     }
+    if (submitted.has(dialogRoot)) return;
 
     // Find the Ticket # input within the dialog and confirm it's populated with the same ticket.
     const inputs = Array.from(dialogRoot.querySelectorAll<HTMLInputElement>('input'));
     const ticketInput = inputs.find((i) => (i.value || '').trim() === ticketId);
-    if (!ticketInput) return false;
+    if (!ticketInput) return;
 
-    // Find the Submit button. Try clear semantics first; fall back to text-content match.
+    // Find the Submit button by its text.
     const buttons = Array.from(dialogRoot.querySelectorAll<HTMLButtonElement>('button'));
     const submitBtn = buttons.find((b) => {
       if (b.disabled) return false;
       const t = (b.textContent || '').trim().toLowerCase();
       return t === 'submit';
     });
-    if (!submitBtn) return false;
+    if (!submitBtn) return;
 
-    fired = true;
+    submitted.add(dialogRoot);
     // Give the form a beat to settle (some forms react to focus/blur on submit-eligible state).
     setTimeout(() => {
       submitBtn.click();
       console.debug('[Sidekick] auto-submitted Atlas reason for', ticketId);
     }, 250);
-    return true;
   }
 
-  // First, try once immediately in case the dialog is already in the DOM.
-  if (tryAutoSubmit()) return;
+  // Coalesce mutation bursts into one check per frame; the querySelectorAll('*') scan is
+  // too heavy to run on every mutation for the life of the page.
+  let scheduled = false;
+  function schedule(): void {
+    if (scheduled) return;
+    scheduled = true;
+    requestAnimationFrame(() => {
+      scheduled = false;
+      tryAutoSubmit();
+    });
+  }
 
-  // Otherwise, observe for the dialog appearing.
-  const observer = new MutationObserver(() => {
-    if (fired || givenUp) {
-      observer.disconnect();
-      return;
-    }
-    tryAutoSubmit();
-  });
-  observer.observe(document.body, { childList: true, subtree: true });
-
-  // Give up after 10 seconds — if the dialog hasn't appeared by then it probably isn't going to.
-  setTimeout(() => {
-    givenUp = true;
-    observer.disconnect();
-  }, 10_000);
+  tryAutoSubmit();
+  new MutationObserver(schedule).observe(document.body, { childList: true, subtree: true });
 })();
 
 // =============================================================================
