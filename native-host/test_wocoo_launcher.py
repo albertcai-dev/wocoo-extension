@@ -40,6 +40,8 @@ elif args[0] in ('solve', 'item'):
 elif args[0] == 'agent-mode':
     mode = args[2] if len(args) > 2 and args[1] == '--set' else 'running'
     print(json.dumps({"ok": True, "mode": mode, "since": 1700000000.5 if len(args) > 2 else None}))
+elif args[0] == 'status':
+    print(json.dumps({"ok": True, "mode": "running", "queue": []}))
 '''
 
 
@@ -119,6 +121,17 @@ class DraftActions(unittest.TestCase):
         for key in (None, 'proj-1', 'PROJ 1; rm -rf /'):
             self.assertEqual(call({'action': 'agent_solve', 'key': key}, self.root),
                              {'ok': False, 'error': 'agent_solve needs a ticket key'})
+
+    def test_agent_status_passes_through(self):
+        self.assertEqual(call({'action': 'agent_status'}, self.root),
+                         {'ok': True, 'mode': 'running', 'queue': []})
+
+    def test_agent_status_store_error(self):
+        with open(os.path.join(self.root, 'src', 'store_cli.py'), 'w') as f:
+            f.write('import sys\nprint(\'{"ok": false, "error": "boom"}\')\nsys.exit(1)\n')
+        reply = call({'action': 'agent_status'}, self.root)
+        self.assertFalse(reply['ok'])
+        self.assertIn('boom', reply['error'])
 
     def test_agent_mode_cli_failure_returns_error(self):
         with open(os.path.join(self.root, 'src', 'store_cli.py'), 'w') as f:
