@@ -60,6 +60,13 @@ describe('pickReplyTarget', () => {
     expect(pickReplyTarget([cust], TEAM)?.accountId).toBe('acct-cust');
   });
 
+  it('skips WS Compass, which posts as a regular user account', () => {
+    const agent = c('acct-cx', 'CX Agent');
+    const compass = c('acct-compass', 'WS Compass');
+    expect(pickReplyTarget([agent, compass], TEAM)?.commentId).toBe(agent.id);
+    expect(pickReplyTarget([compass], TEAM)).toBeNull();
+  });
+
   it('carries the target comment parentId', () => {
     const reply = c('acct-cx', 'CX Agent', { parentId: '555' });
     expect(pickReplyTarget([reply], TEAM)?.parentId).toBe('555');

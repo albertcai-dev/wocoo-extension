@@ -1,8 +1,8 @@
 // Who an agent draft replies under, and the greeting that goes with it. Pure, so Post, the
 // Jira-tab prefill and outcome recording all apply the same rule.
 //
-// The rule (Albert's): walk comments newest to oldest, skip his team and automation accounts,
-// reply under the first comment left. No such comment → a normal top-level comment.
+// The rule (Albert's): walk comments newest to oldest, skip his team, automation accounts and
+// WS Compass, reply under the first comment left. No such comment → a normal top-level comment.
 
 import type { JiraCommentDetail } from '../api/jira';
 import type { DraftSegment } from './agentDraftTypes';
@@ -15,11 +15,17 @@ export interface ReplyTarget {
   name: string;
 }
 
+/** WS Compass posts its automated analysis from a regular user account (accountType
+ *  'atlassian', not 'app'), so it is matched by name. Its comment is internal context, not
+ *  someone to reply to (Albert, 2026-10-27, WOCOO-30710). */
+const COMPASS_AUTHOR = /^ws compass$/i;
+
 /** `comments` oldest first (as getIssueCommentsDetailed returns them). */
 export function pickReplyTarget(comments: JiraCommentDetail[], team: ReadonlySet<string>): ReplyTarget | null {
   for (let i = comments.length - 1; i >= 0; i--) {
     const c = comments[i];
     if (team.has(c.authorAccountId) || c.authorAccountType === 'app' || !c.authorAccountId) continue;
+    if (COMPASS_AUTHOR.test(c.authorName.trim())) continue;
     return { commentId: c.id, parentId: c.parentId, accountId: c.authorAccountId, name: c.authorName };
   }
   return null;
