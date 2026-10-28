@@ -7,7 +7,7 @@
 // 'verify_balance'; content/i2c.ts writes i2c_running_balance, read back here filtered by
 // sourceTicketId.
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { WocooTicket } from '../data/mockTicket';
 import { compareBalance, type CompareMode } from '../data/balanceCompare';
 import { stagePresetIdentity as stageIdentityForPreset } from '../data/presetIdentity';
@@ -27,6 +27,8 @@ export function VerifyBalanceStep(props: {
   compareMode: CompareMode;
   /** Shown above the source pills, e.g. Estate's Pantheon balance line. */
   extraInfo?: React.ReactNode;
+  /** Called with the captured i2c running balance for this ticket (null when none). */
+  onRunningBalance?: (value: number | null) => void;
 }) {
   const presetUrl = presetDashboardUrl(PRESET_DASHBOARD_IDS.overpayment);
   const atlasUrl = `https://atlas.wealthsimple.com/identity/${props.ticket.identityId}/overview/?ticketId=${props.ticket.id}`;
@@ -55,6 +57,8 @@ export function VerifyBalanceStep(props: {
   // Read the running balance the i2c content script writes back after Search succeeds.
   // Only display it when sourceTicketId matches this ticket (otherwise it's a stale
   // capture from another customer).
+  const onRunningBalanceRef = useRef(props.onRunningBalance);
+  onRunningBalanceRef.current = props.onRunningBalance;
   const [runningBalance, setRunningBalance] = useState<{ value: number; valueText: string; capturedAt: string } | null>(null);
   useEffect(() => {
     const read = () => {
@@ -62,8 +66,10 @@ export function VerifyBalanceStep(props: {
         const v = res.i2c_running_balance as { sourceTicketId?: string; value?: number; valueText?: string; capturedAt?: string } | undefined;
         if (v && v.sourceTicketId === props.ticket.id && typeof v.value === 'number') {
           setRunningBalance({ value: v.value, valueText: v.valueText || `$${v.value.toFixed(2)}`, capturedAt: v.capturedAt || '' });
+          onRunningBalanceRef.current?.(v.value);
         } else {
           setRunningBalance(null);
+          onRunningBalanceRef.current?.(null);
         }
       });
     };
