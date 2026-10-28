@@ -3,19 +3,20 @@
 // one-file edit. Dashboard URLs stay bare — no `native_filters_key`, per
 // [[preset-native-filters-key]]: the content script can't clear chips baked into that param.
 
-export const PRESET_BASE = 'https://8a26d867.wealthsimple-aws-mpc.app.preset.io';
+export const PRESET_BASE = 'https://784ac929.wealthsimple-aws-mpc.app.preset.io';
 
-/** SQL Lab database Insurance Eligibility runs against (Pantheon = Redshift today). */
-export const WAREHOUSE_DATABASE_ID = 3;
+/** SQL Lab database Insurance Eligibility runs against (Snowflake_pantheon_db). */
+export const WAREHOUSE_DATABASE_ID = 1;
 
-/** "ALL wire sends created" dataset behind chart 86733 on Wire Send Monitoring. */
-export const WIRE_SENDS_DATASET_ID = 62667;
+/** "ALL wire sends created" dataset behind chart 29563 on Wire Send Monitoring (836). */
+export const WIRE_SENDS_DATASET_ID = 11961;
 
 export const PRESET_DASHBOARD_IDS = {
-  overpayment: 5790,
-  verifyEligibleDd: [7320, 8324],
-  visaCompanionRpin: 7666,
-  walletTriage: 8014,
+  overpayment: 227,
+  // Old 8324 "Cash & Card Ops: Direct Deposit Details" has no Snowflake counterpart yet.
+  verifyEligibleDd: [626],
+  visaCompanionRpin: 367,
+  walletTriage: 213,
 } as const;
 
 export function presetDashboardUrl(id: number): string {

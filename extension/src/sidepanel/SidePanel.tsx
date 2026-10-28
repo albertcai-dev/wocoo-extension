@@ -921,18 +921,18 @@ function QuickActions({ ticket, onTicketUpdate, onStartTriage, onStartReverseFee
             recordClick(ticket.id, 'verify_eligible_dd');
             const id = ticket.identityId;
             void stagePresetIdentity(id, ticket.id);
-            window.open(VERIFY_ELIGIBLE_DD_URLS[0], '_blank', 'noopener,noreferrer');
-            // Re-write the pending identity before opening the second tab — the first
-            // tab's content script clears the key once its chain completes (Apply →
-            // Activity), so this guarantees the second tab also picks it up regardless
-            // of timing. Both tabs share the same filter-fill machinery.
-            window.setTimeout(() => {
+            const [first, ...rest] = VERIFY_ELIGIBLE_DD_URLS;
+            window.open(first, '_blank', 'noopener,noreferrer');
+            // Re-stage before each later tab — the previous tab's content script clears
+            // the key once its chain completes (Apply → Activity), so each tab still
+            // picks it up regardless of timing.
+            rest.forEach((url, i) => window.setTimeout(() => {
               void stagePresetIdentity(id, ticket.id);
-              window.open(VERIFY_ELIGIBLE_DD_URLS[1], '_blank', 'noopener,noreferrer');
-            }, 600);
+              window.open(url, '_blank', 'noopener,noreferrer');
+            }, (i + 1) * 600));
           }}
           disabled={!ticket.identityId}
-          title="Open both Verify-Eligible-DD Preset dashboards (7320 + 8324) filtered by this identity"
+          title="Open the Verify-Eligible-DD Preset dashboard(s) filtered by this identity"
         >
           📊 Verify Eligible DD
         </ActionButton>

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { lowerKeys, PRESET_BASE, PresetAuthError, pageRunSql, parsePastedResults, rowsOrThrow, runPresetSql, withPresetTab, type PresetSqlDeps, type PresetTabDeps } from './presetSql';
+import { WAREHOUSE_DATABASE_ID } from './presetConfig';
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -125,7 +126,7 @@ describe('runPresetSql', () => {
     const { deps, removed, executed } = makeDeps();
     expect(await runPresetSql('SELECT 1', deps)).toEqual([{ ok: 1 }]);
     expect(removed).toEqual([7]);
-    expect(executed[0]).toEqual([PRESET_BASE, 3, 'SELECT 1']);
+    expect(executed[0]).toEqual([PRESET_BASE, WAREHOUSE_DATABASE_ID, 'SELECT 1']);
   });
 
   it('throws PresetAuthError on an auth result and closes the tab', async () => {

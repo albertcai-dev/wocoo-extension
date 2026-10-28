@@ -1,5 +1,5 @@
-// Looks up a wire send on Preset's "ALL wire sends created" table (chart 86733 on the
-// Wire Send Monitoring dashboard, dataset 62667) by its e2e_identifier — the REF a
+// Looks up a wire send on Preset's "ALL wire sends created" table (chart 29563 on the
+// Wire Send Monitoring dashboard, dataset 11961) by its e2e_identifier — the REF a
 // returned wire carries. Uses /api/v1/chart/data rather than SQL Lab so the dashboard's
 // own dataset logic is reused as-is. Runs in a hidden Preset tab (see presetSql.ts).
 
