@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   loadEstateLookup,
   loadEstateState,
+  loadPantheonCard,
   payEstateCard,
   saveEstateState,
   waitForSucceeded,
@@ -310,5 +311,15 @@ describe('estate state', () => {
     const state = await loadEstateState(TICKET, deps);
     expect(state?.paymentId).toBe(PAYMENT_ID);
     expect(typeof state?.at).toBe('string');
+  });
+});
+
+describe('loadPantheonCard', () => {
+  it('reads the card choice from the balance query only', async () => {
+    const { deps, calls } = fakeDeps({}, [{
+      ACCOUNT_CANONICAL_ID: CARD, EFFECTIVE_AS_AT_DATE: '2026-10-26', TOTAL_BALANCE: 512.5, IS_OPEN_ACCOUNT: true,
+    }]);
+    expect(await loadPantheonCard(IDENTITY, deps)).toMatchObject({ kind: 'ok', card: { totalBalance: 512.5 } });
+    expect(calls).toEqual([]);
   });
 });

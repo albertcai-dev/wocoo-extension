@@ -5,6 +5,7 @@ import {
   balanceSql,
   buildEstateComment,
   chooseCard,
+  creditOnCard,
   extractAccountNumbers,
   FETCH_CREDIT_PAYMENTS_QUERY,
   findTicketPayment,
@@ -325,5 +326,16 @@ describe('buildEstateComment', () => {
 
   it('falls back to "Hi team, " when there is no reporter', () => {
     expect(buildEstateComment(undefined).startsWith('Hi team, ')).toBe(true);
+  });
+});
+
+describe('creditOnCard', () => {
+  it('returns the credit for a card in credit (overpayment), rounded to cents', () => {
+    expect(creditOnCard(512.345)).toBe(512.35);
+    expect(creditOnCard(1000)).toBe(1000);
+  });
+  it('returns null when the card owes or is at zero', () => {
+    expect(creditOnCard(0)).toBeNull();
+    expect(creditOnCard(-148.03)).toBeNull();
   });
 });

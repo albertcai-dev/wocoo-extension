@@ -124,6 +124,12 @@ export function amountOwed(totalBalance: number): number | null {
   return Math.round(-totalBalance * 100) / 100;
 }
 
+/** Positive `totalBalance` is a credit on the card (an overpayment). Null when there's none. */
+export function creditOnCard(totalBalance: number): number | null {
+  if (totalBalance <= 0) return null;
+  return Math.round(totalBalance * 100) / 100;
+}
+
 /** `paymentAmount` for the mutation is a string with exactly 2 decimals. */
 export function formatPaymentAmount(n: number): string {
   return n.toFixed(2);

@@ -38,6 +38,7 @@ import { fetchAtlasAccountIdHeadless } from '../data/atlasAccountLookup';
 import { needsWNumberLookup } from '../data/reimbConfig';
 import { markWorkflowHandled } from '../data/outcomeCapture';
 import { VerifyBalanceStep } from './VerifyBalanceStep';
+import { PantheonCreditLine } from './PantheonCreditLine';
 
 const TRANSITION_TO_DONE_ID = '251';
 
@@ -502,6 +503,7 @@ export function OverpaymentTriage({ ticket, onClose, onTicketUpdate }: { ticket:
       case 2: return (
         <VerifyBalanceStep
           compareMode="abs"
+          extraInfo={<PantheonCreditLine identityId={ticket.identityId} amount={state.amount} />}
           ticket={ticket}
           fmtAmt={fmtAmt}
           amount={state.amount}

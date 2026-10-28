@@ -97,6 +97,11 @@ async function fetchCustodianIds(accountId: string, deps: EstateDeps): Promise<s
     .map((id) => id.toUpperCase());
 }
 
+/** Just the Pantheon card balance — Overpayment's step 2 shows it alongside i2c. */
+export async function loadPantheonCard(identityId: string, deps: EstateDeps = chromeEstateDeps): Promise<CardChoice> {
+  return chooseCard(readCcAccountRows(await labelled('Pantheon balance', deps.sql(balanceSql(identityId)))));
+}
+
 export interface EstateLookup {
   card: CardChoice;
   spendSlug: string | null;
