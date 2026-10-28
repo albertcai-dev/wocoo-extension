@@ -154,16 +154,25 @@ export function idempotencyKeyFor(ticketKey: string): string {
   return `card-payment-ops-${ticketKey.toLowerCase()}`;
 }
 
-/** `FetchCreditPaymentsAtlas` → the flat list of payments on the card. */
+/**
+ * `FetchCreditPaymentsAtlas` → the flat list of payments on the card. Throws on a malformed
+ * response instead of returning [] — this read is the duplicate check, so "couldn't read"
+ * must never look like "no payments".
+ */
 export function readCreditPayments(res: unknown): CreditPayment[] {
   const edges = asRecord(asRecord(asRecord(res)?.data)?.creditPayments)?.edges;
-  if (!Array.isArray(edges)) return [];
+  if (!Array.isArray(edges)) throw new Error('Atlas returned no credit payments list — check Atlas manually.');
   const payments: CreditPayment[] = [];
   for (const edge of edges) {
     const node = asRecord(asRecord(edge)?.node);
     if (!node) continue;
     const id = node.id;
     if (typeof id !== 'string' || !id) continue;
+    // Null is normal (non-ops payments carry no key); an absent field means the key
+    // isn't being returned, and the ticket match below would silently never hit.
+    if (!('balanceModifierIdempotencyKey' in node)) {
+      throw new Error("Atlas didn't return payment idempotency keys — check Atlas manually.");
+    }
     const key = node.balanceModifierIdempotencyKey;
     payments.push({
       id,
@@ -211,7 +220,7 @@ export function readCreateResult(res: unknown): CreateResult {
 
 // --- Account-number mismatch check ---
 
-const ACCOUNT_NUMBER_RE = /\b[A-Z][A-Z0-9]{8,10}CAD\b/gi;
+const ACCOUNT_NUMBER_RE = /\b[A-Z0-9]{9,10}CAD\b/gi;
 
 /** Every `…CAD`-style account number named in free text, upper-cased and de-duplicated. */
 export function extractAccountNumbers(description: string): string[] {

@@ -211,6 +211,23 @@ describe('readCreditPayments', () => {
   });
 });
 
+describe('readCreditPayments fails closed', () => {
+  it('throws when creditPayments is missing, so the duplicate check cannot pass by accident', () => {
+    expect(() => readCreditPayments({ data: { creditPayments: null } })).toThrow();
+    expect(() => readCreditPayments({ data: {} })).toThrow();
+    expect(() => readCreditPayments({ data: { creditPayments: { edges: null } } })).toThrow();
+  });
+
+  it('accepts an empty edges list as "no payments"', () => {
+    expect(readCreditPayments({ data: { creditPayments: { edges: [] } } })).toEqual([]);
+  });
+
+  it('throws when a node lacks balanceModifierIdempotencyKey entirely (null is fine)', () => {
+    const res = { data: { creditPayments: { edges: [{ node: { id: 'credit-payment-x', amount: '1.00', status: 'succeeded', createdAt: '' } }] } } };
+    expect(() => readCreditPayments(res)).toThrow(/idempotency/i);
+  });
+});
+
 describe('readCreateResult', () => {
   it('reads the recorded Initiated response', () => {
     expect(readCreateResult(ADMIN_CREATE_CREDIT_PAYMENT_INITIATED_RES)).toEqual({
@@ -279,6 +296,10 @@ describe('extractAccountNumbers / strangerAccountNumbers', () => {
         "Please pay the deceased's credit card ( C1AAAAAA1CAD ) balance from their chequing account ( wa1234567cad )",
       ),
     ).toEqual(['C1AAAAAA1CAD', 'WA1234567CAD']);
+  });
+
+  it('extracts a number that starts with a digit or sits inside code formatting', () => {
+    expect(extractAccountNumbers('chequing `wa1234567cad`, card {{1A2B3C4D5CAD}}')).toEqual(['WA1234567CAD', '1A2B3C4D5CAD']);
   });
 
   it('strangerAccountNumbers is empty when every named number is owned', () => {
