@@ -43,7 +43,16 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 }
 
 function errorMessage(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
+  if (e instanceof Error) return e.message;
+  const m = asRecord(e)?.message;
+  const v = m ?? e;
+  if (typeof v === 'string') return v;
+  try { return JSON.stringify(v); } catch { return String(v); }
+}
+
+/** Prefixes a failed read with what was being read, so the Retry banner says which one. */
+function labelled<T>(label: string, p: Promise<T>): Promise<T> {
+  return p.catch((e: unknown) => { throw new Error(`${label}: ${errorMessage(e)}`); });
 }
 
 // --- Stored state: "payment sent for WOCOO-XXXXX" survives closing the tile ---
@@ -107,17 +116,17 @@ export async function loadEstateLookup(
   deps: EstateDeps = chromeEstateDeps,
 ): Promise<EstateLookup> {
   const [rows, spendRes] = await Promise.all([
-    deps.sql(balanceSql(identityId)),
-    deps.gql('fort_knox', 'SpendClient', SPEND_CLIENT_QUERY, { identityId }),
+    labelled('Pantheon balance', deps.sql(balanceSql(identityId))),
+    labelled('Atlas SpendClient', deps.gql('fort_knox', 'SpendClient', SPEND_CLIENT_QUERY, { identityId })),
   ]);
   const card = chooseCard(readCcAccountRows(rows));
   const spendSlug = readSpendSlug(spendRes);
   const cardId = card.kind === 'ok' ? card.card.accountCanonicalId : null;
 
   const [slugIds, cardIds, payments] = await Promise.all([
-    spendSlug ? fetchCustodianIds(spendSlug, deps) : Promise.resolve([]),
-    cardId ? fetchCustodianIds(cardId, deps) : Promise.resolve([]),
-    cardId ? fetchPayments(cardId, deps) : Promise.resolve([]),
+    spendSlug ? labelled('Atlas chequing account numbers', fetchCustodianIds(spendSlug, deps)) : Promise.resolve([]),
+    cardId ? labelled('Atlas card account numbers', fetchCustodianIds(cardId, deps)) : Promise.resolve([]),
+    cardId ? labelled('Atlas payments', fetchPayments(cardId, deps)) : Promise.resolve([]),
   ]);
   return {
     card,

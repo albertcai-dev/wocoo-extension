@@ -89,6 +89,15 @@ describe('pageRunSql', () => {
     expect(await pageRunSql('https://p', 3, 'x', fake, noSleep)).toEqual({ kind: 'error', message: 'column "x" does not exist' });
   });
 
+  it('surfaces an object-shaped message (Superset field validation) as readable text', async () => {
+    const fake = async (url: string) =>
+      url.endsWith('/csrf_token/') ? json({ result: 'tok' }) : json({ message: { database_id: ['Missing data for required field.'] } }, 400);
+    const r = await pageRunSql('https://p', 3, 'x', fake, noSleep);
+    expect(r).toMatchObject({ kind: 'error' });
+    expect((r as { message: string }).message).not.toContain('[object Object]');
+    expect((r as { message: string }).message).toContain('Missing data for required field.');
+  });
+
   it('falls back to an HTTP status message', async () => {
     const fake = async (url: string) => (url.endsWith('/csrf_token/') ? json({ result: 'tok' }) : json({}, 500));
     expect(await pageRunSql('https://p', 3, 'x', fake, noSleep)).toEqual({ kind: 'error', message: 'Preset returned HTTP 500' });

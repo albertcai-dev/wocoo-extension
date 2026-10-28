@@ -35,9 +35,16 @@ export async function pageRunSql(
   fetchImpl: FetchLike = (u, i) => fetch(u, i),
   sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms)),
 ): Promise<PageSqlResult> {
+  // Superset sends `message` as a string, or as a {field: [msgs]} object on validation
+  // errors; stringify the object case so the UI never shows "[object Object]".
   const errMsg = (body: unknown, status: number): string => {
-    const b = body as { errors?: { message?: string }[]; message?: string; msg?: string } | null;
-    return b?.errors?.[0]?.message || b?.message || b?.msg || `Preset returned HTTP ${status}`;
+    const b = body as { errors?: { message?: unknown }[]; message?: unknown; msg?: unknown } | null;
+    const text = (v: unknown): string => {
+      if (v == null || v === '') return '';
+      if (typeof v === 'string') return v;
+      try { return JSON.stringify(v); } catch { return String(v); }
+    };
+    return text(b?.errors?.[0]?.message) || text(b?.message) || text(b?.msg) || `Preset returned HTTP ${status}`;
   };
   try {
     const tokRes = await fetchImpl(`${base}/api/v1/security/csrf_token/`, { credentials: 'include' });

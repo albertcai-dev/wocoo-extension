@@ -271,6 +271,16 @@ describe('loadEstateLookup', () => {
     await expect(loadEstateLookup(IDENTITY, TICKET, deps)).rejects.toThrow('SpendClient');
   });
 
+  it('names the failing read, and stringifies a non-Error rejection', async () => {
+    const { deps } = fakeDeps({ SpendClient: () => SPEND_CLIENT_RES });
+    deps.sql = async () => { throw { message: { database_id: ['Missing data'] } }; };
+    const err = (await loadEstateLookup(IDENTITY, TICKET, deps).catch((e: Error) => e)) as Error;
+    expect(err).toBeInstanceOf(Error);
+    expect(err.message).toMatch(/^Pantheon balance: /);
+    expect(err.message).not.toContain('[object Object]');
+    expect(err.message).toContain('Missing data');
+  });
+
   it('rejects when the payments read throws', async () => {
     const { deps } = fakeDeps({
       SpendClient: () => SPEND_CLIENT_RES,
