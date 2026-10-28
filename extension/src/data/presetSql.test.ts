@@ -30,7 +30,10 @@ describe('pageRunSql', () => {
     };
     await pageRunSql('https://p', 3, 'SELECT 1', fake, noSleep);
     expect((init?.headers as Record<string, string>)['X-CSRFToken']).toBe('tok');
-    expect(JSON.parse(init?.body as string)).toMatchObject({ database_id: 3, sql: 'SELECT 1', runAsync: false, json: true });
+    const body = JSON.parse(init?.body as string);
+    expect(body).toMatchObject({ database_id: 3, sql: 'SELECT 1', runAsync: false });
+    // The Snowflake workspace's Superset rejects `json` with {"json":["Unknown field."]}.
+    expect(body).not.toHaveProperty('json');
   });
 
   it('polls the results endpoint when execute returns a results key', async () => {

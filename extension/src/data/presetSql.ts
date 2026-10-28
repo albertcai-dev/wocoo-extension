@@ -58,7 +58,7 @@ export async function pageRunSql(
       credentials: 'include',
       headers: { 'content-type': 'application/json', 'X-CSRFToken': tokBody.result },
       body: JSON.stringify({
-        database_id: databaseId, sql, runAsync: false, json: true,
+        database_id: databaseId, sql, runAsync: false,
         tab: 'Sidekick eligibility', queryLimit: 10000,
       }),
     });
