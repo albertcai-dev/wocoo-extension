@@ -37,8 +37,7 @@ import type { ReimbApproverKey } from '../api/jira';
 import { fetchAtlasAccountIdHeadless } from '../data/atlasAccountLookup';
 import { needsWNumberLookup } from '../data/reimbConfig';
 import { markWorkflowHandled } from '../data/outcomeCapture';
-import { stagePresetIdentity as stageIdentityForPreset } from '../data/presetIdentity';
-import { PRESET_DASHBOARD_IDS, presetDashboardUrl } from '../data/presetConfig';
+import { VerifyBalanceStep } from './VerifyBalanceStep';
 
 const TRANSITION_TO_DONE_ID = '251';
 
@@ -501,7 +500,8 @@ export function OverpaymentTriage({ ticket, onClose, onTicketUpdate }: { ticket:
         />
       );
       case 2: return (
-        <Step3Body
+        <VerifyBalanceStep
+          compareMode="abs"
           ticket={ticket}
           fmtAmt={fmtAmt}
           amount={state.amount}
@@ -1026,142 +1026,6 @@ function Step2Body(props: {
           <button onClick={props.onContinue} style={primaryButton}>Criteria met, continue →</button>
         </div>
       ) : null}
-    </>
-  );
-}
-
-// ============================================================
-// Step 3 — Verify balance
-// ============================================================
-
-function Step3Body(props: {
-  ticket: WocooTicket;
-  fmtAmt: string;
-  amount: number | null;
-  adjustOpen: boolean;
-  setAdjustOpen: (v: boolean) => void;
-  adjustedAmountInput: string;
-  setAdjustedAmountInput: (s: string) => void;
-  applyAdjustedAmount: () => void;
-  showContinue: boolean;
-  onVerify: () => void;
-}) {
-  const presetUrl = presetDashboardUrl(PRESET_DASHBOARD_IDS.overpayment);
-  const atlasUrl = `https://atlas.wealthsimple.com/identity/${props.ticket.identityId}/overview/?ticketId=${props.ticket.id}`;
-  const i2cUrl = 'https://wealthsimplecs.mycardplace.com/customerservice/wealthsimplelogin.jsp';
-  const stageI2cEmail = () => {
-    if (props.ticket.clientEmail) {
-      // Set verify_balance flow so the i2c chain knows to: navigate to Account
-      // Transactions, switch to Recent Activity, click Search, then scrape and write
-      // back the most-recent Running Balance for this ticket.
-      void chrome.storage.local.set({
-        pending_i2c_email: props.ticket.clientEmail,
-        pending_i2c_source_ticket_id: props.ticket.id,
-        pending_i2c_flow: 'verify_balance',
-        pending_i2c_started_at: Date.now(),
-      });
-      // Clear any stale flow-specific keys from a previous run.
-      void chrome.storage.local.remove(['pending_i2c_ticket_url', 'pending_i2c_admin_debit_amount']);
-    }
-  };
-  const stagePresetIdentity = () => {
-    if (props.ticket.identityId) {
-      void stageIdentityForPreset(props.ticket.identityId, props.ticket.id);
-    }
-  };
-
-  // Read the running balance the i2c content script writes back after Search succeeds.
-  // Only display it when sourceTicketId matches this ticket (otherwise it's a stale
-  // capture from another customer).
-  const [runningBalance, setRunningBalance] = useState<{ value: number; valueText: string; capturedAt: string } | null>(null);
-  useEffect(() => {
-    const read = () => {
-      chrome.storage.local.get('i2c_running_balance').then((res) => {
-        const v = res.i2c_running_balance as { sourceTicketId?: string; value?: number; valueText?: string; capturedAt?: string } | undefined;
-        if (v && v.sourceTicketId === props.ticket.id && typeof v.value === 'number') {
-          setRunningBalance({ value: v.value, valueText: v.valueText || `$${v.value.toFixed(2)}`, capturedAt: v.capturedAt || '' });
-        } else {
-          setRunningBalance(null);
-        }
-      });
-    };
-    read();
-    const onChange = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
-      if (area === 'local' && 'i2c_running_balance' in changes) read();
-    };
-    chrome.storage.onChanged.addListener(onChange);
-    return () => chrome.storage.onChanged.removeListener(onChange);
-  }, [props.ticket.id]);
-  return (
-    <>
-      <div style={{ display: 'flex', gap: 'var(--mint-sp-2)', flexWrap: 'wrap', marginBottom: 'var(--mint-sp-3)' }}>
-        <a href={presetUrl} target="_blank" rel="noreferrer" onClick={stagePresetIdentity} style={pillLink('highlight')}>Preset ↗</a>
-        <a href={atlasUrl} target="_blank" rel="noreferrer" style={pillLink('positive')}>Atlas ↗</a>
-        <a href={i2cUrl} target="_blank" rel="noreferrer" onClick={stageI2cEmail} style={pillLink('warning')}>i2c ↗</a>
-      </div>
-      <div style={{ marginBottom: 'var(--mint-sp-3)' }}>
-        <div style={{ fontSize: 'var(--mint-text-nano)', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--mint-fg-soft)', fontWeight: 700, marginBottom: 6 }}>Filter by</div>
-        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
-          <span style={{ flex: 1, padding: '6px 10px', background: 'var(--mint-bg-subtle)', border: 'var(--mint-card-stroke)', borderRadius: 'var(--mint-radius-button)', fontFamily: 'var(--mint-font-mono)', fontSize: 'var(--mint-text-micro)', color: 'var(--mint-fg-strong)', wordBreak: 'break-all', lineHeight: 1.4 }}>
-            {props.ticket.identityId}
-          </span>
-          <CopyIcon value={props.ticket.identityId} />
-        </div>
-      </div>
-
-      {/* Running balance captured by the i2c content script after clicking i2c ↗ */}
-      <div style={{ marginBottom: 'var(--mint-sp-3)' }}>
-        <div style={{ fontSize: 'var(--mint-text-nano)', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--mint-fg-soft)', fontWeight: 700, marginBottom: 6 }}>Running balance (from i2c)</div>
-        {runningBalance == null ? (
-          <div style={{ padding: '6px 10px', background: 'var(--mint-bg-subtle)', border: 'var(--mint-card-stroke)', borderRadius: 'var(--mint-radius-button)', fontSize: 'var(--mint-text-micro)', color: 'var(--mint-fg-soft)', fontStyle: 'italic' }}>
-            Click i2c ↗ to capture
-          </div>
-        ) : (() => {
-          // Compare |running balance| to the ticket's amount. Overpayment running balances
-          // are typically negative (credit on the card), so absolute value is what matches.
-          const amount = props.amount;
-          const diff = amount != null ? Math.abs(Math.abs(runningBalance.value) - amount) : null;
-          const matches = diff != null && diff < 0.01;
-          return (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ flex: 1, padding: '6px 10px', background: 'var(--mint-bg-subtle)', border: 'var(--mint-card-stroke)', borderRadius: 'var(--mint-radius-button)', fontFamily: 'var(--mint-font-mono)', fontSize: 'var(--mint-text-micro)', color: 'var(--mint-fg-strong)' }}>
-                {runningBalance.valueText}
-              </span>
-              {amount != null ? (
-                matches ? (
-                  <span style={{ fontSize: 'var(--mint-text-micro)', color: 'var(--mint-positive-fg-strong)', fontWeight: 600 }}>✓ matches</span>
-                ) : (
-                  <span style={{ fontSize: 'var(--mint-text-micro)', color: 'var(--mint-warning-fg-strong)', fontWeight: 600 }} title={`Ticket amount: $${amount.toFixed(2)}`}>
-                    ⚠ differs by ${diff!.toFixed(2)}
-                  </span>
-                )
-              ) : null}
-            </div>
-          );
-        })()}
-      </div>
-
-      {props.showContinue ? (
-        <>
-          <button onClick={props.onVerify} style={{ ...primaryButton, background: 'var(--mint-positive-fg-graphic)', width: '100%' }}>✓ Verified</button>
-          <button onClick={() => props.setAdjustOpen(!props.adjustOpen)} style={{ ...secondaryButton, width: '100%', marginTop: 'var(--mint-sp-2)', color: 'var(--mint-warning-fg-strong)', borderColor: 'var(--mint-warning-fg-graphic)' }}>Balance differs</button>
-          {props.adjustOpen ? (
-            <InlineEditCard label="Enter the verified balance">
-              <span style={{ alignSelf: 'center' }}>$</span>
-              <input
-                type="number" step="0.01"
-                value={props.adjustedAmountInput}
-                onChange={(e) => props.setAdjustedAmountInput(e.target.value)}
-                placeholder="1000.00"
-                style={inlineInput}
-              />
-              <button onClick={props.applyAdjustedAmount} style={smallPrimaryButton}>Use</button>
-            </InlineEditCard>
-          ) : null}
-        </>
-      ) : (
-        <div style={reviewNote}>Verified at <strong>{props.fmtAmt}</strong> earlier.</div>
-      )}
     </>
   );
 }
