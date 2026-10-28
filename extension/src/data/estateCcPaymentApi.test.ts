@@ -252,7 +252,7 @@ describe('loadEstateLookup', () => {
     const lookup = await loadEstateLookup(IDENTITY, TICKET, deps);
     expect(lookup.card).toMatchObject({ kind: 'ok', closed: false, card: { accountCanonicalId: CARD, totalBalance: -148.03 } });
     expect(lookup.spendSlug).toBe(SLUG);
-    expect([...lookup.ownedAccountNumbers].sort()).toEqual(['C2BBBBBB2CAD', 'C1AAAAAA1CAD', 'WA1234567CAD']);
+    expect([...lookup.ownedAccountNumbers].sort()).toEqual(['C1AAAAAA1CAD', 'C2BBBBBB2CAD', 'WA1234567CAD']);
     expect(lookup.payments).toHaveLength(2);
     expect(lookup.existing?.id).toBe(PAYMENT_ID);
     const spendCall = calls.find((c) => c.op === 'SpendClient');
