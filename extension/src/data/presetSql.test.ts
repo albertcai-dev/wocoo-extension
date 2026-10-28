@@ -30,7 +30,10 @@ describe('pageRunSql', () => {
     };
     await pageRunSql('https://p', 3, 'SELECT 1', fake, noSleep);
     expect((init?.headers as Record<string, string>)['X-CSRFToken']).toBe('tok');
-    expect(JSON.parse(init?.body as string)).toMatchObject({ database_id: 3, sql: 'SELECT 1', runAsync: false, json: true });
+    const body = JSON.parse(init?.body as string);
+    expect(body).toMatchObject({ database_id: 3, sql: 'SELECT 1', runAsync: false });
+    // The Snowflake workspace's Superset rejects `json` with {"json":["Unknown field."]}.
+    expect(body).not.toHaveProperty('json');
   });
 
   it('polls the results endpoint when execute returns a results key', async () => {
@@ -87,6 +90,15 @@ describe('pageRunSql', () => {
     const fake = async (url: string) =>
       url.endsWith('/csrf_token/') ? json({ result: 'tok' }) : json({ errors: [{ message: 'column "x" does not exist' }] }, 400);
     expect(await pageRunSql('https://p', 3, 'x', fake, noSleep)).toEqual({ kind: 'error', message: 'column "x" does not exist' });
+  });
+
+  it('surfaces an object-shaped message (Superset field validation) as readable text', async () => {
+    const fake = async (url: string) =>
+      url.endsWith('/csrf_token/') ? json({ result: 'tok' }) : json({ message: { database_id: ['Missing data for required field.'] } }, 400);
+    const r = await pageRunSql('https://p', 3, 'x', fake, noSleep);
+    expect(r).toMatchObject({ kind: 'error' });
+    expect((r as { message: string }).message).not.toContain('[object Object]');
+    expect((r as { message: string }).message).toContain('Missing data for required field.');
   });
 
   it('falls back to an HTTP status message', async () => {

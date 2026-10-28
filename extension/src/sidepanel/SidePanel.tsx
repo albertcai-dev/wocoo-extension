@@ -29,6 +29,7 @@ import { AgentDraftCard } from './AgentDraftCard';
 import type { MovePrefill } from '../data/movePrefill';
 import { OverpaymentTriage } from './OverpaymentTriage';
 import { ReverseFeeWorkflow } from './ReverseFeeWorkflow';
+import { EstateCcPaymentWorkflow } from './EstateCcPaymentWorkflow';
 import { CustomCcStatementWorkflow } from './CustomCcStatementWorkflow';
 import { VisaCompanionRpinWorkflow } from './VisaCompanionRpinWorkflow';
 import { QCAutoReimbCard } from './QCAutoReimbCard';
@@ -247,6 +248,7 @@ function TicketView({ ticket, onTicketUpdate, onGoHome, onOpenSettings, onOpenSt
   const [customCcStatementActive, setCustomCcStatementActive] = useState(false);
   const [visaCompanionRpinActive, setVisaCompanionRpinActive] = useState(false);
   const [refundAuthLetterActive, setRefundAuthLetterActive] = useState(false);
+  const [estateCcPaymentActive, setEstateCcPaymentActive] = useState(false);
   if (refundAuthLetterActive) {
     return (
       <RefundAuthLetterWorkflow
@@ -269,6 +271,15 @@ function TicketView({ ticket, onTicketUpdate, onGoHome, onOpenSettings, onOpenSt
       <ReverseFeeWorkflow
         ticket={ticket}
         onClose={() => setReverseFeeActive(false)}
+        onTicketUpdate={onTicketUpdate}
+      />
+    );
+  }
+  if (estateCcPaymentActive) {
+    return (
+      <EstateCcPaymentWorkflow
+        ticket={ticket}
+        onClose={() => setEstateCcPaymentActive(false)}
         onTicketUpdate={onTicketUpdate}
       />
     );
@@ -308,6 +319,7 @@ function TicketView({ ticket, onTicketUpdate, onGoHome, onOpenSettings, onOpenSt
       onStartWalletTriage={() => setWalletTriageActive(true)}
       onStartVisaCompanionRpin={() => setVisaCompanionRpinActive(true)}
       onStartRefundAuthLetter={() => setRefundAuthLetterActive(true)}
+      onStartEstateCcPayment={() => setEstateCcPaymentActive(true)}
       onGoHome={onGoHome}
       onOpenSettings={onOpenSettings}
       onOpenStats={onOpenStats}
@@ -315,7 +327,7 @@ function TicketView({ ticket, onTicketUpdate, onGoHome, onOpenSettings, onOpenSt
   );
 }
 
-function TicketViewInner({ ticket, onTicketUpdate, onStartTriage, onStartReverseFee, onStartCustomCcStatement, onStartWalletTriage, onStartVisaCompanionRpin, onStartRefundAuthLetter, onGoHome, onOpenSettings, onOpenStats }: { ticket: WocooTicket; onTicketUpdate: (t: WocooTicket) => void; onStartTriage: () => void; onStartReverseFee: () => void; onStartCustomCcStatement: () => void; onStartWalletTriage: () => void; onStartVisaCompanionRpin: () => void; onStartRefundAuthLetter: () => void; onGoHome: () => void; onOpenSettings: () => void; onOpenStats: () => void }) {
+function TicketViewInner({ ticket, onTicketUpdate, onStartTriage, onStartReverseFee, onStartCustomCcStatement, onStartWalletTriage, onStartVisaCompanionRpin, onStartRefundAuthLetter, onStartEstateCcPayment, onGoHome, onOpenSettings, onOpenStats }: { ticket: WocooTicket; onTicketUpdate: (t: WocooTicket) => void; onStartTriage: () => void; onStartReverseFee: () => void; onStartCustomCcStatement: () => void; onStartWalletTriage: () => void; onStartVisaCompanionRpin: () => void; onStartRefundAuthLetter: () => void; onStartEstateCcPayment: () => void; onGoHome: () => void; onOpenSettings: () => void; onOpenStats: () => void }) {
   const [showFullDescription, setShowFullDescription] = useState(false);
   const [showComments, setShowComments] = useState(false);
   // Bumped when "Solve using Sidekick Agent" finishes, so the draft card reloads.
@@ -588,6 +600,7 @@ function TicketViewInner({ ticket, onTicketUpdate, onStartTriage, onStartReverse
         onStartWalletTriage={onStartWalletTriage}
         onStartVisaCompanionRpin={onStartVisaCompanionRpin}
         onStartRefundAuthLetter={onStartRefundAuthLetter}
+        onStartEstateCcPayment={onStartEstateCcPayment}
         onOpenCloneMove={openCloneMove}
         onOpenCreateReimb={() => setCreateReimbActive(true)}
       />
@@ -855,7 +868,7 @@ function ExternalToolsRow({ ticket }: { ticket: WocooTicket }) {
 
 const TRANSITION_TO_DONE_ID = '251'; // matches v3 / Apps Script bridge convention
 
-function QuickActions({ ticket, onTicketUpdate, onStartTriage, onStartReverseFee, onStartCustomCcStatement, onStartWalletTriage, onStartVisaCompanionRpin, onStartRefundAuthLetter, onOpenCloneMove, onOpenCreateReimb }: { ticket: WocooTicket; onTicketUpdate: (t: WocooTicket) => void; onStartTriage: () => void; onStartReverseFee: () => void; onStartCustomCcStatement: () => void; onStartWalletTriage: () => void; onStartVisaCompanionRpin: () => void; onStartRefundAuthLetter: () => void; onOpenCloneMove: (initialDestKey?: MoveDestination) => void; onOpenCreateReimb: () => void }) {
+function QuickActions({ ticket, onTicketUpdate, onStartTriage, onStartReverseFee, onStartCustomCcStatement, onStartWalletTriage, onStartVisaCompanionRpin, onStartRefundAuthLetter, onStartEstateCcPayment, onOpenCloneMove, onOpenCreateReimb }: { ticket: WocooTicket; onTicketUpdate: (t: WocooTicket) => void; onStartTriage: () => void; onStartReverseFee: () => void; onStartCustomCcStatement: () => void; onStartWalletTriage: () => void; onStartVisaCompanionRpin: () => void; onStartRefundAuthLetter: () => void; onStartEstateCcPayment: () => void; onOpenCloneMove: (initialDestKey?: MoveDestination) => void; onOpenCreateReimb: () => void }) {
   const [doneState, setDoneState] = useState<'idle' | 'pending' | 'done' | 'error'>(
     ticket.status === 'Done' ? 'done' : 'idle',
   );
@@ -1016,6 +1029,14 @@ function QuickActions({ ticket, onTicketUpdate, onStartTriage, onStartReverseFee
           title="Open Atlas's Card Issuance Manager with this ticket's Identity ID filled in and searched"
         >
           🪪 Card Issuance Mgr
+        </ActionButton>
+        <ActionButton
+          variant="teal"
+          onClick={() => { recordClick(ticket.id, 'estate_cc_payment'); onStartEstateCcPayment(); }}
+          disabled={!ticket.identityId}
+          title="Pay off a deceased client's credit card from their chequing, then comment + Done"
+        >
+          🕊 Estate CC Payment
         </ActionButton>
       </div>
       {doneState === 'error' && errorMsg ? (
