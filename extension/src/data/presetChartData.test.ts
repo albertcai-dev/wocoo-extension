@@ -19,11 +19,11 @@ describe('pageFetchWireSends', () => {
       if (url.endsWith('/csrf_token/')) return json({ result: 'tok' });
       return json({ result: [{ data: [ROW] }] });
     };
-    expect(await pageFetchWireSends('https://p', 62667, 'AVJJXHZEBVIA53DF', fake, noSleep)).toEqual({ kind: 'rows', rows: [ROW] });
+    expect(await pageFetchWireSends('https://p', 11961, 'AVJJXHZEBVIA53DF', fake, noSleep)).toEqual({ kind: 'rows', rows: [ROW] });
     expect(calls[1].url).toBe('https://p/api/v1/chart/data');
     expect((calls[1].init?.headers as Record<string, string>)['X-CSRFToken']).toBe('tok');
     const body = JSON.parse(calls[1].init?.body as string);
-    expect(body.datasource).toEqual({ id: 62667, type: 'table' });
+    expect(body.datasource).toEqual({ id: 11961, type: 'table' });
     expect(body.queries[0].filters).toEqual([{ col: 'e2e_identifier', op: '==', val: 'AVJJXHZEBVIA53DF' }]);
     expect(body.queries[0].time_range).toBe('No filter');
     expect(body.queries[0].row_limit).toBe(10);
