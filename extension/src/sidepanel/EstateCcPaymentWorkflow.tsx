@@ -23,6 +23,7 @@ import {
   amountOwed,
   buildEstateComment,
   extractAccountNumbers,
+  extractTicketAmount,
   formatPaymentAmount,
   strangerAccountNumbers,
   type CreditPayment,
@@ -89,6 +90,10 @@ export function EstateCcPaymentWorkflow({ ticket, onClose, onTicketUpdate }: { t
 
   // Step 2 state
   const [confirmOpen, setConfirmOpen] = useState(false);
+  // A partial payment the client asked for (e.g. "transfer $500"), capped at the balance.
+  const [payOverride, setPayOverride] = useState<number | null>(null);
+  const [overrideOpen, setOverrideOpen] = useState(false);
+  const [overrideInput, setOverrideInput] = useState('');
   const [paying, setPaying] = useState(false);
   const payingRef = useRef(false);
   const [clientName, setClientName] = useState<string | null>(null);
@@ -96,6 +101,7 @@ export function EstateCcPaymentWorkflow({ ticket, onClose, onTicketUpdate }: { t
   // Step 4 state
   const [commentText, setCommentText] = useState<string>(buildEstateComment(ticket.reporter || undefined));
   const [commentEditing, setCommentEditing] = useState(false);
+  const commentTouched = useRef(false);
   const [commentPosted, setCommentPosted] = useState(false);
   const [transitionedToDone, setTransitionedToDone] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -197,7 +203,19 @@ export function EstateCcPaymentWorkflow({ ticket, onClose, onTicketUpdate }: { t
   // --- Step 2: stop conditions ---
   const named = extractAccountNumbers(ticket.description || '');
   const strangers = lookup ? strangerAccountNumbers(named, lookup.ownedAccountNumbers) : [];
-  const amount = verifiedAmount?.amount ?? null;
+  const balance = verifiedAmount?.amount ?? null;
+  const amount = payOverride ?? balance;
+  const isPartial = payOverride != null && balance != null && payOverride < balance;
+  const ticketAmount = extractTicketAmount(ticket.description || '');
+  function applyOverride(raw: string) {
+    const n = Math.round(parseFloat(raw) * 100) / 100;
+    if (!isFinite(n) || n <= 0) { setError('Enter a positive amount.'); return; }
+    if (balance != null && n > balance) { setError(`Can't pay more than the ${fmtMoney(balance)} owed.`); return; }
+    setPayOverride(n === balance ? null : n);
+    setOverrideOpen(false);
+    setError(null);
+  }
+  function clearOverride() { setPayOverride(null); setOverrideOpen(false); setOverrideInput(''); }
   const stops: string[] = [];
   if (!lookup) stops.push('Account lookup has not finished.');
   if (lookup) {
@@ -240,6 +258,19 @@ export function EstateCcPaymentWorkflow({ ticket, onClose, onTicketUpdate }: { t
   }
 
   // --- Step 4 ---
+  // Default comment follows what was actually paid vs. what the card owed beforehand, so a
+  // partial transfer isn't told to close the card. The balance is only trusted when it was
+  // verified this session — on a resumed ticket Pantheon may already show the payment. A
+  // typed amount with no live i2c balance leaves the balance unknown (a partial payment and
+  // stale Pantheon look the same), so the comment then never says to close the card.
+  const paidAmount = result.kind === 'done' && result.payment ? parseFloat(result.payment.amount) : amount;
+  const enteredByHand = verifiedAmount?.source.startsWith('entered') ?? false;
+  const owedBefore = !verifiedAmount ? null : liveAmount ?? (enteredByHand ? null : pantheonOwed);
+  useEffect(() => {
+    if (commentPosted || commentTouched.current) return;
+    setCommentText(buildEstateComment(ticket.reporter || undefined, Number.isFinite(paidAmount) ? paidAmount : null, owedBefore));
+  }, [paidAmount, owedBefore, commentPosted, ticket.reporter]);
+
   async function doPostAndDone() {
     if (!commentText.trim()) { setError('Comment is empty.'); return; }
     setBusy(true); setError(null);
@@ -314,7 +345,8 @@ export function EstateCcPaymentWorkflow({ ticket, onClose, onTicketUpdate }: { t
         return (
           <>
             <SummaryRows rows={[
-              ['Amount', amount != null ? fmtMoney(amount) : '—'],
+              ['Amount', amount != null ? `${fmtMoney(amount)}${isPartial ? ' · partial' : ''}` : '—'],
+              ...(isPartial ? [['Card balance', `${fmtMoney(balance!)} · ${fmtMoney(Math.round((balance! - amount!) * 100) / 100)} remains`] as [string, string]] : []),
               ['Source', verifiedAmount?.source ?? '—'],
               ['From', lookup?.spendSlug ? `${lookup.spendSlug}${spendNumber ? ` (${spendNumber})` : ''}` : '—'],
               ['To', cardId ? `${cardId}${card?.closed ? ' · card is closed' : ''}` : '—'],
@@ -325,11 +357,41 @@ export function EstateCcPaymentWorkflow({ ticket, onClose, onTicketUpdate }: { t
             {named.length > 0 && strangers.length === 0 && lookup ? (
               <div style={{ marginTop: 'var(--mint-sp-2)', fontSize: 'var(--mint-text-micro)', color: 'var(--mint-positive-fg-strong)' }}>✓ Ticket's account numbers ({named.join(', ')}) match this client.</div>
             ) : null}
+            {result.kind === 'idle' && balance != null ? (
+              payOverride != null ? (
+                <button onClick={clearOverride} style={{ ...secondaryButton, width: '100%', marginTop: 'var(--mint-sp-2)' }}>Pay full balance ({fmtMoney(balance)}) instead</button>
+              ) : overrideOpen ? (
+                <div style={{ marginTop: 'var(--mint-sp-2)', padding: 'var(--mint-sp-2) var(--mint-sp-3)', background: 'var(--mint-warning-bg-soft)', borderRadius: 'var(--mint-radius-button)' }}>
+                  <div style={{ fontSize: 'var(--mint-text-nano)', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--mint-warning-fg-strong)', fontWeight: 700, marginBottom: 6 }}>Amount to pay (up to {fmtMoney(balance)})</div>
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <span>$</span>
+                    <input
+                      type="number" step="0.01" min="0.01" max={balance}
+                      value={overrideInput}
+                      onChange={(e) => setOverrideInput(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') applyOverride(overrideInput); }}
+                      placeholder="500.00"
+                      autoFocus
+                      style={{ flex: 1, minWidth: 80, padding: '6px 10px', border: 'var(--mint-card-stroke)', borderRadius: 'var(--mint-radius-button)', fontFamily: 'var(--mint-font-mono)', fontSize: 'var(--mint-text-micro)' }}
+                    />
+                    <button onClick={() => applyOverride(overrideInput)} style={{ ...primaryButton, padding: '6px 12px' }}>Use</button>
+                    <button onClick={() => setOverrideOpen(false)} style={{ ...secondaryButton, padding: '6px 12px' }}>Cancel</button>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ marginTop: 'var(--mint-sp-2)', display: 'flex', gap: 'var(--mint-sp-2)' }}>
+                  {ticketAmount != null && ticketAmount < balance ? (
+                    <button onClick={() => applyOverride(String(ticketAmount))} style={{ ...secondaryButton, flex: 1 }}>Pay {fmtMoney(ticketAmount)} from ticket</button>
+                  ) : null}
+                  <button onClick={() => { setOverrideInput(ticketAmount != null && ticketAmount < balance ? String(ticketAmount) : ''); setOverrideOpen(true); }} style={{ ...secondaryButton, flex: 1 }}>Pay a different amount</button>
+                </div>
+              )
+            ) : null}
             {stops.map((s) => (
               <div key={s} role="alert" style={{ ...errorBanner, marginTop: 'var(--mint-sp-2)', fontSize: 'var(--mint-text-micro)' }}>⛔ {s}</div>
             ))}
             <div style={{ marginTop: 'var(--mint-sp-3)', display: 'flex', gap: 'var(--mint-sp-2)' }}>
-              <button onClick={() => { setStep(1); setVerifiedAmount(null); }} style={secondaryButton}>← Back</button>
+              <button onClick={() => { setStep(1); setVerifiedAmount(null); clearOverride(); }} style={secondaryButton}>← Back</button>
               <button
                 onClick={() => setConfirmOpen(true)}
                 disabled={!canPay}
@@ -375,7 +437,7 @@ export function EstateCcPaymentWorkflow({ ticket, onClose, onTicketUpdate }: { t
         <CommentStep
           ticket={ticket}
           commentText={commentText}
-          setCommentText={setCommentText}
+          setCommentText={(v) => { commentTouched.current = true; setCommentText(v); }}
           commentEditing={commentEditing}
           setCommentEditing={setCommentEditing}
           commentPosted={commentPosted}
@@ -405,7 +467,7 @@ export function EstateCcPaymentWorkflow({ ticket, onClose, onTicketUpdate }: { t
               ...(clientName ? [['Client', clientName] as [string, string]] : []),
               ['From', `${lookup!.spendSlug}${spendNumber ? ` (${spendNumber})` : ''}`],
               ['To', `${cardId}${card?.closed ? ' · card is closed' : ''}`],
-              ['Amount', fmtMoney(amount)],
+              ['Amount', `${fmtMoney(amount)}${isPartial ? ` of ${fmtMoney(balance!)} owed` : ''}`],
               ['Balance source', verifiedAmount?.source ?? '—'],
             ]} />
             <div style={{ marginTop: 'var(--mint-sp-3)', display: 'flex', gap: 'var(--mint-sp-2)' }}>

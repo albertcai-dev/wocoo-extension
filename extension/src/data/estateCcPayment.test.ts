@@ -7,6 +7,7 @@ import {
   chooseCard,
   creditOnCard,
   extractAccountNumbers,
+  extractTicketAmount,
   FETCH_CREDIT_PAYMENTS_QUERY,
   findTicketPayment,
   formatPaymentAmount,
@@ -327,6 +328,24 @@ describe('buildEstateComment', () => {
   it('falls back to "Hi team, " when there is no reporter', () => {
     expect(buildEstateComment(undefined).startsWith('Hi team, ')).toBe(true);
   });
+
+  it('keeps the payoff wording when the payment covers the balance', () => {
+    expect(buildEstateComment('Jane Doe', 812.4, 812.4)).toContain('pay off their balance');
+    expect(buildEstateComment('Jane Doe', 900, 812.4)).toContain('close the card');
+  });
+
+  it('states the amount and what remains on a partial payment', () => {
+    expect(buildEstateComment('Jane Doe', 500, 1234.56)).toBe(
+      "Hi @Jane Doe, I've processed a $500.00 payment from the client's chequing account to their credit card. A balance of $734.56 remains on the card.",
+    );
+  });
+
+  it('states only the amount when the prior balance is unknown', () => {
+    const c = buildEstateComment('Jane Doe', 500, null);
+    expect(c).toContain('$500.00 payment');
+    expect(c).not.toContain('close the card');
+    expect(c).not.toContain('remains');
+  });
 });
 
 describe('creditOnCard', () => {
@@ -337,5 +356,21 @@ describe('creditOnCard', () => {
   it('returns null when the card owes or is at zero', () => {
     expect(creditOnCard(0)).toBeNull();
     expect(creditOnCard(-148.03)).toBeNull();
+  });
+});
+
+describe('extractTicketAmount', () => {
+  it('reads the one dollar amount a ticket names', () => {
+    expect(extractTicketAmount('Please transfer $500 from chequing account WTEST0001CAD to CTEST0001CAD.')).toBe(500);
+    expect(extractTicketAmount('Pay $1,234.56 toward the card')).toBe(1234.56);
+  });
+
+  it('treats the same amount named twice as one', () => {
+    expect(extractTicketAmount('Transfer $500. Again, $500.00 only.')).toBe(500);
+  });
+
+  it('returns null when there is no amount or more than one', () => {
+    expect(extractTicketAmount('Please pay off the balance')).toBeNull();
+    expect(extractTicketAmount('Balance is $2,328.37 but pay $500')).toBeNull();
   });
 });

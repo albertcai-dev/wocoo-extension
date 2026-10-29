@@ -243,6 +243,19 @@ export function extractAccountNumbers(description: string): string[] {
   return out;
 }
 
+const DOLLAR_AMOUNT_RE = /\$\s?(\d{1,3}(?:,\d{3})+|\d+)(\.\d{1,2})?/g;
+
+/** The one dollar amount a ticket names (e.g. "transfer $500"), or null when it names
+ *  none or several different ones — then there's no safe guess to offer. */
+export function extractTicketAmount(description: string): number | null {
+  const amounts = new Set<number>();
+  for (const m of description.matchAll(DOLLAR_AMOUNT_RE)) {
+    const n = parseFloat(m[1].replace(/,/g, '') + (m[2] ?? ''));
+    if (n > 0) amounts.add(Math.round(n * 100) / 100);
+  }
+  return amounts.size === 1 ? [...amounts][0] : null;
+}
+
 /** Account numbers named in the ticket that belong to neither the chequing nor the card. */
 export function strangerAccountNumbers(named: string[], owned: string[]): string[] {
   const ownedSet = new Set(owned);
@@ -251,11 +264,24 @@ export function strangerAccountNumbers(named: string[], owned: string[]): string
 
 // --- Jira comment ---
 
-/** The default wrap-up comment (spec step 7). `@{reporter}` becomes a mention pill. */
-export function buildEstateComment(reporter: string | undefined): string {
+/** The default wrap-up comment (spec step 7). `@{reporter}` becomes a mention pill.
+ *  `paid` is the payment sent; `owed` the balance the card had before it, when known.
+ *  Full payoff (or no amounts) keeps the close-the-card wording; a partial payment
+ *  states the amount and what's left; an unknown balance just states the amount. */
+export function buildEstateComment(reporter: string | undefined, paid?: number | null, owed?: number | null): string {
   const mention = reporter ? `@${reporter}` : 'team';
-  return (
+  const fullPayoff =
     `Hi ${mention}, I've processed the payment from client's chequing account to pay off ` +
-    `their balance! You can proceed to close the card now.`
+    `their balance! You can proceed to close the card now.`;
+  if (paid == null) return fullPayoff;
+  const money = (n: number) => `$${formatPaymentAmount(n)}`;
+  if (owed == null) {
+    return `Hi ${mention}, I've processed a ${money(paid)} payment from the client's chequing account to their credit card.`;
+  }
+  const remaining = Math.round((owed - paid) * 100) / 100;
+  if (remaining <= 0) return fullPayoff;
+  return (
+    `Hi ${mention}, I've processed a ${money(paid)} payment from the client's chequing account ` +
+    `to their credit card. A balance of ${money(remaining)} remains on the card.`
   );
 }
