@@ -24,7 +24,7 @@ export const USAGE_BUTTONS = {
   reverse_fee:         { label: '↗ Reverse Fee',            kind: 'workflow' },
   custom_cc_statement: { label: '🧾 Custom CC Statement',   kind: 'workflow' },
   card_issuance_mgr:   { label: '🪪 Card Issuance Mgr',     kind: 'workflow' },
-  estate_cc_payment:   { label: '🕊 Estate CC Payment',     kind: 'workflow' },
+  estate_cc_payment:   { label: '💳 Pay Credit Card',       kind: 'workflow' },
   atlas:               { label: '↗ Atlas',                  kind: 'lookup' },
   koho:                { label: '↗ Koho',                   kind: 'lookup' },
   i2c:                 { label: '↗ i2c',                    kind: 'lookup' },

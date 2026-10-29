@@ -1,5 +1,5 @@
-// Estate CC Payment workflow — pays off a deceased client's credit card from their SPEND
-// chequing, then comments on the ticket and marks it Done.
+// Pay Credit Card workflow (internally still estateCcPayment) — pays a client's credit card
+// from their SPEND chequing (deceased estates, terminated clients who can't self-serve), then comments on the ticket and marks it Done.
 //
 // Step 1: Verify balance — Pantheon balance shown up front; the shared VerifyBalanceStep
 //         offers the i2c live capture. Verified / Balance differs unlock step 2.
@@ -525,7 +525,7 @@ function SuccessPanel({ ticketId, onCloseToTicket }: { ticketId: string; onClose
   return (
     <section style={{ background: 'var(--mint-positive-bg-soft)', border: '1px solid var(--mint-positive-fg-graphic)', borderRadius: 'var(--mint-radius-card)', padding: 'var(--mint-sp-4)', textAlign: 'center' }}>
       <div style={{ width: 48, height: 48, margin: '0 auto var(--mint-sp-2)', borderRadius: 9999, background: 'var(--mint-positive-fg-graphic)', color: '#fff', fontSize: 24, fontWeight: 800, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>✓</div>
-      <h3 style={{ margin: 0, fontSize: 'var(--mint-text-h-md)', color: 'var(--mint-fg-strong)', fontWeight: 700 }}>Estate payment complete</h3>
+      <h3 style={{ margin: 0, fontSize: 'var(--mint-text-h-md)', color: 'var(--mint-fg-strong)', fontWeight: 700 }}>Payment complete</h3>
       <p style={{ margin: 'var(--mint-sp-2) 0 var(--mint-sp-3)', fontSize: 'var(--mint-text-meta)', color: 'var(--mint-fg-subdued-title)', lineHeight: 1.6 }}>
         Card paid · Comment posted · Moved to Done
       </p>
@@ -546,7 +546,7 @@ function Header({ step, ticketId, onClose }: { step: StepNum; ticketId: string; 
         <span style={{ marginLeft: 'auto', fontSize: 'var(--mint-text-nano)', color: 'var(--mint-fg-soft)' }}>Step {Math.min(step, 4)} of 4</span>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-        <h2 style={{ margin: 0, fontSize: 'var(--mint-text-h-md)', fontWeight: 700, color: 'var(--mint-fg-strong)' }}>Estate CC payment</h2>
+        <h2 style={{ margin: 0, fontSize: 'var(--mint-text-h-md)', fontWeight: 700, color: 'var(--mint-fg-strong)' }}>Pay Credit Card</h2>
         <ProgressDots step={step} />
       </div>
     </header>

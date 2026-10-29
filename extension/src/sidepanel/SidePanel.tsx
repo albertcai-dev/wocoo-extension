@@ -625,7 +625,11 @@ function TicketViewInner({ ticket, onTicketUpdate, onStartTriage, onStartReverse
         key={`${ticket.id}:${draftRefresh}`}
         ticket={ticket}
         onTicketUpdate={onTicketUpdate}
-        onOpenWorkflow={(w) => { if (w === 'overpayment') onStartTriage(); else onStartReverseFee(); }}
+        onOpenWorkflow={(w) => {
+          if (w === 'overpayment') onStartTriage();
+          else if (w === 'pay_credit_card') onStartEstateCcPayment();
+          else onStartReverseFee();
+        }}
         onOpenMove={openPrefilledMove}
         onSolveAgain={() => setSolveRequest((n) => n + 1)}
       />
@@ -1034,9 +1038,9 @@ function QuickActions({ ticket, onTicketUpdate, onStartTriage, onStartReverseFee
           variant="teal"
           onClick={() => { recordClick(ticket.id, 'estate_cc_payment'); onStartEstateCcPayment(); }}
           disabled={!ticket.identityId}
-          title="Pay off a deceased client's credit card from their chequing, then comment + Done"
+          title="Pay a client's credit card from their chequing (estates, terminated clients…), then comment + Done"
         >
-          🕊 Estate CC Payment
+          💳 Pay Credit Card
         </ActionButton>
       </div>
       {doneState === 'error' && errorMsg ? (

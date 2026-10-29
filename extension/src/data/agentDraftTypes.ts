@@ -26,7 +26,7 @@ export type DraftMoveDestination =
 
 export type DraftEvidenceKind = 'ticket' | 'i2c' | 'koho' | 'atlas' | 'preset' | 'precedent' | 'doc' | 'cxo' | 'compass';
 
-export type DraftWorkflow = 'reverse_fee' | 'reverse_interest_fee' | 'overpayment';
+export type DraftWorkflow = 'reverse_fee' | 'reverse_interest_fee' | 'overpayment' | 'pay_credit_card';
 
 export interface DraftEvidence {
   kind: DraftEvidenceKind;
