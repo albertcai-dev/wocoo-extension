@@ -93,7 +93,8 @@ describe('payEstateCard', () => {
     const out = await payEstateCard(ARGS, deps);
     expect(out).toEqual({ kind: 'sent', paymentId: PAYMENT_ID });
     expect(calls.map((c) => c.op)).toEqual(['logRolesAndScopes', 'AdminCreateCreditPayment']);
-    expect(calls[0]).toMatchObject({ service: 'fort_knox', vars: { input: { roles: ['payment_cards_ops'] } } });
+    // Lives on Atlas's bare endpoint; fort_knox 400s with "Field 'logRolesAndScopes' doesn't exist".
+    expect(calls[0]).toMatchObject({ service: '', vars: { input: { roles: ['payment_cards_ops'] } } });
     expect(calls[1]).toEqual({
       service: 'fort_knox',
       op: 'AdminCreateCreditPayment',

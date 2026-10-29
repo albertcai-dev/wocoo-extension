@@ -21,7 +21,7 @@ All paths below are relative to `extension/`. Run commands from `extension/`.
   - It uses cookie auth.
   - The endpoint rejects a body without `operationName`.
 - Services:
-  - `SpendClient`, `logRolesAndScopes`, `FetchCreditPaymentsAtlas` and `AdminCreateCreditPayment` use `'fort_knox'`.
+  - `SpendClient`, `FetchCreditPaymentsAtlas` and `AdminCreateCreditPayment` use `'fort_knox'`; `logRolesAndScopes` uses the bare endpoint (`''`) — fort_knox has no such field.
   - `getAccountDetails` uses `'wealthsimple'`, as the existing `GET_ACCOUNT_DETAILS_QUERY` does.
 - Mutation input:
   - `paymentAmount` is a string with exactly 2 decimals, and must be > 0.

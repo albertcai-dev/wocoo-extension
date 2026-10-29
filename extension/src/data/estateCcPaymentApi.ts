@@ -172,8 +172,9 @@ async function doPay(
   if (!(amount > 0)) return { kind: 'failed', message: 'Nothing to pay: the amount must be greater than 0.' };
 
   // Atlas logs the role before every manual payment; do the same, and never pay without it.
+  // It lives on the bare /api/atlas/graphql endpoint, not fort_knox (which 400s on it).
   try {
-    const audit = await deps.gql('fort_knox', 'logRolesAndScopes', LOG_ROLES_MUTATION, {
+    const audit = await deps.gql('', 'logRolesAndScopes', LOG_ROLES_MUTATION, {
       input: { roles: ['payment_cards_ops'] },
     });
     if (asRecord(asRecord(asRecord(audit)?.data)?.logRolesAndScopes)?.success !== true) {
