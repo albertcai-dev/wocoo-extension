@@ -1,26 +1,21 @@
 // Direct browser calls to the Wealthsimple LLM Gateway (OpenAI-shaped).
 //
-// The gateway is fronted by Open WebUI, which owns the API keys shown under its
-// Account settings and authenticates them with a bearer token. Calls used to go to a
-// LiteLLM path (`/api/v2/chat/completions`) with an `X-LiteLLM-Dev-Key` header; after
-// the migration that path rejects every Open WebUI key with a 401 reading "Unable to
-// find token in ... LiteLLM_VerificationTokenTable", because the key genuinely is not
-// in LiteLLM's own store. Response bodies are unchanged, so only the transport moved.
+// Calls go to the internal LiteLLM proxy, the same one Claude Code is routed through,
+// authenticated with the personal key from `ws llm token create` as a bearer token.
+// They used to go through Open WebUI at llm.w10e.com, but on 2026-10-30 it began
+// rejecting every personal key with 403 "Use of API key is not enabled in the
+// environment." The proxy answers CORS preflights with `*`, so the side panel can call
+// it directly. Response bodies are the same OpenAI shape either way.
 //
 // This cannot live on the Apps Script bridge: the gateway is VPN-locked and Apps Script
 // runs on Google's public servers. The extension is inside the VPN whenever Albert is.
 
-export const LLM_GATEWAY_URL = 'https://llm.w10e.com/api/chat/completions';
-/** The un-suffixed `bedrock-claude-sonnet-4-6` was retired and now returns 400 "Model
- *  not found"; the gateway lists only the `-global` cross-region inference profile.
- *
- *  This used to carry a note that the model had to stay VPC-hosted, because external
- *  models get WS PII masking that mangles client names and emails inside ticket text.
- *  Under Open WebUI every base model reports `connection_type: external`, which is a
- *  statement about how Open WebUI reaches its backend rather than about VPC hosting —
- *  so that field cannot be used to tell the two apart. Confirm with #ml-platform
- *  before assuming ticket text reaches this model unmasked. */
-export const LLM_GATEWAY_MODEL = 'bedrock-claude-sonnet-4-6-global';
+export const LLM_GATEWAY_URL =
+  'https://litellm-internal-proxy.use1.pro1.production.w10e.com/v1/chat/completions';
+/** A Bedrock-hosted model the proxy serves; the same id Claude Code uses for Sonnet.
+ *  Bedrock models are hosted inside WS's own cloud account, so ticket text sent to
+ *  them does not go through the PII masking applied to external models. */
+export const LLM_GATEWAY_MODEL = 'bedrock-claude-sonnet-5';
 export const LLM_GATEWAY_TIMEOUT_MS = 45_000;
 
 export interface LlmMessage {

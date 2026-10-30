@@ -22,8 +22,7 @@ describe('callLlmGateway', () => {
 
     const [url, init] = (fetchMock as any).mock.calls[0];
     expect(url).toBe(LLM_GATEWAY_URL);
-    // Open WebUI fronts the gateway and authenticates with a bearer token. The older
-    // LiteLLM-specific header is rejected by it, which is what made every call 401.
+    // The proxy authenticates with a bearer token, not the older X-LiteLLM-Dev-Key header.
     expect((init.headers as Record<string, string>).Authorization).toBe('Bearer sk-test');
     expect((init.headers as Record<string, string>)['X-LiteLLM-Dev-Key']).toBeUndefined();
     const body = JSON.parse(init.body as string);
@@ -68,15 +67,15 @@ describe('pingLlmGateway', () => {
 });
 
 describe('LLM_GATEWAY_URL', () => {
-  it('targets Open WebUI chat completions, not the retired LiteLLM v2 path', () => {
-    expect(LLM_GATEWAY_URL).toBe('https://llm.w10e.com/api/chat/completions');
+  it('targets the internal LiteLLM proxy, not Open WebUI (which now refuses API keys)', () => {
+    expect(LLM_GATEWAY_URL).toBe(
+      'https://litellm-internal-proxy.use1.pro1.production.w10e.com/v1/chat/completions',
+    );
   });
 });
 
 describe('LLM_GATEWAY_MODEL', () => {
   it('names a model id the gateway still serves', () => {
-    // The un-suffixed bedrock-claude-sonnet-4-6 was retired; the gateway now lists
-    // only the -global inference profile, and the old id returns 400 "Model not found".
-    expect(LLM_GATEWAY_MODEL).toBe('bedrock-claude-sonnet-4-6-global');
+    expect(LLM_GATEWAY_MODEL).toBe('bedrock-claude-sonnet-5');
   });
 });

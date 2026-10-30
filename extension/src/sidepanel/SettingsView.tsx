@@ -278,8 +278,8 @@ function LlmGatewayRow() {
       ) : null}
 
       <div style={{ marginTop: 'var(--mint-sp-2)', fontSize: 'var(--mint-text-nano)', color: 'var(--mint-fg-soft)', lineHeight: 1.4 }}>
-        Personal LiteLLM developer key, stored locally on this device. The gateway is only
-        reachable on the WS VPN.
+        Personal LiteLLM key from <code>ws llm token create</code>, stored locally on this
+        device. The gateway is only reachable on the WS VPN.
       </div>
     </div>
   );
