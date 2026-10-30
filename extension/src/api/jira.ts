@@ -133,7 +133,7 @@ export async function resolveOptionId(
   const field = fields.find((f) => f.fieldId === fieldId);
   if (!field?.allowedValues) throw new Error(`Field ${fieldId} not found in ${projectKey}/${issueTypeId} metadata`);
   const match = field.allowedValues.find((v) => {
-    const val = (v.value ?? v.name ?? '').toString().toLowerCase();
+    const val = (v.value ?? v.name ?? '').toString().toLowerCase().trim();
     return val === target;
   });
   if (!match) throw new Error(`Option "${label}" not found for ${projectKey}/${issueTypeId} field ${fieldId}`);
