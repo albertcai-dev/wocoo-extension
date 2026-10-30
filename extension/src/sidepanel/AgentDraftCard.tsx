@@ -107,11 +107,17 @@ const INSERT_FORCE: Partial<Record<Extract<Prefill, { kind: 'skipped' }>['reason
   error: false,
 };
 
+/** Vendor workflows fill the i2c / KOHO card below with the agent's text instead of opening a tile. */
+const VENDOR_WORKFLOW_LABEL: Partial<Record<NonNullable<DraftActionNeeded['workflow']>, string>> = {
+  i2c_ticket: 'Open i2c form with draft',
+  koho_email: 'Go to KOHO email with draft',
+};
+
 const STATUSES: ReadonlyArray<WocooTicket['status']> = ['Triage', 'Back Office', 'Pending', 'Done', 'Cancelled', 'Other'];
 
 export function AgentDraftCard({ ticket, onOpenWorkflow, onTicketUpdate, onOpenMove, onSolveAgain }: {
   ticket: WocooTicket;
-  onOpenWorkflow: (workflow: NonNullable<DraftActionNeeded['workflow']>) => void;
+  onOpenWorkflow: (workflow: NonNullable<DraftActionNeeded['workflow']>, vendorDraft?: DraftActionNeeded['vendor_draft']) => void;
   onTicketUpdate?: (t: WocooTicket) => void;
   /** Opens the Move modal pre-filled from the agent's move suggestion. */
   onOpenMove?: (prefill: MovePrefill) => void;
@@ -163,7 +169,7 @@ export function AgentDraftCard({ ticket, onOpenWorkflow, onTicketUpdate, onOpenM
 function DraftBody({ ticket, draft, onOpenWorkflow, onTicketUpdate, onOpenMove, onSolveAgain }: {
   ticket: WocooTicket;
   draft: AgentDraft;
-  onOpenWorkflow: (workflow: NonNullable<DraftActionNeeded['workflow']>) => void;
+  onOpenWorkflow: (workflow: NonNullable<DraftActionNeeded['workflow']>, vendorDraft?: DraftActionNeeded['vendor_draft']) => void;
   onTicketUpdate?: (t: WocooTicket) => void;
   onOpenMove?: (prefill: MovePrefill) => void;
   onSolveAgain?: () => void;
@@ -494,15 +500,15 @@ function DraftBody({ ticket, draft, onOpenWorkflow, onTicketUpdate, onOpenMove, 
         <div style={bannerStyle}>
           <div style={{ fontWeight: 700 }}>Action needed — you</div>
           <div style={{ marginTop: 2 }}>{draft.action_needed.summary}</div>
-          {draft.action_needed.workflow && (
+          {draft.action_needed.workflow && !VENDOR_WORKFLOW_LABEL[draft.action_needed.workflow] && (
             <div style={{ marginTop: 4, fontStyle: 'italic' }}>
               This workflow posts its own reply and closes the ticket — use this draft only if you do the action by hand.
             </div>
           )}
           {draft.action_needed.workflow && (
             <button type="button" style={{ ...secondaryButton, marginTop: 6 }}
-              onClick={() => onOpenWorkflow(draft.action_needed!.workflow!)}>
-              Open workflow
+              onClick={() => onOpenWorkflow(draft.action_needed!.workflow!, draft.action_needed!.vendor_draft)}>
+              {VENDOR_WORKFLOW_LABEL[draft.action_needed.workflow] ?? 'Open workflow'}
             </button>
           )}
           <label style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 6 }}>

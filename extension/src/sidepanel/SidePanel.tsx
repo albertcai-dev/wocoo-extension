@@ -44,7 +44,7 @@ import { CopyButton as PillCopyButton } from './toolUi';
 import { WiresPendingPosting } from './WiresPendingPosting';
 import { EligibilityTriage } from './EligibilityTriage';
 import { SettingsView } from './SettingsView';
-import { I2cCard, KohoCard } from './MessagingCards';
+import { I2cCard, KohoCard, type VendorDraftRequest } from './MessagingCards';
 import { fetchAtlasAccountIdHeadless, fetchAtlasClientEmailHeadless } from '../data/atlasAccountLookup';
 import { isInterestRelatedWorkType, isInterestFeeInContent } from '../data/reverseFeeDetect';
 import { subscribeToTicketTransitions, emitTicketTransition, type TicketTransitionEvent } from './ticketLogEvents';
@@ -342,6 +342,8 @@ function TicketViewInner({ ticket, onTicketUpdate, onStartTriage, onStartReverse
   const [movePrefill, setMovePrefill] = useState<MovePrefill | undefined>(undefined);
   // Bumped per open so a second suggestion click remounts the modal and re-seeds it.
   const [moveOpenCount, setMoveOpenCount] = useState(0);
+  // Set by the agent draft's i2c_ticket / koho_email workflow: fills that messaging card.
+  const [vendorRequest, setVendorRequest] = useState<{ kind: 'i2c' | 'koho'; draft: VendorDraftRequest } | null>(null);
   const openCloneMove = (initialDestKey: MoveDestination = 'EOC') => {
     setMoveInitialDest(initialDestKey);
     setMovePrefill(undefined);
@@ -625,8 +627,13 @@ function TicketViewInner({ ticket, onTicketUpdate, onStartTriage, onStartReverse
         key={`${ticket.id}:${draftRefresh}`}
         ticket={ticket}
         onTicketUpdate={onTicketUpdate}
-        onOpenWorkflow={(w) => {
-          if (w === 'overpayment') onStartTriage();
+        onOpenWorkflow={(w, vendorDraft) => {
+          if (w === 'i2c_ticket' || w === 'koho_email') {
+            if (!vendorDraft) return;
+            const kind = w === 'i2c_ticket' ? 'i2c' : 'koho';
+            setVendorRequest((prev) => ({ kind, draft: { ...vendorDraft, n: (prev?.draft.n ?? 0) + 1 } }));
+          }
+          else if (w === 'overpayment') onStartTriage();
           else if (w === 'pay_credit_card') onStartEstateCcPayment();
           else onStartReverseFee();
         }}
@@ -675,12 +682,13 @@ function TicketViewInner({ ticket, onTicketUpdate, onStartTriage, onStartReverse
       {/eligibility\s*confirmation/i.test(ticket.workType || '') ? null : (() => {
         const wt = (ticket.workType || '').toLowerCase();
         const isCc = wt.includes('credit card');
-        const showKoho = !isCc && (wt.includes('prepaid card') || wt.includes('cash'));
-        const showI2c = isCc || showKoho;
+        // An agent draft request shows its card even when the work type wouldn't.
+        const showKoho = (!isCc && (wt.includes('prepaid card') || wt.includes('cash'))) || vendorRequest?.kind === 'koho';
+        const showI2c = isCc || showKoho || vendorRequest?.kind === 'i2c';
         return (
           <>
-            {showKoho ? <KohoCard ticket={ticket} /> : null}
-            {showI2c ? <I2cCard ticket={ticket} /> : null}
+            {showKoho ? <KohoCard ticket={ticket} agentDraft={vendorRequest?.kind === 'koho' ? vendorRequest.draft : undefined} /> : null}
+            {showI2c ? <I2cCard ticket={ticket} agentDraft={vendorRequest?.kind === 'i2c' ? vendorRequest.draft : undefined} /> : null}
           </>
         );
       })()}

@@ -2,27 +2,45 @@
 // The draft builders live in data/messagingDrafts.ts so they can be unit-tested.
 // Koho send routes through the Apps Script bridge (Gmail MCP only drafts).
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { WocooTicket } from '../data/mockTicket';
+import type { VendorDraft } from '../data/agentDraftTypes';
 import { buildI2cDraft, buildKohoDraft } from '../data/messagingDrafts';
 import { sendKohoEmailViaBridge, logKohoSendViaBridge, logI2cSubmitViaBridge } from '../api/bridge';
 
 const I2C_FORM_URL = 'https://tracking.i2cinc.com/servicedesk/customer/portal/2/create/17';
 const KOHO_RECIPIENT = 'wealthsimplesupport@koho.ca';
 
+/** The agent draft's "Open i2c form" / "Go to KOHO email" click. `n` is bumped per click so
+ *  a second click re-applies the draft (and re-opens the i2c form) even if the text is unchanged. */
+export interface VendorDraftRequest extends VendorDraft {
+  n: number;
+}
+
 // ============================================================
 // i2c card — copy-paste only
 // ============================================================
 
-export function I2cCard({ ticket }: { ticket: WocooTicket }) {
+export function I2cCard({ ticket, agentDraft }: { ticket: WocooTicket; agentDraft?: VendorDraftRequest }) {
   const initial = buildI2cDraft(ticket);
   const [summary, setSummary] = useState(initial.summary);
   const [description, setDescription] = useState(initial.description);
+  const ref = useRef<HTMLElement>(null);
 
-  async function openAndFill() {
+  // Agent draft click: swap in the agent's text and open the form with it straight away.
+  useEffect(() => {
+    if (!agentDraft) return;
+    setSummary(agentDraft.subject);
+    setDescription(agentDraft.body);
+    ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    void openAndFill(agentDraft.subject, agentDraft.body);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agentDraft?.n]);
+
+  async function openAndFill(formSummary = summary, formDescription = description) {
     try {
       await chrome.storage.local.set({
-        pending_i2c_servicedesk_form: { summary, description },
+        pending_i2c_servicedesk_form: { summary: formSummary, description: formDescription },
       });
     } catch (e) {
       // Storage write rarely fails, but if it does the agent can still paste via Copy.
@@ -40,10 +58,10 @@ export function I2cCard({ ticket }: { ticket: WocooTicket }) {
   }
 
   return (
-    <section style={cardStyle}>
+    <section ref={ref} style={cardStyle}>
       <header style={cardHeader}>
         <span style={cardTitle}>🎫 i2c Ticket</span>
-        <button type="button" onClick={openAndFill} style={openButtonStyle}>↗ Open &amp; Fill Form</button>
+        <button type="button" onClick={() => void openAndFill()} style={openButtonStyle}>↗ Open &amp; Fill Form</button>
       </header>
 
       <FieldBlock label="Suggested Summary" value={summary} onChange={setSummary} rows={2} />
@@ -58,13 +76,26 @@ export function I2cCard({ ticket }: { ticket: WocooTicket }) {
 
 type KohoState = 'idle' | 'confirming' | 'sending' | 'sent' | 'error';
 
-export function KohoCard({ ticket }: { ticket: WocooTicket }) {
+export function KohoCard({ ticket, agentDraft }: { ticket: WocooTicket; agentDraft?: VendorDraftRequest }) {
   const initial = buildKohoDraft(ticket);
   const [subject, setSubject] = useState(initial.subject);
   const [body, setBody] = useState(initial.body);
   const [state, setState] = useState<KohoState>('idle');
   const [result, setResult] = useState<{ recipient: string; from: string; sentAt: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const ref = useRef<HTMLElement>(null);
+
+  // Agent draft click: swap in the agent's email and scroll here; sending stays a manual
+  // Review → Confirm. Ignored once sent, so a stray click can't rewrite a sent email.
+  useEffect(() => {
+    if (!agentDraft) return;
+    if (state !== 'sent' && state !== 'sending') {
+      setSubject(agentDraft.subject);
+      setBody(agentDraft.body);
+    }
+    ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agentDraft?.n]);
 
   const locked = state === 'sending' || state === 'sent';
 
@@ -87,7 +118,7 @@ export function KohoCard({ ticket }: { ticket: WocooTicket }) {
   }
 
   return (
-    <section style={cardStyle}>
+    <section ref={ref} style={cardStyle}>
       <header style={cardHeader}>
         <span style={cardTitle}>✉️ Koho Email</span>
         <span style={{ fontSize: 'var(--mint-text-nano)', color: 'var(--mint-fg-soft)' }}>To: {KOHO_RECIPIENT}</span>

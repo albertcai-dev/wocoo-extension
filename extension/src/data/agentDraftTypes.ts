@@ -26,7 +26,15 @@ export type DraftMoveDestination =
 
 export type DraftEvidenceKind = 'ticket' | 'i2c' | 'koho' | 'atlas' | 'preset' | 'precedent' | 'doc' | 'cxo' | 'compass';
 
-export type DraftWorkflow = 'reverse_fee' | 'reverse_interest_fee' | 'overpayment' | 'pay_credit_card';
+export type DraftWorkflow =
+  | 'reverse_fee' | 'reverse_interest_fee' | 'overpayment' | 'pay_credit_card'
+  | 'i2c_ticket' | 'koho_email';
+
+/** The i2c ticket / KOHO email the agent wrote; set only on the i2c_ticket and koho_email workflows. */
+export interface VendorDraft {
+  subject: string;
+  body: string;
+}
 
 export interface DraftEvidence {
   kind: DraftEvidenceKind;
@@ -48,6 +56,7 @@ export interface DraftMove {
 export interface DraftActionNeeded {
   summary: string;
   workflow?: DraftWorkflow | null;
+  vendor_draft?: VendorDraft | null;
 }
 
 export interface AgentDraft {
