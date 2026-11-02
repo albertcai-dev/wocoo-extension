@@ -226,6 +226,7 @@ const ALL_PENDING_KEYS = [
   'qc_search_clicked',
   TOKEN_TARGET_KEY,
   TOKEN_STEP_KEY,
+  'pending_i2c_token_opened_at',
 ];
 
 async function clearAllPendingKeys() {
@@ -370,7 +371,18 @@ async function tryProductSearchSelect(): Promise<boolean> {
       status: (rowCells[i][cols.statusAt] || '').replace(/\s+/g, ' ').trim(),
     }));
 
-    const pick = pickCreditProduct(rows);
+    let pick = pickCreditProduct(rows);
+    // activate_token: the token can be on the prepaid card (PPVC) too; take the row whose
+    // Account/Card Number ends in the agent's card last 4.
+    if ((await getFlow()) === 'activate_token') {
+      const last4 = parseTokenTarget((await chrome.storage.local.get(TOKEN_TARGET_KEY))[TOKEN_TARGET_KEY])?.cardLast4;
+      const cardAt = rowCells[cols.headerAt].findIndex((c) => /Card\s*Number/i.test(c.replace(/\s+/g, ' ')));
+      if (last4 && cardAt >= 0) {
+        const hits = dataIdx.map((i, k) => ({ k, card: (rowCells[i][cardAt] || '').replace(/\s+/g, '') }))
+          .filter((r) => r.card.endsWith(last4));
+        if (hits.length === 1) { pick = hits[0].k; log(`  → activate_token: product row with card ending ${last4}`); }
+      }
+    }
     if (pick === null) {
       log(`  \u2192 product search: ${rows.length} product(s), no single active credit row — leaving the choice to the agent`);
       productSelectRan = true;
@@ -1691,6 +1703,30 @@ function labelledOption(labelRe: RegExp, optionRe: RegExp): { select: HTMLSelect
   return idx >= 0 ? { select, idx } : null;
 }
 
+const TOKEN_OPENED_AT_KEY = 'pending_i2c_token_opened_at';
+
+function hasContinueWithCustomer(): boolean {
+  return Array.from(document.querySelectorAll<HTMLElement>('input[type="submit"], input[type="button"], button'))
+    .some((b) => /^Continue\s+with\s+this\s+Customer$/i.test(((b as HTMLInputElement).value || b.textContent || '').trim()) && isVisible(b));
+}
+
+/** Clicks a link under the sidebar's "Card Management" group, expanding the group first when
+ *  the link is hidden. Prefers a visible <a>; falls back to clickSidebarLink. */
+function openCardManagementLink(text: string): boolean {
+  const want = text.toLowerCase();
+  const textOf = (el: Element) => (el.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const find = () => Array.from(document.querySelectorAll<HTMLElement>('a'))
+    .find((a) => textOf(a) === want && isVisible(a));
+  let link = find();
+  if (!link) {
+    const group = Array.from(document.querySelectorAll<HTMLElement>('a, button, span, div, li'))
+      .find((el) => el.children.length <= 2 && textOf(el) === 'card management' && isVisible(el));
+    if (group) { (group.closest<HTMLElement>('a, button') ?? group).click(); link = find(); }
+  }
+  if (link) { link.click(); return true; }
+  return clickSidebarLink(text);
+}
+
 let tokenStepRunning = false;
 async function tryActivateToken(): Promise<boolean> {
   if (tokenStepRunning) return false;
@@ -1729,13 +1765,22 @@ async function tryActivateToken(): Promise<boolean> {
 
     const table = findTokenTable();
     if (!table) {
-      // 2. Not on Manage Card Tokens yet: open it from the post-customer sidebar, once.
-      if (step) return false;
-      const body = document.body?.textContent || '';
-      if (!/Card Management|Account Management|Customer Management/i.test(body)) return false;
-      if (!clickSidebarLink('Manage Card Tokens')) return false;
-      log('  → activate_token: opening Manage Card Tokens');
-      await chrome.storage.local.set({ [TOKEN_STEP_KEY]: 'opened' });
+      // 2. Not on Manage Card Tokens yet: open it from the post-customer sidebar. Only once
+      //    we're past the customer page (search.do still has Continue, and its hidden menu
+      //    markup used to swallow the one click before Continue navigated away). A click
+      //    that didn't land is retried after a few seconds, up to 3 times.
+      if (step && step !== 'opened') return false;
+      if (step === 'opened') {
+        const res = await chrome.storage.local.get(TOKEN_OPENED_AT_KEY);
+        const o = res[TOKEN_OPENED_AT_KEY] as { at?: number; n?: number } | undefined;
+        if (o && (Date.now() - (o.at ?? 0) < 4_000 || (o.n ?? 0) >= 3)) return false;
+      }
+      if (hasContinueWithCustomer()) return false;
+      if (!/Account Summary|Card Management/i.test(document.body?.innerText || '')) return false;
+      if (!openCardManagementLink('Manage Card Tokens')) return false;
+      const prev = (await chrome.storage.local.get(TOKEN_OPENED_AT_KEY))[TOKEN_OPENED_AT_KEY] as { n?: number } | undefined;
+      log('  → activate_token: Card Management → Manage Card Tokens');
+      await chrome.storage.local.set({ [TOKEN_STEP_KEY]: 'opened', [TOKEN_OPENED_AT_KEY]: { at: Date.now(), n: (step ? prev?.n ?? 0 : 0) + 1 } });
       return true;
     }
     if (step === 'selected') return false; // Select clicked; the form hasn't rendered yet
