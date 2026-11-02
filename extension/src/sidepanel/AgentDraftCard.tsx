@@ -24,6 +24,7 @@ import { LessonReview } from './LessonReview';
 import { worthReviewing } from '../data/draftLessons';
 import { greetTarget, pickReplyTarget, replyParentId, type ReplyTarget } from '../data/replyTarget';
 import { planPost } from '../data/postPlan';
+import { TOKEN_ACTIVATED_KEY, freshRecord } from '../data/i2cTokenActivate';
 
 type Load =
   | { kind: 'loading' }
@@ -107,17 +108,19 @@ const INSERT_FORCE: Partial<Record<Extract<Prefill, { kind: 'skipped' }>['reason
   error: false,
 };
 
-/** Vendor workflows fill the i2c / KOHO card below with the agent's text instead of opening a tile. */
+/** Workflows that only prefill something for the user (the i2c / KOHO card below, or an i2c
+ *  form) instead of opening a tile that posts its own reply. */
 const VENDOR_WORKFLOW_LABEL: Partial<Record<NonNullable<DraftActionNeeded['workflow']>, string>> = {
   i2c_ticket: 'Open i2c form with draft',
   koho_email: 'Go to KOHO email with draft',
+  activate_token: 'Activate token in i2c',
 };
 
 const STATUSES: ReadonlyArray<WocooTicket['status']> = ['Triage', 'Back Office', 'Pending', 'Done', 'Cancelled', 'Other'];
 
 export function AgentDraftCard({ ticket, onOpenWorkflow, onTicketUpdate, onOpenMove, onSolveAgain }: {
   ticket: WocooTicket;
-  onOpenWorkflow: (workflow: NonNullable<DraftActionNeeded['workflow']>, vendorDraft?: DraftActionNeeded['vendor_draft']) => void;
+  onOpenWorkflow: (workflow: NonNullable<DraftActionNeeded['workflow']>, action: DraftActionNeeded) => void;
   onTicketUpdate?: (t: WocooTicket) => void;
   /** Opens the Move modal pre-filled from the agent's move suggestion. */
   onOpenMove?: (prefill: MovePrefill) => void;
@@ -169,7 +172,7 @@ export function AgentDraftCard({ ticket, onOpenWorkflow, onTicketUpdate, onOpenM
 function DraftBody({ ticket, draft, onOpenWorkflow, onTicketUpdate, onOpenMove, onSolveAgain }: {
   ticket: WocooTicket;
   draft: AgentDraft;
-  onOpenWorkflow: (workflow: NonNullable<DraftActionNeeded['workflow']>, vendorDraft?: DraftActionNeeded['vendor_draft']) => void;
+  onOpenWorkflow: (workflow: NonNullable<DraftActionNeeded['workflow']>, action: DraftActionNeeded) => void;
   onTicketUpdate?: (t: WocooTicket) => void;
   onOpenMove?: (prefill: MovePrefill) => void;
   onSolveAgain?: () => void;
@@ -177,6 +180,18 @@ function DraftBody({ ticket, draft, onOpenWorkflow, onTicketUpdate, onOpenMove, 
   const editable = draft.outcome === 'draft' || draft.outcome === 'needs_info';
   const [text, setText] = useState(() => segmentsToPlain(draft.segments));
   const [actionDone, setActionDone] = useState(false);
+  // activate_token: i2c reports the user's Update Status click; that is the action done.
+  const watchTokenClick = draft.action_needed?.workflow === 'activate_token';
+  useEffect(() => {
+    if (!watchTokenClick) return;
+    const check = (v: unknown) => { if (freshRecord(v, Date.now(), ticket.id)) setActionDone(true); };
+    void chrome.storage.local.get(TOKEN_ACTIVATED_KEY).then((r) => check(r[TOKEN_ACTIVATED_KEY]));
+    const onChanged = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
+      if (area === 'local' && changes[TOKEN_ACTIVATED_KEY]) check(changes[TOKEN_ACTIVATED_KEY].newValue);
+    };
+    chrome.storage.onChanged.addListener(onChanged);
+    return () => chrome.storage.onChanged.removeListener(onChanged);
+  }, [watchTokenClick, ticket.id]);
   const [phase, setPhase] = useState<Phase>('idle');
   const [error, setError] = useState<string | null>(null);
   const [mentions, setMentions] = useState<Mentions>({ kind: 'resolving' });
@@ -507,7 +522,7 @@ function DraftBody({ ticket, draft, onOpenWorkflow, onTicketUpdate, onOpenMove, 
           )}
           {draft.action_needed.workflow && (
             <button type="button" style={{ ...secondaryButton, marginTop: 6 }}
-              onClick={() => onOpenWorkflow(draft.action_needed!.workflow!, draft.action_needed!.vendor_draft)}>
+              onClick={() => onOpenWorkflow(draft.action_needed!.workflow!, draft.action_needed!)}>
               {VENDOR_WORKFLOW_LABEL[draft.action_needed.workflow] ?? 'Open workflow'}
             </button>
           )}

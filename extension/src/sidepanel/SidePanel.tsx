@@ -58,6 +58,8 @@ import { stageCardIssuanceSearch } from '../data/cardIssuanceStage';
 import { captureJiraOutcomeLive } from '../data/outcomeCaptureLive';
 import { PRESET_DASHBOARD_IDS, presetDashboardUrl } from '../data/presetConfig';
 import { recordClick, recordOutcome } from '../data/usageStore';
+import { TOKEN_ACTIVATED_KEY, TOKEN_AWAIT_UPDATE_KEY, TOKEN_STEP_KEY, TOKEN_TARGET_KEY } from '../data/i2cTokenActivate';
+import type { DraftToken } from '../data/agentDraftTypes';
 import { StatsView } from './StatsView';
 
 // Bridge: DOM-observer transition detections come in as chrome.runtime messages from
@@ -627,8 +629,10 @@ function TicketViewInner({ ticket, onTicketUpdate, onStartTriage, onStartReverse
         key={`${ticket.id}:${draftRefresh}`}
         ticket={ticket}
         onTicketUpdate={onTicketUpdate}
-        onOpenWorkflow={(w, vendorDraft) => {
-          if (w === 'i2c_ticket' || w === 'koho_email') {
+        onOpenWorkflow={(w, action) => {
+          const vendorDraft = action.vendor_draft;
+          if (w === 'activate_token') void openI2cActivateToken(ticket, action.token);
+          else if (w === 'i2c_ticket' || w === 'koho_email') {
             if (!vendorDraft) return;
             const kind = w === 'i2c_ticket' ? 'i2c' : 'koho';
             setVendorRequest((prev) => ({ kind, draft: { ...vendorDraft, n: (prev?.draft.n ?? 0) + 1 } }));
@@ -705,6 +709,28 @@ function TicketViewInner({ ticket, onTicketUpdate, onStartTriage, onStartReverse
 
 const I2C_LOGIN_URL = 'https://wealthsimplecs.mycardplace.com/customerservice/wealthsimplelogin.jsp';
 const KOHO_ADMIN_URL = 'https://admin.koho.ca/';
+
+// The agent draft's "Activate token in i2c": the usual i2c chain, then Manage Card Tokens →
+// Select on the InActive token → Status Active / Reason Authenticated with CSR / Comments =
+// ticket link. Stops before Update Status; content/i2c.ts reports that click back.
+async function openI2cActivateToken(ticket: WocooTicket, token: DraftToken | null | undefined) {
+  recordClick(ticket.id, 'i2c');
+  if (ticket.clientEmail) {
+    // Awaited so the new tab's first content-script pass sees the flow (see ReverseFeeWorkflow).
+    await chrome.storage.local.remove([
+      'pending_i2c_admin_debit_amount', TOKEN_STEP_KEY, TOKEN_AWAIT_UPDATE_KEY, TOKEN_ACTIVATED_KEY,
+    ]);
+    await chrome.storage.local.set({
+      pending_i2c_email: ticket.clientEmail,
+      pending_i2c_flow: 'activate_token',
+      pending_i2c_source_ticket_id: ticket.id,
+      pending_i2c_ticket_url: `https://wealthsimple.atlassian.net/browse/${ticket.id}`,
+      [TOKEN_TARGET_KEY]: token ?? {},
+      pending_i2c_started_at: Date.now(),
+    });
+  }
+  window.open(I2C_LOGIN_URL, '_blank', 'noopener,noreferrer');
+}
 // Bare dashboard URLs — the `native_filters_key=...` param restores a saved filter
 // state with prior identities, which the content script can't reliably clear (they
 // render as a "+ N ..." overflow chip, not as individual chips). Loading the

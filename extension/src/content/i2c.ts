@@ -13,6 +13,10 @@ import {
 import { I2C_LOGIN_URL } from '../data/i2cCardLookup';
 import { isSignInLabel } from '../data/i2cLogin';
 import { AGENT_TAB_KEY, shouldReport } from '../data/i2cActivity';
+import {
+  ACTIVE_OPTION_RE, CSR_REASON_RE, TOKEN_ACTIVATED_KEY, TOKEN_AWAIT_UPDATE_KEY, TOKEN_STEP_KEY, TOKEN_TARGET_KEY, UPDATE_STATUS_RE,
+  findOption, freshRecord, locateTokenColumns, parseTokenTarget, pickInactiveTokenRow,
+} from '../data/i2cTokenActivate';
 
 export {}; // Module-scoped so helpers don't collide with other content scripts at the TS layer.
 
@@ -220,6 +224,8 @@ const ALL_PENDING_KEYS = [
   'pending_i2c_started_at',
   'pending_i2c_interest_stmt_attempted',
   'qc_search_clicked',
+  TOKEN_TARGET_KEY,
+  TOKEN_STEP_KEY,
 ];
 
 async function clearAllPendingKeys() {
@@ -243,12 +249,12 @@ async function chainActive(): Promise<boolean> {
 // Anything else (null) is the regular Recent-Activity sign-in.
 // Chain variants. null (generic) stops after "Continue with this Customer" so the
 // agent can navigate i2c's sidebar manually without the script forcing a navigation.
-type Flow = 'reverse_fee' | 'reverse_interest_fee' | 'admin_debit' | 'verify_balance' | 'qc_month_scrape' | 'apply_credit' | 'card_details' | null;
+type Flow = 'reverse_fee' | 'reverse_interest_fee' | 'admin_debit' | 'verify_balance' | 'qc_month_scrape' | 'apply_credit' | 'card_details' | 'activate_token' | null;
 async function getFlow(): Promise<Flow> {
   const res = await chrome.storage.local.get('pending_i2c_flow');
   const v = res.pending_i2c_flow;
   return v === 'reverse_fee' || v === 'reverse_interest_fee' || v === 'admin_debit' || v === 'verify_balance'
-    || v === 'qc_month_scrape' || v === 'apply_credit' || v === 'card_details' ? v : null;
+    || v === 'qc_month_scrape' || v === 'apply_credit' || v === 'card_details' || v === 'activate_token' ? v : null;
 }
 
 function setTextareaValue(el: HTMLTextAreaElement, value: string) {
@@ -408,6 +414,8 @@ async function tryContinueWithCustomer(): Promise<boolean> {
     const v = ((b as HTMLInputElement).value || b.textContent || '').trim();
     if (/^Continue\s+with\s+this\s+Customer$/i.test(v)) {
       if (!isVisible(b)) continue;
+      // activate_token knows the card: tick that row's Select box (several cards → i2c ticks none).
+      if ((await getFlow()) === 'activate_token') await selectAccountForTokenCard();
       // Bail (without setting continueRan) if nothing is selected yet — bootstrap's poll
       // loop retries, so a slow render or a manual multi-account pick still lands.
       if (!(await ensureAccountSelected())) return false;
@@ -424,6 +432,27 @@ async function tryContinueWithCustomer(): Promise<boolean> {
     }
   }
   return false;
+}
+
+/** activate_token: on a customer page with several cards, tick only the Select box on the row
+ *  whose masked number ends in the agent's card last 4. No match → leave it to the user. */
+async function selectAccountForTokenCard(): Promise<void> {
+  const target = parseTokenTarget((await chrome.storage.local.get(TOKEN_TARGET_KEY))[TOKEN_TARGET_KEY]);
+  const last4 = target?.cardLast4;
+  if (!last4) return;
+  const inputs = findAccountSelectInputs();
+  const rowLast4 = (i: HTMLInputElement) =>
+    ((i.closest('tr')?.textContent || '').replace(/\s+/g, ' ').match(MASKED_PAN_RE) || [])[1];
+  const mine = inputs.find((i) => rowLast4(i) === last4);
+  if (!mine) { log(`  → activate_token: no account row ending ${last4}; pick the card by hand`); return; }
+  for (const i of inputs) {
+    if (i !== mine && i.checked && i.type === 'checkbox') i.click();
+  }
+  if (!mine.checked) {
+    log(`  → activate_token: ticking the account row ending ${last4}`);
+    mine.click();
+    await sleep(250);
+  }
 }
 
 // ----- Account Summary: click "Account Transactions" in left sidebar -----
@@ -1591,6 +1620,202 @@ async function tryFillApplyCredit(): Promise<boolean> {
   return false;
 }
 
+// ----- activate_token only: Manage Card Tokens → Select the InActive token → fill the form -----
+// Same shape as admin_debit: the chain opens the page and fills Status = Active, Reason =
+// Authenticated with CSR and Comments = the Jira ticket link, then stops. The user clicks
+// Update Status; watchTokenUpdateStatus reports that click so the Sidekick Agent draft card
+// ticks "I've done this". Progress survives page loads in TOKEN_STEP_KEY:
+// (unset) → 'opened' (sidebar clicked) → 'card' (card dropdown set) → 'selected' (row's Select clicked).
+
+type TokenStep = 'opened' | 'card' | 'selected';
+
+async function getTokenStep(): Promise<TokenStep | null> {
+  const v = (await chrome.storage.local.get(TOKEN_STEP_KEY))[TOKEN_STEP_KEY];
+  return v === 'opened' || v === 'card' || v === 'selected' ? v : null;
+}
+
+/** The leaf tables' rows as cell texts, with each row element (for clicking into it). */
+function leafTableRows(): Array<{ rows: string[][]; els: HTMLTableRowElement[] }> {
+  const out: Array<{ rows: string[][]; els: HTMLTableRowElement[] }> = [];
+  for (const table of Array.from(document.querySelectorAll('table'))) {
+    if (table.querySelector('table')) continue;
+    const els = Array.from(table.querySelectorAll('tr'));
+    out.push({ els, rows: els.map((tr) => Array.from(tr.querySelectorAll('th, td')).map((c) => (c.textContent || '').replace(/\s+/g, ' ').trim())) });
+  }
+  return out;
+}
+
+function findTokenTable() {
+  return leafTableRows().find((t) => locateTokenColumns(t.rows)) ?? null;
+}
+
+function pickSelectOption(s: HTMLSelectElement, idx: number): boolean {
+  const target = s.options[idx];
+  if (!target || s.value === target.value) return false;
+  commitSelectOption(s, target);
+  return true;
+}
+
+/** The visible <select> with an option matching `re` (not the card dropdown). */
+function findSelectWithOption(re: RegExp): { select: HTMLSelectElement; idx: number } | null {
+  for (const s of Array.from(document.querySelectorAll<HTMLSelectElement>('select'))) {
+    if (!isVisible(s)) continue;
+    const idx = findOption(Array.from(s.options).map((o) => o.textContent || ''), re);
+    if (idx >= 0) return { select: s, idx };
+  }
+  return null;
+}
+
+/** The visible <select> next to a form label (e.g. "New Status: *"), the way findInputByLabelText
+ *  finds inputs. Label-scoped because the Tokens Summary filter ("All Status") also lists Active. */
+function findSelectByLabelText(labelRe: RegExp): HTMLSelectElement | null {
+  for (const el of Array.from(document.querySelectorAll<HTMLElement>('td, th, label, div, span'))) {
+    if (el.querySelector('select')) continue; // a wrapper, not the label itself
+    if (!labelRe.test((el.textContent || '').replace(/\s+/g, ' ').trim())) continue;
+    let sib: Element | null = el.nextElementSibling;
+    while (sib) {
+      const sel = sib instanceof HTMLSelectElement ? sib : sib.querySelector('select');
+      if (sel && isVisible(sel)) return sel;
+      sib = sib.nextElementSibling;
+    }
+    const sel = el.closest('tr')?.querySelector('select') ?? el.parentElement?.querySelector('select') ?? null;
+    if (sel && isVisible(sel)) return sel;
+  }
+  return null;
+}
+
+function labelledOption(labelRe: RegExp, optionRe: RegExp): { select: HTMLSelectElement; idx: number } | null {
+  const select = findSelectByLabelText(labelRe);
+  if (!select) return null;
+  const idx = findOption(Array.from(select.options).map((o) => o.textContent || ''), optionRe);
+  return idx >= 0 ? { select, idx } : null;
+}
+
+let tokenStepRunning = false;
+async function tryActivateToken(): Promise<boolean> {
+  if (tokenStepRunning) return false;
+  if ((await getFlow()) !== 'activate_token') return false;
+  if (!(await chainActive())) return false;
+  tokenStepRunning = true;
+  try {
+    const ctx = await chrome.storage.local.get([TOKEN_TARGET_KEY, 'pending_i2c_ticket_url', 'pending_i2c_source_ticket_id']);
+    const target = parseTokenTarget(ctx[TOKEN_TARGET_KEY]) ?? {};
+    const ticketUrl = typeof ctx.pending_i2c_ticket_url === 'string' ? ctx.pending_i2c_ticket_url : '';
+    const sourceTicketId = typeof ctx.pending_i2c_source_ticket_id === 'string' ? ctx.pending_i2c_source_ticket_id : '';
+    if (!ticketUrl) { log('  → activate_token: ticket URL missing'); return false; }
+    let step = await getTokenStep();
+
+    // 1. The form: the Select click either reveals it in place or loads a page with it.
+    // The Change Status form is always on the page, under the token table; fill it only after Select.
+    const status = labelledOption(/^New\s+Status\b/i, ACTIVE_OPTION_RE);
+    if (step === 'selected' && status) {
+      if (pickSelectOption(status.select, status.idx)) {
+        log('  → activate_token: Status = Active');
+        await sleep(400); // Reason can be a dependent dropdown that fills after Status changes
+      }
+      const reason = labelledOption(/^Reason\b/i, CSR_REASON_RE);
+      if (!reason) { log('  → activate_token: Reason "Authenticated with CSR" not found yet'); return false; }
+      if (pickSelectOption(reason.select, reason.idx)) log('  → activate_token: Reason = Authenticated with CSR');
+      const comments = findTextareaByLabelText(/^Comments?\b/i)
+        ?? Array.from(document.querySelectorAll<HTMLTextAreaElement>('textarea')).find((t) => isVisible(t)) ?? null;
+      if (!comments) { log('  → activate_token: Comments box not found yet'); return false; }
+      if (comments.value !== ticketUrl) setTextareaValue(comments, ticketUrl);
+      log('  → activate_token: form filled; waiting for the user to click Update Status');
+      await chrome.storage.local.set({ [TOKEN_AWAIT_UPDATE_KEY]: { sourceTicketId, at: Date.now() } });
+      await clearAllPendingKeys();
+      watchTokenUpdateStatus();
+      return true;
+    }
+
+    const table = findTokenTable();
+    if (!table) {
+      // 2. Not on Manage Card Tokens yet: open it from the post-customer sidebar, once.
+      if (step) return false;
+      const body = document.body?.textContent || '';
+      if (!/Card Management|Account Management|Customer Management/i.test(body)) return false;
+      if (!clickSidebarLink('Manage Card Tokens')) return false;
+      log('  → activate_token: opening Manage Card Tokens');
+      await chrome.storage.local.set({ [TOKEN_STEP_KEY]: 'opened' });
+      return true;
+    }
+    if (step === 'selected') return false; // Select clicked; the form hasn't rendered yet
+
+    // 3. The card dropdown, when the agent named the card and another one is showing.
+    if (step !== 'card' && target.cardLast4) {
+      const card = findSelectWithOption(new RegExp(`${target.cardLast4}\\s*$`));
+      if (card && pickSelectOption(card.select, card.idx)) {
+        log('  → activate_token: switching the card dropdown to ••' + target.cardLast4);
+        await chrome.storage.local.set({ [TOKEN_STEP_KEY]: 'card' });
+        return true; // the table re-renders (or the page reloads) for that card
+      }
+      step = 'card';
+      await chrome.storage.local.set({ [TOKEN_STEP_KEY]: 'card' });
+    }
+
+    // 4. Select on the InActive token's row: only when exactly one row qualifies.
+    const fresh = findTokenTable() ?? table;
+    const at = pickInactiveTokenRow(fresh.rows, target);
+    if (at === null) {
+      log('  → activate_token: no single InActive token row to select; leaving it to the user');
+      await clearAllPendingKeys();
+      return true;
+    }
+    const rowEl = fresh.els[at];
+    // The Select column is a checkbox per row (a radio or "Select" link on older builds).
+    const select = Array.from(rowEl.querySelectorAll<HTMLElement>('input[type="checkbox"], input[type="radio"], a, button, input[type="button"]'))
+      .find((el) => (el as HTMLInputElement).type === 'checkbox' || (el as HTMLInputElement).type === 'radio'
+        || /^Select$/i.test(((el as HTMLInputElement).value || el.textContent || '').replace(/\s+/g, ' ').trim()));
+    if (!select) { log('  → activate_token: InActive row has no Select control'); return false; }
+    // Only this token: untick any other row the user (or i2c) left ticked.
+    for (const other of fresh.els) {
+      if (other === rowEl) continue;
+      other.querySelectorAll<HTMLInputElement>('input[type="checkbox"]').forEach((c) => { if (c.checked) c.click(); });
+    }
+    await chrome.storage.local.set({ [TOKEN_STEP_KEY]: 'selected' });
+    if (!(select as HTMLInputElement).checked) {
+      log('  → activate_token: ticking Select on the InActive token row');
+      select.click();
+    }
+    return true;
+  } finally {
+    tokenStepRunning = false;
+  }
+}
+
+/** After the form is filled: report the user's Update Status click to the draft card. */
+let tokenWatchInstalled = false;
+function watchTokenUpdateStatus(): void {
+  if (tokenWatchInstalled) return;
+  tokenWatchInstalled = true;
+  let reported = false;
+  const onClick = (e: Event) => {
+    if (reported) return;
+    const el = (e.target as HTMLElement | null)?.closest<HTMLElement>('input, button, a');
+    if (!el) return;
+    const label = ((el as HTMLInputElement).value || el.textContent || '').replace(/\s+/g, ' ').trim();
+    if (!UPDATE_STATUS_RE.test(label)) return;
+    reported = true;
+    void chrome.storage.local.get(TOKEN_AWAIT_UPDATE_KEY).then((res) => {
+      const rec = freshRecord(res[TOKEN_AWAIT_UPDATE_KEY], Date.now());
+      if (!rec) return;
+      log('  → activate_token: Update Status clicked for', rec.sourceTicketId);
+      return chrome.storage.local.set({ [TOKEN_ACTIVATED_KEY]: { sourceTicketId: rec.sourceTicketId, at: Date.now() } })
+        .then(() => chrome.storage.local.remove(TOKEN_AWAIT_UPDATE_KEY));
+    }).catch((err) => console.debug('[wocoo-i2c] token report failed', err));
+  };
+  // mousedown as well as click: Update Status submits the form, and the page may unload
+  // before a click handler's storage write lands.
+  document.addEventListener('mousedown', onClick, { capture: true });
+  document.addEventListener('click', onClick, { capture: true });
+}
+
+async function resumeTokenWatch(): Promise<void> {
+  try {
+    const res = await chrome.storage.local.get(TOKEN_AWAIT_UPDATE_KEY);
+    if (freshRecord(res[TOKEN_AWAIT_UPDATE_KEY], Date.now())) watchTokenUpdateStatus();
+  } catch { /* fine */ }
+}
+
 async function bootstrap() {
   // Each pass attempts every step. Most return false immediately because the page in
   // question doesn't have the target element. Keep polling for 45s so slow renders
@@ -1624,6 +1849,7 @@ async function bootstrap() {
     await tryFillAdminDebit();
     await tryDateRangeScrape();
     await tryFillApplyCredit();
+    await tryActivateToken();
   }
   const deadline = Date.now() + 45_000;
   while (Date.now() < deadline) {
@@ -1908,4 +2134,5 @@ if (isAgentTab()) {
 }
 
 watchUserActivity();
+void resumeTokenWatch();
 bootstrap();

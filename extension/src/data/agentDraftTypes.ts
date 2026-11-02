@@ -28,7 +28,7 @@ export type DraftEvidenceKind = 'ticket' | 'i2c' | 'koho' | 'atlas' | 'preset' |
 
 export type DraftWorkflow =
   | 'reverse_fee' | 'reverse_interest_fee' | 'overpayment' | 'pay_credit_card'
-  | 'i2c_ticket' | 'koho_email';
+  | 'i2c_ticket' | 'koho_email' | 'activate_token';
 
 /** The i2c ticket / KOHO email the agent wrote; set only on the i2c_ticket and koho_email workflows. */
 export interface VendorDraft {
@@ -53,10 +53,19 @@ export interface DraftMove {
   sidekick_supported: boolean;
 }
 
+/** The InActive wallet token to activate; set only on the activate_token workflow. */
+export interface DraftToken {
+  card_last4?: string | null;
+  device?: string | null;
+  /** Created On as i2c shows it, e.g. "10/31/2026 03:35 PM". */
+  created?: string | null;
+}
+
 export interface DraftActionNeeded {
   summary: string;
   workflow?: DraftWorkflow | null;
   vendor_draft?: VendorDraft | null;
+  token?: DraftToken | null;
 }
 
 export interface AgentDraft {
