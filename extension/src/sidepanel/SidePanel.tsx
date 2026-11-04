@@ -339,6 +339,8 @@ function TicketViewInner({ ticket, onTicketUpdate, onStartTriage, onStartReverse
   // can open the Clone/Move modal with a specific destination preselected.
   const [moveOpen, setMoveOpen] = useState(false);
   const [createReimbActive, setCreateReimbActive] = useState(false);
+  // Set when the agent draft's "Open workflow" opened the REIMB form; cleared on close.
+  const [reimbAgentNote, setReimbAgentNote] = useState<string | undefined>(undefined);
   const [moveInitialDest, setMoveInitialDest] = useState<MoveDestination>('EOC');
   // Set only when the Move modal was opened from the draft agent's move suggestion.
   const [movePrefill, setMovePrefill] = useState<MovePrefill | undefined>(undefined);
@@ -620,7 +622,8 @@ function TicketViewInner({ ticket, onTicketUpdate, onStartTriage, onStartReverse
       {createReimbActive ? (
         <CreateReimbModal
           ticket={ticket}
-          onClose={() => setCreateReimbActive(false)}
+          agentNote={reimbAgentNote}
+          onClose={() => { setCreateReimbActive(false); setReimbAgentNote(undefined); }}
         />
       ) : null}
 
@@ -639,6 +642,7 @@ function TicketViewInner({ ticket, onTicketUpdate, onStartTriage, onStartReverse
           }
           else if (w === 'overpayment') onStartTriage();
           else if (w === 'pay_credit_card') onStartEstateCcPayment();
+          else if (w === 'create_reimb') { setReimbAgentNote(action.summary); setCreateReimbActive(true); }
           else onStartReverseFee();
         }}
         onOpenMove={openPrefilledMove}

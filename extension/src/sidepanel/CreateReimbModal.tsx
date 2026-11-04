@@ -36,10 +36,12 @@ import { fetchAtlasAccountIdHeadless } from '../data/atlasAccountLookup';
 
 type Status = 'configuring' | 'confirming' | 'executing' | 'success' | 'error';
 
-export function CreateReimbModal({ ticket, onClose, onCreated }: {
+export function CreateReimbModal({ ticket, onClose, onCreated, agentNote }: {
   ticket: WocooTicket;
   onClose: () => void;
   onCreated?: (reimbKey: string, reimbUrl: string) => void;
+  /** The Sidekick Agent's action-needed summary (amount, accounts, transaction ids), shown for reference. */
+  agentNote?: string;
 }) {
   // ===== Field state =====
   const [summary, setSummary] = useState<string>(ticket.summary || '');
@@ -209,6 +211,13 @@ export function CreateReimbModal({ ticket, onClose, onCreated }: {
             />
           ) : (
             <>
+              {agentNote && (
+                <Section label="Sidekick Agent says">
+                  <div style={{ ...textInputStyle, whiteSpace: 'pre-wrap', userSelect: 'text', background: 'var(--mint-bg-subtle)' }}>{agentNote}</div>
+                  <Hint>For reference only. Fill the fields below from it.</Hint>
+                </Section>
+              )}
+
               {/* Summary */}
               <Section label="Summary">
                 <input

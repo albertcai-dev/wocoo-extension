@@ -23,8 +23,8 @@ describe('solveView', () => {
 });
 
 describe('solveOffered', () => {
-  it('hides the button on overpayments', () => {
-    expect(solveOffered('Credit Card: Overpayment')).toBe(false);
+  it('offers the button on every work type, overpayments included', () => {
+    expect(solveOffered('Credit Card: Overpayment')).toBe(true);
     expect(solveOffered('Credit Card: Transactions')).toBe(true);
     expect(solveOffered(undefined)).toBe(true);
   });

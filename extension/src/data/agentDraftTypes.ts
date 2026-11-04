@@ -27,7 +27,7 @@ export type DraftMoveDestination =
 export type DraftEvidenceKind = 'ticket' | 'i2c' | 'koho' | 'atlas' | 'preset' | 'precedent' | 'doc' | 'cxo' | 'compass';
 
 export type DraftWorkflow =
-  | 'reverse_fee' | 'reverse_interest_fee' | 'overpayment' | 'pay_credit_card'
+  | 'reverse_fee' | 'reverse_interest_fee' | 'overpayment' | 'pay_credit_card' | 'create_reimb'
   | 'i2c_ticket' | 'koho_email' | 'activate_token';
 
 /** The i2c ticket / KOHO email the agent wrote; set only on the i2c_ticket and koho_email workflows. */

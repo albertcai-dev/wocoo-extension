@@ -20,13 +20,14 @@ export function solveView(item: AgentItemState | null, pressed: boolean): SolveV
   switch (state) {
     case 'drafted': return { kind: 'finished', label: 'Solved: the draft is below.', draftReady: true };
     case 'no_new_angle': return { kind: 'finished', label: 'Nothing new to add since your last reply.', draftReady: true };
-    case 'skipped': return { kind: 'finished', label: 'Skipped: overpayments are yours to handle.', draftReady: false };
+    case 'skipped': return { kind: 'finished', label: 'Skipped: marked as yours to handle.', draftReady: false };
     case 'failed': return { kind: 'finished', label: "The agent couldn't solve this one (see its log).", draftReady: false };
     default: return { kind: 'idle' };
   }
 }
 
-/** Overpayment tickets are never offered to the agent. */
-export function solveOffered(workType: string | undefined): boolean {
-  return !/overpayment/i.test(workType || '');
+/** Every work type is offered to the agent. Overpayments were held back until 2026-11-02;
+ *  their drafts now open the Triage Overpayment workflow instead. */
+export function solveOffered(_workType: string | undefined): boolean {
+  return true;
 }

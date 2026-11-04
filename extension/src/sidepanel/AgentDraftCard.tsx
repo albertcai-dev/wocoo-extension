@@ -610,10 +610,17 @@ function DraftBody({ ticket, draft, onOpenWorkflow, onTicketUpdate, onOpenMove, 
             aria-label="Draft reply"
           />
           {target.kind === 'ready' && (
-            <div style={mutedStyle}>
-              {target.target ? (
-                <>Replying to <a href={`https://wealthsimple.atlassian.net/browse/${ticket.id}?focusedCommentId=${target.target.commentId}`} target="_blank" rel="noreferrer">{target.target.name || 'this person'}'s comment</a></>
-              ) : 'New comment'}
+            <div style={{ ...mutedStyle, display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+              <span>
+                {target.target ? (
+                  <>Replying to <a href={`https://wealthsimple.atlassian.net/browse/${ticket.id}?focusedCommentId=${target.target.commentId}`} target="_blank" rel="noreferrer">{target.target.name || 'this person'}'s comment</a></>
+                ) : 'New comment'}
+              </span>
+              {solvedLabel(draft.created_at) && (
+                <span style={{ whiteSpace: 'nowrap' }} title={new Date(draft.created_at).toLocaleString()}>
+                  Solved {solvedLabel(draft.created_at)}
+                </span>
+              )}
             </div>
           )}
           {target.kind === 'ready' && target.teamMissing && (
@@ -732,6 +739,15 @@ const cardStyle: React.CSSProperties = {
   padding: 'var(--mint-sp-3)',
   marginTop: 'var(--mint-sp-3)',
 };
+
+/** "Oct 29" for the draft's created_at; adds the year outside the current one. */
+function solvedLabel(iso: string): string | null {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  const opts: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric' };
+  if (d.getFullYear() !== new Date().getFullYear()) opts.year = 'numeric';
+  return d.toLocaleDateString('en-US', opts);
+}
 
 const mutedStyle: React.CSSProperties = {
   fontSize: 'var(--mint-text-micro)',
