@@ -6,6 +6,7 @@ import type { WocooTicket } from '../data/mockTicket';
 import type { AgentDraft, DraftActionNeeded, DraftSegment } from '../data/agentDraftTypes';
 import { toMovePrefill, type MovePrefill } from '../data/movePrefill';
 import { DraftStoreUnavailable, getDraft, getTeam, isDraftStoreNotSetUp, recordOutcome } from '../api/draftStore';
+import { recordClick } from '../data/usageStore';
 import { buildJiraOutcomeRow, rememberDraft, type ExistingReply } from '../data/outcomeCapture';
 import { checkExistingReplyLive, lookupAssignedAtLive } from '../data/outcomeCaptureLive';
 import { getIssuePeople, postComment, searchJiraUsers, transitionTicketByName } from '../api/jira';
@@ -401,6 +402,7 @@ function DraftBody({ ticket, draft, onOpenWorkflow, onTicketUpdate, onOpenMove, 
         }
         void markPostedThisSession(ticket.id, draft.created_at);
         void requestClearPrefill(ticket.id, postedSegments);
+        recordClick(ticket.id, 'agent_draft');
       }
     } catch (e) {
       setPhase('idle');

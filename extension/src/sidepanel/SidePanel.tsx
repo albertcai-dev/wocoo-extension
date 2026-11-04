@@ -59,7 +59,8 @@ import { captureJiraOutcomeLive } from '../data/outcomeCaptureLive';
 import { PRESET_DASHBOARD_IDS, presetDashboardUrl } from '../data/presetConfig';
 import { recordClick, recordOutcome } from '../data/usageStore';
 import { TOKEN_ACTIVATED_KEY, TOKEN_AWAIT_UPDATE_KEY, TOKEN_STEP_KEY, TOKEN_TARGET_KEY } from '../data/i2cTokenActivate';
-import type { DraftToken } from '../data/agentDraftTypes';
+import type { DraftToken, DraftWorkflow } from '../data/agentDraftTypes';
+import type { UsageButtonId } from '../data/usageStats';
 import { StatsView } from './StatsView';
 
 // Bridge: DOM-observer transition detections come in as chrome.runtime messages from
@@ -78,6 +79,16 @@ if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessage)
     }
   });
 }
+
+// Usage-stats button for each agent-draft workflow, so opening one from the draft card counts
+// like clicking it in the button row. Vendor ones (i2c/KOHO/token) have no row button.
+const DRAFT_WORKFLOW_CLICK: Partial<Record<DraftWorkflow, UsageButtonId>> = {
+  overpayment: 'triage_overpayment',
+  pay_credit_card: 'estate_cc_payment',
+  create_reimb: 'create_reimb',
+  reverse_fee: 'reverse_fee',
+  reverse_interest_fee: 'reverse_fee',
+};
 
 const ATLAS_URL = (id: string, ticketId: string) =>
   `https://atlas.wealthsimple.com/identity/${id}/overview/?ticketId=${ticketId}`;
@@ -633,6 +644,9 @@ function TicketViewInner({ ticket, onTicketUpdate, onStartTriage, onStartReverse
         ticket={ticket}
         onTicketUpdate={onTicketUpdate}
         onOpenWorkflow={(w, action) => {
+          recordClick(ticket.id, 'agent_draft');
+          const workflowClick = DRAFT_WORKFLOW_CLICK[w];
+          if (workflowClick) recordClick(ticket.id, workflowClick);
           const vendorDraft = action.vendor_draft;
           if (w === 'activate_token') void openI2cActivateToken(ticket, action.token);
           else if (w === 'i2c_ticket' || w === 'koho_email') {

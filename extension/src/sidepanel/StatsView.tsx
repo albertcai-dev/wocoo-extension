@@ -4,7 +4,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { loadUsageEvents, USAGE_STORAGE_KEY } from '../data/usageStore';
-import { summarizeUsage, type SolveClass, type UsageEvent, type UsageRange } from '../data/usageStats';
+import { summarizeUsage, type SolveClass, type UsageButtonKind, type UsageEvent, type UsageRange } from '../data/usageStats';
 
 const RANGES: Array<{ id: UsageRange; label: string }> = [
   { id: 'today', label: 'Today' },
@@ -13,10 +13,18 @@ const RANGES: Array<{ id: UsageRange; label: string }> = [
 ];
 
 const CLASS_ROWS: Array<{ id: SolveClass; label: string; color: string }> = [
+  { id: 'agent', label: 'Solved by Sidekick Agent', color: 'var(--mint-warning-fg-graphic)' },
   { id: 'sidekick', label: 'Solved through Sidekick', color: 'var(--mint-positive-fg-graphic)' },
   { id: 'assisted', label: 'Assisted by Sidekick', color: 'var(--mint-highlight-fg-graphic)' },
   { id: 'unassisted', label: 'Unassisted', color: 'var(--mint-fg-soft)' },
 ];
+
+const BAR_COLOR: Record<UsageButtonKind, string> = {
+  agent: 'var(--mint-warning-fg-graphic)',
+  workflow: 'var(--mint-positive-fg-graphic)',
+  lookup: 'var(--mint-highlight-fg-graphic)',
+  status: 'var(--mint-fg-soft)',
+};
 
 export function StatsView({ onBack }: { onBack: () => void }) {
   const [events, setEvents] = useState<UsageEvent[] | null>(null);
@@ -121,14 +129,14 @@ export function StatsView({ onBack }: { onBack: () => void }) {
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 'var(--mint-text-micro)' }}>
                     <span style={{ color: b.count ? 'var(--mint-fg-strong)' : 'var(--mint-fg-soft)' }}>
                       {b.label}
-                      {b.kind === 'lookup' ? <span style={{ color: 'var(--mint-fg-soft)' }}> · lookup</span> : null}
+                      {b.kind === 'lookup' || b.kind === 'status' ? <span style={{ color: 'var(--mint-fg-soft)' }}> · {b.kind}</span> : null}
                     </span>
                     <span style={{ fontWeight: 600, color: 'var(--mint-fg-strong)' }}>{b.count}</span>
                   </div>
                   <div style={{ height: 4, borderRadius: 2, background: 'var(--mint-bg-subtle)' }}>
                     <div style={{
                       width: `${(b.count / maxClicks) * 100}%`, height: '100%', borderRadius: 2,
-                      background: b.kind === 'workflow' ? 'var(--mint-positive-fg-graphic)' : 'var(--mint-highlight-fg-graphic)',
+                      background: BAR_COLOR[b.kind],
                     }} />
                   </div>
                 </div>
@@ -137,7 +145,7 @@ export function StatsView({ onBack }: { onBack: () => void }) {
           </section>
 
           <div style={{ fontSize: 'var(--mint-text-micro)', color: 'var(--mint-fg-soft)', lineHeight: 1.45 }}>
-            Solved = Done, Cancelled or Moved. Lookup buttons (Atlas, Koho, i2c, Fetch) count as "assisted"; any other button counts as "through Sidekick". Stored in this browser only.
+            Solved = Done, Cancelled or Moved. Posting the agent's draft counts as "by Sidekick Agent"; workflow buttons as "through Sidekick"; lookup buttons (Atlas, Koho, i2c, Fetch) as "assisted". ✓ Done alone doesn't count. Stored in this browser only.
           </div>
         </>
       )}

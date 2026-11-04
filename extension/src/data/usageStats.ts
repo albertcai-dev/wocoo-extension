@@ -2,19 +2,23 @@
 //
 // Events are recorded locally (see usageStore.ts) from the ticket view's buttons, the
 // ticket-transition bus, and the places Sidekick creates Jira tickets. A solved ticket
-// is classified by the buttons clicked on it at any point before its outcome:
+// is classified by the buttons clicked on it at any point before its outcome, best first:
+//   - agent draft posted       → "Solved by Sidekick Agent"
 //   - any workflow button      → "Solved through Sidekick"
 //   - only lookup buttons      → "Assisted by Sidekick"
 //   - no Sidekick button       → "Unassisted"
+// Status buttons (✓ Done) are counted as clicks but don't change the class: closing a
+// ticket isn't help with solving it.
 
 import type { TicketTransitionKind } from './ticketLogTypes';
 
-export type UsageButtonKind = 'workflow' | 'lookup';
+export type UsageButtonKind = 'agent' | 'workflow' | 'lookup' | 'status';
 
 export const USAGE_BUTTONS = {
+  agent_draft:         { label: '🤖 Agent draft used',      kind: 'agent' },
   clone_move:          { label: '→ Clone/Move',            kind: 'workflow' },
   triage_overpayment:  { label: '⚡ Triage Overpayment',    kind: 'workflow' },
-  done:                { label: '✓ Done',                   kind: 'workflow' },
+  done:                { label: '✓ Done',                   kind: 'status' },
   verify_eligible_dd:  { label: '📊 Verify Eligible DD',    kind: 'workflow' },
   create_reimb:        { label: '💸 Create REIMB Ticket',   kind: 'workflow' },
   wallet_triage:       { label: '💳 Wallet Triage',         kind: 'workflow' },
@@ -40,7 +44,7 @@ export type UsageEvent =
 
 export type UsageRange = 'today' | 'week' | 'all';
 
-export type SolveClass = 'sidekick' | 'assisted' | 'unassisted';
+export type SolveClass = 'agent' | 'sidekick' | 'assisted' | 'unassisted';
 
 export interface UsageSummary {
   solved: number;
@@ -50,6 +54,8 @@ export interface UsageSummary {
   createdByKind: Array<{ kind: string; count: number }>;
   buttons: Array<{ id: UsageButtonId; label: string; kind: UsageButtonKind; count: number }>;
 }
+
+const CLASS_RANK: Record<SolveClass, number> = { agent: 0, sidekick: 1, assisted: 2, unassisted: 3 };
 
 /** Start of the range in epoch ms (local time). Week starts Monday. */
 export function rangeStart(range: UsageRange, now: Date = new Date()): number {
@@ -75,13 +81,14 @@ export function summarizeUsage(events: UsageEvent[], range: UsageRange, now: Dat
     if (e.outcome === 'Moved') movedTickets.add(e.ticketId);
   }
 
-  const byClass: Record<SolveClass, number> = { sidekick: 0, assisted: 0, unassisted: 0 };
+  const byClass: Record<SolveClass, number> = { agent: 0, sidekick: 0, assisted: 0, unassisted: 0 };
   for (const [ticketId, outcome] of lastOutcome) {
     let cls: SolveClass = 'unassisted';
     for (const e of events) {
       if (e.type !== 'click' || e.ticketId !== ticketId || e.t > outcome.t) continue;
-      if (USAGE_BUTTONS[e.button]?.kind === 'workflow') { cls = 'sidekick'; break; }
-      cls = 'assisted';
+      const kind = USAGE_BUTTONS[e.button]?.kind;
+      const c = kind === 'agent' ? 'agent' : kind === 'workflow' ? 'sidekick' : kind === 'lookup' ? 'assisted' : null;
+      if (c && CLASS_RANK[c] < CLASS_RANK[cls]) cls = c;
     }
     byClass[cls]++;
   }

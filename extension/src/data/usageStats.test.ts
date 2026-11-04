@@ -44,7 +44,7 @@ describe('summarizeUsage', () => {
   it('classifies solved tickets for today', () => {
     const s = summarizeUsage(events, 'today', now);
     expect(s.solved).toBe(5);
-    expect(s.byClass).toEqual({ sidekick: 2, assisted: 1, unassisted: 2 });
+    expect(s.byClass).toEqual({ agent: 0, sidekick: 2, assisted: 1, unassisted: 2 });
     expect(s.moved).toBe(1);
     expect(s.created).toBe(2);
   });
@@ -69,7 +69,29 @@ describe('summarizeUsage', () => {
     ];
     const s = summarizeUsage(twice, 'today', now);
     expect(s.solved).toBe(1);
-    expect(s.byClass.sidekick).toBe(1);
+    expect(s.byClass.unassisted).toBe(1); // ✓ Done alone isn't Sidekick help
     expect(s.moved).toBe(1);
+  });
+
+  it('agent draft outranks workflow and lookup buttons, in any click order', () => {
+    const evs: UsageEvent[] = [
+      { t: at(22, 9), type: 'click', ticketId: 'WOCOO-8', button: 'atlas' },
+      { t: at(22, 9), type: 'click', ticketId: 'WOCOO-8', button: 'agent_draft' },
+      { t: at(22, 9), type: 'click', ticketId: 'WOCOO-8', button: 'create_reimb' },
+      { t: at(22, 10), type: 'outcome', ticketId: 'WOCOO-8', outcome: 'Done' },
+      { t: at(22, 9), type: 'click', ticketId: 'WOCOO-9', button: 'i2c' },
+      { t: at(22, 9), type: 'click', ticketId: 'WOCOO-9', button: 'reverse_fee' },
+      { t: at(22, 10), type: 'outcome', ticketId: 'WOCOO-9', outcome: 'Done' },
+    ];
+    expect(summarizeUsage(evs, 'today', now).byClass).toEqual({ agent: 1, sidekick: 1, assisted: 0, unassisted: 0 });
+  });
+
+  it('✓ Done with a lookup is still assisted', () => {
+    const evs: UsageEvent[] = [
+      { t: at(22, 9), type: 'click', ticketId: 'WOCOO-10', button: 'koho' },
+      { t: at(22, 9), type: 'click', ticketId: 'WOCOO-10', button: 'done' },
+      { t: at(22, 10), type: 'outcome', ticketId: 'WOCOO-10', outcome: 'Done' },
+    ];
+    expect(summarizeUsage(evs, 'today', now).byClass.assisted).toBe(1);
   });
 });
