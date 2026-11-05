@@ -5,7 +5,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { WocooTicket } from '../data/mockTicket';
 import type { VendorDraft } from '../data/agentDraftTypes';
-import { buildI2cDraft, buildKohoDraft } from '../data/messagingDrafts';
+import { buildI2cDraft, buildKohoDraft, withTicketKey } from '../data/messagingDrafts';
 import { sendKohoEmailViaBridge, logKohoSendViaBridge, logI2cSubmitViaBridge } from '../api/bridge';
 
 const I2C_FORM_URL = 'https://tracking.i2cinc.com/servicedesk/customer/portal/2/create/17';
@@ -90,7 +90,7 @@ export function KohoCard({ ticket, agentDraft }: { ticket: WocooTicket; agentDra
   useEffect(() => {
     if (!agentDraft) return;
     if (state !== 'sent' && state !== 'sending') {
-      setSubject(agentDraft.subject);
+      setSubject(withTicketKey(agentDraft.subject, ticket.id));
       setBody(agentDraft.body);
     }
     ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -103,7 +103,7 @@ export function KohoCard({ ticket, agentDraft }: { ticket: WocooTicket; agentDra
     setState('sending');
     setError(null);
     try {
-      const r = await sendKohoEmailViaBridge({ ticketId: ticket.id, subject, body });
+      const r = await sendKohoEmailViaBridge({ ticketId: ticket.id, subject: withTicketKey(subject, ticket.id), body });
       setResult(r);
       setState('sent');
       // Register the send for reply-tracking. Fire-and-forget — a tracking-sheet

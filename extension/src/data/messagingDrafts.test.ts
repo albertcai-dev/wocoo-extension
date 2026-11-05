@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildI2cDraft, buildKohoDraft, stripZendeskPointer } from './messagingDrafts';
+import { buildI2cDraft, buildKohoDraft, stripZendeskPointer, withTicketKey } from './messagingDrafts';
 import type { WocooTicket } from './mockTicket';
 
 function ticket(over: Partial<WocooTicket> = {}): WocooTicket {
@@ -77,7 +77,7 @@ describe('buildKohoDraft', () => {
     const d = buildKohoDraft(ticket({
       description: 'Card declines.\n\n- Please see Zendesk Support tab for further comments.',
     }));
-    expect(d.subject).toBe('Negative Cash Back Balance');
+    expect(d.subject).toBe('Negative Cash Back Balance [WOCOO-28153]');
     expect(d.body).not.toContain('Zendesk');
     const emailAt = d.body.indexOf('Client email: ahmadmstto@outlook.com');
     const descAt = d.body.indexOf('Card declines.');
@@ -94,6 +94,21 @@ describe('buildKohoDraft', () => {
   });
 
   it('falls back to a generic subject when the summary is blank', () => {
-    expect(buildKohoDraft(ticket({ summary: '' })).subject).toBe('Prepaid Card Inquiry');
+    expect(buildKohoDraft(ticket({ summary: '' })).subject).toBe('Prepaid Card Inquiry [WOCOO-28153]');
+  });
+});
+
+describe('withTicketKey', () => {
+  it('appends the key in brackets', () => {
+    expect(withTicketKey('FX rate inquiry - LYFT', 'WOCOO-30588')).toBe('FX rate inquiry - LYFT [WOCOO-30588]');
+  });
+
+  it('leaves a subject that already carries the key alone', () => {
+    expect(withTicketKey('wocoo-30588: FX rate', 'WOCOO-30588')).toBe('wocoo-30588: FX rate');
+    expect(withTicketKey('FX rate [WOCOO-30588]', 'WOCOO-30588')).toBe('FX rate [WOCOO-30588]');
+  });
+
+  it('returns the subject unchanged without a key', () => {
+    expect(withTicketKey(' FX rate ', '')).toBe('FX rate');
   });
 });

@@ -50,7 +50,7 @@ export function buildKohoDraft(t: WocooTicket): { subject: string; body: string 
     .filter(Boolean)
     .join('\n\n');
   return {
-    subject: t.summary || 'Prepaid Card Inquiry',
+    subject: withTicketKey(t.summary || 'Prepaid Card Inquiry', t.id),
     body:
       'Hi Koho Support team,\n\n' +
       'We have a client inquiry regarding the following:\n\n' +
@@ -58,4 +58,18 @@ export function buildKohoDraft(t: WocooTicket): { subject: string; body: string 
       'Could you please investigate and let us know your findings?\n\n' +
       'Thank you,\nAlbert Cai',
   };
+}
+
+/**
+ * Tag a KOHO subject with the WOCOO key, e.g. `FX rate inquiry [WOCOO-30588]`.
+ *
+ * The draft agent's poll ties a KOHO reply to its ticket by a WOCOO key in the subject (or,
+ * failing that, a subject equal to the ticket summary). Agent-written subjects never equal
+ * the summary, so without the key their replies went unmatched (WOCOO-30588, 2026-11-05).
+ * Replies keep the subject, so the key survives. No-op when the key is already there.
+ */
+export function withTicketKey(subject: string, key: string): string {
+  const s = (subject || '').trim();
+  if (!key || s.toUpperCase().includes(key.toUpperCase())) return s;
+  return `${s} [${key}]`;
 }
