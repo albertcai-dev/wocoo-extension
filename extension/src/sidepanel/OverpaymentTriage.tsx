@@ -18,7 +18,8 @@
 //     finish the escalation, not fall through to a reimbursement
 //
 // Scope cuts (v1, per session):
-//   • No "Decline & comment" path when amount < $1,000 (warn only)
+//   • Exception rule: Generation is eligible at any amount; Premium and Core under
+//     $1,000 get the Decline & Comment path (with "Proceed as exception" as an escape hatch)
 //   • No write to Moves/Errors sheet (v3 has this; extension parity-later)
 
 import { useEffect, useRef, useState } from 'react';
@@ -135,12 +136,12 @@ interface WorkflowState {
   error: string | null;
 }
 
-// Decline-comment template lifted verbatim from wocoo-triage-v3 / app-workflows.js.
+// Decline-comment template adapted from wocoo-triage-v3 / app-workflows.js, with the tier exception rule.
 // {{REPORTER_MENTION}} resolves to @<reporter display name> so buildCommentSegments can
 // emit a proper Jira @mention node when posting via the ADF comment API.
 const DECLINE_TEMPLATE =
   'Hi {{REPORTER_MENTION}}, unfortunately because this overpayment transfer request is under $1,000 I am unable to action. ' +
-  'We typically only action overpayments above $1,000. ' +
+  'Per our exception rule, overpayment transfers are actioned for Generation clients at any amount, but Premium and Core clients require a minimum of $1,000. ' +
   'You can let the customer know that "While we are unable to process refunds to your cash account, please note that this balance will be applied to future purchases on the card."';
 
 function initialState(ticket: WocooTicket): WorkflowState {
@@ -875,7 +876,11 @@ function Step1Body(props: {
 
       {/* Acceptance criteria (merged in from former Step 2) */}
       <div style={{ marginTop: 'var(--mint-sp-3)' }}>
-        <CheckRow ok={props.meetsMinimum} label="Amount ≥ $1,000" right={<strong style={{ color: 'var(--mint-fg-strong)' }}>{props.fmtAmt}</strong>} />
+        <CheckRow
+          ok={props.meetsMinimum || props.tier === 'Generation'}
+          label={props.tier === 'Generation' ? 'Amount · any (Generation)' : 'Amount ≥ $1,000'}
+          right={<strong style={{ color: 'var(--mint-fg-strong)' }}>{props.fmtAmt}</strong>}
+        />
         <Divider />
         <CheckRow ok={true} label="Tier requirement" right={<TierPill tier={props.tier} />} />
         <Divider />
@@ -904,13 +909,12 @@ function Step1Body(props: {
         ) : null}
       </div>
 
-      {/* Action: continue OR decline-path when amount < $1k AND tier is Core.
-          Premium / Generation under $1k can still be processed as an exception, so we
-          skip the templated decline and just show the continue button below. */}
-      {props.amount != null && !props.meetsMinimum && props.tier === 'Core' ? (
+      {/* Action: continue OR decline-path when amount < $1k AND tier is Premium/Core.
+          Generation is eligible at any amount, so it skips straight to continue. */}
+      {props.amount != null && !props.meetsMinimum && props.tier !== 'Generation' ? (
         <div style={{ marginTop: 'var(--mint-sp-3)', padding: 'var(--mint-sp-3)', background: 'var(--mint-warning-bg-soft)', border: '1px solid var(--mint-warning-fg-graphic)', borderRadius: 'var(--mint-radius-card)' }}>
           <div style={{ fontSize: 'var(--mint-text-nano)', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--mint-warning-fg-strong)', fontWeight: 700, marginBottom: 6 }}>
-            📝 Decline comment (Core client, amount under $1,000)
+            📝 Decline comment ({props.tier} client, amount under $1,000)
           </div>
           <textarea
             value={props.declineText}
@@ -935,7 +939,7 @@ function Step1Body(props: {
       ) : props.showContinue ? (
         <div style={{ marginTop: 'var(--mint-sp-3)' }}>
           <button onClick={props.onContinue} disabled={props.amount == null} style={{ ...primaryButton, opacity: props.amount != null ? 1 : 0.55, cursor: props.amount != null ? 'pointer' : 'not-allowed' }}>
-            {props.amount != null && !props.meetsMinimum ? 'Proceed as exception →' : 'Criteria met, continue →'}
+            Criteria met, continue →
           </button>
         </div>
       ) : null}
