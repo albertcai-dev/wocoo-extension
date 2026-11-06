@@ -1,8 +1,9 @@
 // The original wire send's reference, as RBC prints it in a returned wire's
-// txdetail_rmtinfo_ustrd (e.g. "…//REF AVJJXHZEBVIA53DF CAD56,295.89//…"). It equals the
+// txdetail_rmtinfo_ustrd (e.g. "…//REF AVJJXHZEBVIA53DF CAD56,295.89//…", or on MT103
+// returns "…//REF NO E49PYMJ0UJ325CN1 //…"). It equals the
 // send's e2e_identifier in Preset's "ALL wire sends created" table.
 
-const REF_IN_TEXT = /\bREF[\s/:]*([A-Z0-9]{16})(?![A-Z0-9])/;
+const REF_IN_TEXT = /\bREF[\s/:]*(?:NO\b\.?[\s/:]*)?([A-Z0-9]{16})(?![A-Z0-9])/;
 const BARE_REF = /^[A-Z0-9]{16}$/;
 
 /** The 16-char REF from a pasted cell or a bare ref, uppercased; null if there isn't one. */

@@ -124,12 +124,14 @@ export interface CustodianAccount {
   isCadSpend: boolean;
 }
 
-const W_ACCOUNT_RE = /^W[A-Z0-9]+$/i;
+// W… = cash accounts; HQ… = investment accounts (e.g. self-directed non-registered, LIRA),
+// which Atlas shows as the account number on Portfolio Details.
+const W_ACCOUNT_RE = /^(?:W|HQ)[A-Z0-9]+$/i;
 
 /**
- * `getAccountDetails` → the account's W#, for any cash account (not just the client's
- * spend account). Prefers W…CAD; otherwise any W-prefixed id, flagged. Never a C… id:
- * that is the custodian sibling, not the client's account number.
+ * `getAccountDetails` → the account's number, for any account (not just the client's
+ * spend account). Prefers W…CAD; otherwise any W- or HQ-prefixed id, flagged. Never a C…
+ * id: that is the custodian sibling, not the client's account number.
  */
 export function readCustodianAccountNumber(res: unknown): CustodianAccount | null {
   const custodians = asRecord(asRecord(asRecord(res)?.data)?.account)?.custodianAccounts;

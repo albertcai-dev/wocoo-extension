@@ -609,6 +609,10 @@ describe('readCustodianAccountNumber', () => {
   it('falls back to a W-prefixed non-CAD account, flagged', () => {
     expect(readCustodianAccountNumber(res(['C13BVPP28USD', 'wk5lgp131usd']))).toEqual({ accountNumber: 'WK5LGP131USD', isCadSpend: false });
   });
+  it('falls back to an HQ… investment account (e.g. self-directed non-registered), flagged', () => {
+    expect(readCustodianAccountNumber(res(['hq7zkpx08cad']))).toEqual({ accountNumber: 'HQ7ZKPX08CAD', isCadSpend: false });
+    expect(readCustodianAccountNumber(res(['HQ7ZKPX08CAD', 'WK5LGP131CAD']))).toEqual({ accountNumber: 'WK5LGP131CAD', isCadSpend: true });
+  });
   it('never returns a C… custodian id', () => {
     expect(readCustodianAccountNumber(res(['C13BVPP28CAD']))).toBeNull();
   });

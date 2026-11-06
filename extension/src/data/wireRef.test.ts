@@ -19,6 +19,13 @@ describe('parseWireRef', () => {
     expect(parseWireRef('REF: AVJJXHZEBVIA53DF')).toBe('AVJJXHZEBVIA53DF');
     expect(parseWireRef('REF/AVJJXHZEBVIA53DF')).toBe('AVJJXHZEBVIA53DF');
   });
+  it('accepts "REF NO" (MT103 return format)', () => {
+    expect(parseWireRef('/REC/RETURN OF YR MT103 261105 //REF NO E49PYMJ0UJ325CN1 //NAME AND ACCT DO NOT MATCH')).toBe('E49PYMJ0UJ325CN1');
+    expect(parseWireRef('REF NO. E49PYMJ0UJ325CN1')).toBe('E49PYMJ0UJ325CN1');
+  });
+  it('does not eat a ref that itself starts with NO', () => {
+    expect(parseWireRef('//REF NOJJXHZEBVIA53DF CAD')).toBe('NOJJXHZEBVIA53DF');
+  });
   it('handles a Sheets cell copied with surrounding quotes and line breaks', () => {
     expect(parseWireRef(`"/BNF/RETURN WIRE DATED 10 07 26\n//REF AVJJXHZEBVIA53DF\nCAD56,295.89"`)).toBe('AVJJXHZEBVIA53DF');
   });
