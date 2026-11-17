@@ -58,7 +58,7 @@ import { stageCardIssuanceSearch } from '../data/cardIssuanceStage';
 import { captureJiraOutcomeLive } from '../data/outcomeCaptureLive';
 import { PRESET_DASHBOARD_IDS, presetDashboardUrl } from '../data/presetConfig';
 import { recordClick, recordOutcome } from '../data/usageStore';
-import { TOKEN_ACTIVATED_KEY, TOKEN_AWAIT_UPDATE_KEY, TOKEN_STEP_KEY, TOKEN_TARGET_KEY } from '../data/i2cTokenActivate';
+import { TOKEN_ACTIVATED_KEY, TOKEN_AWAIT_UPDATE_KEY, TOKEN_STEP_KEY, TOKEN_TARGET_KEY, isTokenFlow, type TokenFlow } from '../data/i2cTokenActivate';
 import type { DraftToken, DraftWorkflow } from '../data/agentDraftTypes';
 import type { UsageButtonId } from '../data/usageStats';
 import { StatsView } from './StatsView';
@@ -648,7 +648,7 @@ function TicketViewInner({ ticket, onTicketUpdate, onStartTriage, onStartReverse
           const workflowClick = DRAFT_WORKFLOW_CLICK[w];
           if (workflowClick) recordClick(ticket.id, workflowClick);
           const vendorDraft = action.vendor_draft;
-          if (w === 'activate_token') void openI2cActivateToken(ticket, action.token);
+          if (isTokenFlow(w)) void openI2cTokenFlow(ticket, action.token, w);
           else if (w === 'i2c_ticket' || w === 'koho_email') {
             if (!vendorDraft) return;
             const kind = w === 'i2c_ticket' ? 'i2c' : 'koho';
@@ -728,10 +728,11 @@ function TicketViewInner({ ticket, onTicketUpdate, onStartTriage, onStartReverse
 const I2C_LOGIN_URL = 'https://wealthsimplecs.mycardplace.com/customerservice/wealthsimplelogin.jsp';
 const KOHO_ADMIN_URL = 'https://admin.koho.ca/';
 
-// The agent draft's "Activate token in i2c": the usual i2c chain, then Manage Card Tokens →
-// Select on the InActive token → Status Active / Reason Authenticated with CSR / Comments =
-// ticket link. Stops before Update Status; content/i2c.ts reports that click back.
-async function openI2cActivateToken(ticket: WocooTicket, token: DraftToken | null | undefined) {
+// The agent draft's "Activate token in i2c" / "Deactivate token in i2c": the usual i2c chain,
+// then Manage Card Tokens → Select on the token → Status / Reason (Active + Authenticated with
+// CSR, or Deactivate + Other) / Comments = ticket link. Stops before Update Status;
+// content/i2c.ts reports that click back.
+async function openI2cTokenFlow(ticket: WocooTicket, token: DraftToken | null | undefined, flow: TokenFlow) {
   recordClick(ticket.id, 'i2c');
   if (ticket.clientEmail) {
     // Awaited so the new tab's first content-script pass sees the flow (see ReverseFeeWorkflow).
@@ -740,7 +741,7 @@ async function openI2cActivateToken(ticket: WocooTicket, token: DraftToken | nul
     ]);
     await chrome.storage.local.set({
       pending_i2c_email: ticket.clientEmail,
-      pending_i2c_flow: 'activate_token',
+      pending_i2c_flow: flow,
       pending_i2c_source_ticket_id: ticket.id,
       pending_i2c_ticket_url: `https://wealthsimple.atlassian.net/browse/${ticket.id}`,
       [TOKEN_TARGET_KEY]: token ?? {},

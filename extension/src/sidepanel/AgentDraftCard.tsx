@@ -25,7 +25,7 @@ import { LessonReview } from './LessonReview';
 import { worthReviewing } from '../data/draftLessons';
 import { greetTarget, pickReplyTarget, replyParentId, type ReplyTarget } from '../data/replyTarget';
 import { planPost } from '../data/postPlan';
-import { TOKEN_ACTIVATED_KEY, freshRecord } from '../data/i2cTokenActivate';
+import { TOKEN_ACTIVATED_KEY, freshRecord, isTokenFlow } from '../data/i2cTokenActivate';
 
 type Load =
   | { kind: 'loading' }
@@ -115,6 +115,7 @@ const VENDOR_WORKFLOW_LABEL: Partial<Record<NonNullable<DraftActionNeeded['workf
   i2c_ticket: 'Open i2c form with draft',
   koho_email: 'Go to KOHO email with draft',
   activate_token: 'Activate token in i2c',
+  deactivate_token: 'Deactivate token in i2c',
 };
 
 const STATUSES: ReadonlyArray<WocooTicket['status']> = ['Triage', 'Back Office', 'Pending', 'Done', 'Cancelled', 'Other'];
@@ -181,8 +182,8 @@ function DraftBody({ ticket, draft, onOpenWorkflow, onTicketUpdate, onOpenMove, 
   const editable = draft.outcome === 'draft' || draft.outcome === 'needs_info';
   const [text, setText] = useState(() => segmentsToPlain(draft.segments));
   const [actionDone, setActionDone] = useState(false);
-  // activate_token: i2c reports the user's Update Status click; that is the action done.
-  const watchTokenClick = draft.action_needed?.workflow === 'activate_token';
+  // activate_token / deactivate_token: i2c reports the user's Update Status click; that is the action done.
+  const watchTokenClick = isTokenFlow(draft.action_needed?.workflow);
   useEffect(() => {
     if (!watchTokenClick) return;
     const check = (v: unknown) => { if (freshRecord(v, Date.now(), ticket.id)) setActionDone(true); };
