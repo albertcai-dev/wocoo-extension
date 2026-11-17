@@ -16,7 +16,7 @@ import { AGENT_TAB_KEY, shouldReport } from '../data/i2cActivity';
 import {
   TOKEN_ACTIVATED_KEY, TOKEN_AWAIT_UPDATE_KEY, TOKEN_STEP_KEY, TOKEN_TARGET_KEY, UPDATE_STATUS_RE,
   findOption, freshRecord, isTokenFlow, locateTokenColumns, parseTokenTarget, pickActiveTokenRowById,
-  pickInactiveTokenRow, tokenFormFor,
+  pickInactiveTokenRow, tokenFormFor, canFillTokenForm, selectedOptionMatches,
 } from '../data/i2cTokenActivate';
 
 export {}; // Module-scoped so helpers don't collide with other content scripts at the TS layer.
@@ -1731,6 +1731,17 @@ function openCardManagementLink(text: string): boolean {
   return clickSidebarLink(text);
 }
 
+/** The step is 'selected' but the flow's status option isn't in New Status: log what i2c
+ *  offers (once per page), so the option regex can be fixed. */
+let statusOptionsLogged = false;
+function logStatusOptionsOnce(flow: string): void {
+  if (statusOptionsLogged) return;
+  const sel = findSelectByLabelText(/^New\s+Status\b/i);
+  if (!sel) return;
+  statusOptionsLogged = true;
+  log(`  → ${flow}: no matching New Status option; i2c offers:`, Array.from(sel.options).map((o) => (o.textContent || '').trim()));
+}
+
 let tokenStepRunning = false;
 async function tryTokenStatusChange(): Promise<boolean> {
   if (tokenStepRunning) return false;
@@ -1750,14 +1761,26 @@ async function tryTokenStatusChange(): Promise<boolean> {
     // 1. The form: the Select click either reveals it in place or loads a page with it.
     // The Change Status form is always on the page, under the token table; fill it only after Select.
     const status = labelledOption(/^New\s+Status\b/i, form.statusRe);
-    if (step === 'selected' && status) {
+    const onTokenPage = !!findTokenTable();
+    if (step === 'selected' && onTokenPage && !status) logStatusOptionsOnce(flow);
+    if (canFillTokenForm({ step, onTokenPage, hasStatusOption: !!status }) && status) {
       if (pickSelectOption(status.select, status.idx)) {
         log(`  → ${flow}: Status = ${form.statusLabel}`);
         await sleep(400); // Reason can be a dependent dropdown that fills after Status changes
       }
       const reason = labelledOption(/^Reason\b/i, form.reasonRe);
       if (!reason) { log(`  → ${flow}: Reason "${form.reasonLabel}" not found yet`); return false; }
-      if (pickSelectOption(reason.select, reason.idx)) log(`  → ${flow}: Reason = ${form.reasonLabel}`);
+      if (pickSelectOption(reason.select, reason.idx)) {
+        log(`  → ${flow}: Reason = ${form.reasonLabel}`);
+        // A dependent Reason list can repopulate after our pick (Other is in every list); only
+        // move on once it stuck. Otherwise the next pass picks it again.
+        await sleep(600);
+        const now = findSelectByLabelText(/^Reason\b/i);
+        if (!selectedOptionMatches(now?.selectedOptions[0]?.textContent, form.reasonRe)) {
+          log(`  → ${flow}: Reason reset after the list reloaded; picking it again`);
+          return false;
+        }
+      }
       const comments = findTextareaByLabelText(/^Comments?\b/i)
         ?? Array.from(document.querySelectorAll<HTMLTextAreaElement>('textarea')).find((t) => isVisible(t)) ?? null;
       if (!comments) { log(`  → ${flow}: Comments box not found yet`); return false; }

@@ -3,6 +3,7 @@ import {
   ACTIVE_OPTION_RE, CSR_REASON_RE, TOKEN_AWAIT_MAX_AGE_MS, UPDATE_STATUS_RE,
   findOption, freshRecord, isInactiveStatus, locateTokenColumns, parseTokenTarget, pickInactiveTokenRow,
   DEACTIVATE_OPTION_RE, OTHER_REASON_RE, isActiveStatus, isTokenFlow, pickActiveTokenRowById, tokenFormFor,
+  canFillTokenForm, selectedOptionMatches,
 } from './i2cTokenActivate';
 
 const header = ['Token Number', 'Token Type', 'Device Name', 'Status', 'Created On', 'Action'];
@@ -145,5 +146,22 @@ describe('isTokenFlow', () => {
     expect(isTokenFlow('deactivate_token')).toBe(true);
     expect(isTokenFlow('admin_debit')).toBe(false);
     expect(isTokenFlow(null)).toBe(false);
+  });
+});
+
+describe('canFillTokenForm', () => {
+  it('fills only after Select, on Manage Card Tokens, with the status option present', () => {
+    expect(canFillTokenForm({ step: 'selected', onTokenPage: true, hasStatusOption: true })).toBe(true);
+    expect(canFillTokenForm({ step: 'selected', onTokenPage: false, hasStatusOption: true })).toBe(false);
+    expect(canFillTokenForm({ step: 'selected', onTokenPage: true, hasStatusOption: false })).toBe(false);
+    expect(canFillTokenForm({ step: 'card', onTokenPage: true, hasStatusOption: true })).toBe(false);
+  });
+});
+
+describe('selectedOptionMatches', () => {
+  it('confirms the Reason stuck after the dependent list reloaded', () => {
+    expect(selectedOptionMatches('Other', OTHER_REASON_RE)).toBe(true);
+    expect(selectedOptionMatches(' Select ', OTHER_REASON_RE)).toBe(false);
+    expect(selectedOptionMatches(null, OTHER_REASON_RE)).toBe(false);
   });
 });

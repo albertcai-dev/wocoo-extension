@@ -182,3 +182,14 @@ export function freshRecord(v: unknown, now: number, ticketId?: string): TokenAw
   if (ticketId !== undefined && o.sourceTicketId !== ticketId) return null;
   return { sourceTicketId: o.sourceTicketId, at: o.at };
 }
+
+/** Fill the Change Status form only after Select, only on Manage Card Tokens (another i2c page
+ *  can have its own "New Status" form), and only once the flow's status option is there. */
+export function canFillTokenForm(s: { step: string | null; onTokenPage: boolean; hasStatusOption: boolean }): boolean {
+  return s.step === 'selected' && s.onTokenPage && s.hasStatusOption;
+}
+
+/** The dropdown's current option text matches `re` (e.g. Reason still "Other" after a reload). */
+export function selectedOptionMatches(text: string | null | undefined, re: RegExp): boolean {
+  return !!text && re.test(norm(text));
+}
