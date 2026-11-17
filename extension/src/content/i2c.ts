@@ -14,8 +14,9 @@ import { I2C_LOGIN_URL } from '../data/i2cCardLookup';
 import { isSignInLabel } from '../data/i2cLogin';
 import { AGENT_TAB_KEY, shouldReport } from '../data/i2cActivity';
 import {
-  ACTIVE_OPTION_RE, CSR_REASON_RE, TOKEN_ACTIVATED_KEY, TOKEN_AWAIT_UPDATE_KEY, TOKEN_STEP_KEY, TOKEN_TARGET_KEY, UPDATE_STATUS_RE,
-  findOption, freshRecord, locateTokenColumns, parseTokenTarget, pickInactiveTokenRow,
+  TOKEN_ACTIVATED_KEY, TOKEN_AWAIT_UPDATE_KEY, TOKEN_STEP_KEY, TOKEN_TARGET_KEY, UPDATE_STATUS_RE,
+  findOption, freshRecord, isTokenFlow, locateTokenColumns, parseTokenTarget, pickActiveTokenRowById,
+  pickInactiveTokenRow, tokenFormFor,
 } from '../data/i2cTokenActivate';
 
 export {}; // Module-scoped so helpers don't collide with other content scripts at the TS layer.
@@ -250,12 +251,12 @@ async function chainActive(): Promise<boolean> {
 // Anything else (null) is the regular Recent-Activity sign-in.
 // Chain variants. null (generic) stops after "Continue with this Customer" so the
 // agent can navigate i2c's sidebar manually without the script forcing a navigation.
-type Flow = 'reverse_fee' | 'reverse_interest_fee' | 'admin_debit' | 'verify_balance' | 'qc_month_scrape' | 'apply_credit' | 'card_details' | 'activate_token' | null;
+type Flow = 'reverse_fee' | 'reverse_interest_fee' | 'admin_debit' | 'verify_balance' | 'qc_month_scrape' | 'apply_credit' | 'card_details' | 'activate_token' | 'deactivate_token' | null;
 async function getFlow(): Promise<Flow> {
   const res = await chrome.storage.local.get('pending_i2c_flow');
   const v = res.pending_i2c_flow;
   return v === 'reverse_fee' || v === 'reverse_interest_fee' || v === 'admin_debit' || v === 'verify_balance'
-    || v === 'qc_month_scrape' || v === 'apply_credit' || v === 'card_details' || v === 'activate_token' ? v : null;
+    || v === 'qc_month_scrape' || v === 'apply_credit' || v === 'card_details' || isTokenFlow(v) ? v : null;
 }
 
 function setTextareaValue(el: HTMLTextAreaElement, value: string) {
@@ -372,15 +373,16 @@ async function tryProductSearchSelect(): Promise<boolean> {
     }));
 
     let pick = pickCreditProduct(rows);
-    // activate_token: the token can be on the prepaid card (PPVC) too; take the row whose
-    // Account/Card Number ends in the agent's card last 4.
-    if ((await getFlow()) === 'activate_token') {
+    // activate_token / deactivate_token: the token can be on the prepaid card (PPVC) too; take
+    // the row whose Account/Card Number ends in the agent's card last 4.
+    const productFlow = await getFlow();
+    if (isTokenFlow(productFlow)) {
       const last4 = parseTokenTarget((await chrome.storage.local.get(TOKEN_TARGET_KEY))[TOKEN_TARGET_KEY])?.cardLast4;
       const cardAt = rowCells[cols.headerAt].findIndex((c) => /Card\s*Number/i.test(c.replace(/\s+/g, ' ')));
       if (last4 && cardAt >= 0) {
         const hits = dataIdx.map((i, k) => ({ k, card: (rowCells[i][cardAt] || '').replace(/\s+/g, '') }))
           .filter((r) => r.card.endsWith(last4));
-        if (hits.length === 1) { pick = hits[0].k; log(`  → activate_token: product row with card ending ${last4}`); }
+        if (hits.length === 1) { pick = hits[0].k; log(`  → ${productFlow}: product row with card ending ${last4}`); }
       }
     }
     if (pick === null) {
@@ -426,8 +428,8 @@ async function tryContinueWithCustomer(): Promise<boolean> {
     const v = ((b as HTMLInputElement).value || b.textContent || '').trim();
     if (/^Continue\s+with\s+this\s+Customer$/i.test(v)) {
       if (!isVisible(b)) continue;
-      // activate_token knows the card: tick that row's Select box (several cards → i2c ticks none).
-      if ((await getFlow()) === 'activate_token') await selectAccountForTokenCard();
+      // The token flows know the card: tick that row's Select box (several cards → i2c ticks none).
+      if (isTokenFlow(await getFlow())) await selectAccountForTokenCard();
       // Bail (without setting continueRan) if nothing is selected yet — bootstrap's poll
       // loop retries, so a slow render or a manual multi-account pick still lands.
       if (!(await ensureAccountSelected())) return false;
@@ -446,7 +448,7 @@ async function tryContinueWithCustomer(): Promise<boolean> {
   return false;
 }
 
-/** activate_token: on a customer page with several cards, tick only the Select box on the row
+/** activate_token / deactivate_token: on a customer page with several cards, tick only the Select box on the row
  *  whose masked number ends in the agent's card last 4. No match → leave it to the user. */
 async function selectAccountForTokenCard(): Promise<void> {
   const target = parseTokenTarget((await chrome.storage.local.get(TOKEN_TARGET_KEY))[TOKEN_TARGET_KEY]);
@@ -456,12 +458,12 @@ async function selectAccountForTokenCard(): Promise<void> {
   const rowLast4 = (i: HTMLInputElement) =>
     ((i.closest('tr')?.textContent || '').replace(/\s+/g, ' ').match(MASKED_PAN_RE) || [])[1];
   const mine = inputs.find((i) => rowLast4(i) === last4);
-  if (!mine) { log(`  → activate_token: no account row ending ${last4}; pick the card by hand`); return; }
+  if (!mine) { log(`  → token flow: no account row ending ${last4}; pick the card by hand`); return; }
   for (const i of inputs) {
     if (i !== mine && i.checked && i.type === 'checkbox') i.click();
   }
   if (!mine.checked) {
-    log(`  → activate_token: ticking the account row ending ${last4}`);
+    log(`  → token flow: ticking the account row ending ${last4}`);
     mine.click();
     await sleep(250);
   }
@@ -1632,9 +1634,11 @@ async function tryFillApplyCredit(): Promise<boolean> {
   return false;
 }
 
-// ----- activate_token only: Manage Card Tokens → Select the InActive token → fill the form -----
-// Same shape as admin_debit: the chain opens the page and fills Status = Active, Reason =
-// Authenticated with CSR and Comments = the Jira ticket link, then stops. The user clicks
+// ----- activate_token / deactivate_token: Manage Card Tokens → Select the token → fill the form -----
+// Same shape as admin_debit: the chain opens the page, Selects the token's row and fills the
+// Change Status form (tokenFormFor: Active + Authenticated with CSR, or Deactivate + Other) with
+// Comments = the Jira ticket link, then stops. activate_token Selects the InActive row;
+// deactivate_token only the Active row with the agent's exact Token ID. The user clicks
 // Update Status; watchTokenUpdateStatus reports that click so the Sidekick Agent draft card
 // ticks "I've done this". Progress survives page loads in TOKEN_STEP_KEY:
 // (unset) → 'opened' (sidebar clicked) → 'card' (card dropdown set) → 'selected' (row's Select clicked).
@@ -1728,9 +1732,11 @@ function openCardManagementLink(text: string): boolean {
 }
 
 let tokenStepRunning = false;
-async function tryActivateToken(): Promise<boolean> {
+async function tryTokenStatusChange(): Promise<boolean> {
   if (tokenStepRunning) return false;
-  if ((await getFlow()) !== 'activate_token') return false;
+  const flow = await getFlow();
+  if (!isTokenFlow(flow)) return false;
+  const form = tokenFormFor(flow);
   if (!(await chainActive())) return false;
   tokenStepRunning = true;
   try {
@@ -1738,25 +1744,25 @@ async function tryActivateToken(): Promise<boolean> {
     const target = parseTokenTarget(ctx[TOKEN_TARGET_KEY]) ?? {};
     const ticketUrl = typeof ctx.pending_i2c_ticket_url === 'string' ? ctx.pending_i2c_ticket_url : '';
     const sourceTicketId = typeof ctx.pending_i2c_source_ticket_id === 'string' ? ctx.pending_i2c_source_ticket_id : '';
-    if (!ticketUrl) { log('  → activate_token: ticket URL missing'); return false; }
+    if (!ticketUrl) { log(`  → ${flow}: ticket URL missing`); return false; }
     let step = await getTokenStep();
 
     // 1. The form: the Select click either reveals it in place or loads a page with it.
     // The Change Status form is always on the page, under the token table; fill it only after Select.
-    const status = labelledOption(/^New\s+Status\b/i, ACTIVE_OPTION_RE);
+    const status = labelledOption(/^New\s+Status\b/i, form.statusRe);
     if (step === 'selected' && status) {
       if (pickSelectOption(status.select, status.idx)) {
-        log('  → activate_token: Status = Active');
+        log(`  → ${flow}: Status = ${form.statusLabel}`);
         await sleep(400); // Reason can be a dependent dropdown that fills after Status changes
       }
-      const reason = labelledOption(/^Reason\b/i, CSR_REASON_RE);
-      if (!reason) { log('  → activate_token: Reason "Authenticated with CSR" not found yet'); return false; }
-      if (pickSelectOption(reason.select, reason.idx)) log('  → activate_token: Reason = Authenticated with CSR');
+      const reason = labelledOption(/^Reason\b/i, form.reasonRe);
+      if (!reason) { log(`  → ${flow}: Reason "${form.reasonLabel}" not found yet`); return false; }
+      if (pickSelectOption(reason.select, reason.idx)) log(`  → ${flow}: Reason = ${form.reasonLabel}`);
       const comments = findTextareaByLabelText(/^Comments?\b/i)
         ?? Array.from(document.querySelectorAll<HTMLTextAreaElement>('textarea')).find((t) => isVisible(t)) ?? null;
-      if (!comments) { log('  → activate_token: Comments box not found yet'); return false; }
+      if (!comments) { log(`  → ${flow}: Comments box not found yet`); return false; }
       if (comments.value !== ticketUrl) setTextareaValue(comments, ticketUrl);
-      log('  → activate_token: form filled; waiting for the user to click Update Status');
+      log(`  → ${flow}: form filled; waiting for the user to click Update Status`);
       await chrome.storage.local.set({ [TOKEN_AWAIT_UPDATE_KEY]: { sourceTicketId, at: Date.now() } });
       await clearAllPendingKeys();
       watchTokenUpdateStatus();
@@ -1779,7 +1785,7 @@ async function tryActivateToken(): Promise<boolean> {
       if (!/Account Summary|Card Management/i.test(document.body?.innerText || '')) return false;
       if (!openCardManagementLink('Manage Card Tokens')) return false;
       const prev = (await chrome.storage.local.get(TOKEN_OPENED_AT_KEY))[TOKEN_OPENED_AT_KEY] as { n?: number } | undefined;
-      log('  → activate_token: Card Management → Manage Card Tokens');
+      log(`  → ${flow}: Card Management → Manage Card Tokens`);
       await chrome.storage.local.set({ [TOKEN_STEP_KEY]: 'opened', [TOKEN_OPENED_AT_KEY]: { at: Date.now(), n: (step ? prev?.n ?? 0 : 0) + 1 } });
       return true;
     }
@@ -1789,7 +1795,7 @@ async function tryActivateToken(): Promise<boolean> {
     if (step !== 'card' && target.cardLast4) {
       const card = findSelectWithOption(new RegExp(`${target.cardLast4}\\s*$`));
       if (card && pickSelectOption(card.select, card.idx)) {
-        log('  → activate_token: switching the card dropdown to ••' + target.cardLast4);
+        log(`  → ${flow}: switching the card dropdown to ••${target.cardLast4}`);
         await chrome.storage.local.set({ [TOKEN_STEP_KEY]: 'card' });
         return true; // the table re-renders (or the page reloads) for that card
       }
@@ -1797,11 +1803,16 @@ async function tryActivateToken(): Promise<boolean> {
       await chrome.storage.local.set({ [TOKEN_STEP_KEY]: 'card' });
     }
 
-    // 4. Select on the InActive token's row: only when exactly one row qualifies.
+    // 4. Select on the token's row: only when exactly one row qualifies (InActive for activate;
+    //    Active with the exact Token ID for deactivate).
     const fresh = findTokenTable() ?? table;
-    const at = pickInactiveTokenRow(fresh.rows, target);
+    const deactivate = flow === 'deactivate_token';
+    const at = deactivate ? pickActiveTokenRowById(fresh.rows, target) : pickInactiveTokenRow(fresh.rows, target);
+    const rowKind = deactivate ? 'Active' : 'InActive';
     if (at === null) {
-      log('  → activate_token: no single InActive token row to select; leaving it to the user');
+      log(deactivate
+        ? '  → deactivate_token: no Active token row with that token id; leaving it to the user'
+        : '  → activate_token: no single InActive token row to select; leaving it to the user');
       await clearAllPendingKeys();
       return true;
     }
@@ -1810,7 +1821,7 @@ async function tryActivateToken(): Promise<boolean> {
     const select = Array.from(rowEl.querySelectorAll<HTMLElement>('input[type="checkbox"], input[type="radio"], a, button, input[type="button"]'))
       .find((el) => (el as HTMLInputElement).type === 'checkbox' || (el as HTMLInputElement).type === 'radio'
         || /^Select$/i.test(((el as HTMLInputElement).value || el.textContent || '').replace(/\s+/g, ' ').trim()));
-    if (!select) { log('  → activate_token: InActive row has no Select control'); return false; }
+    if (!select) { log(`  → ${flow}: ${rowKind} row has no Select control`); return false; }
     // Only this token: untick any other row the user (or i2c) left ticked.
     for (const other of fresh.els) {
       if (other === rowEl) continue;
@@ -1818,7 +1829,7 @@ async function tryActivateToken(): Promise<boolean> {
     }
     await chrome.storage.local.set({ [TOKEN_STEP_KEY]: 'selected' });
     if (!(select as HTMLInputElement).checked) {
-      log('  → activate_token: ticking Select on the InActive token row');
+      log(`  → ${flow}: ticking Select on the ${rowKind} token row`);
       select.click();
     }
     return true;
@@ -1843,7 +1854,7 @@ function watchTokenUpdateStatus(): void {
     void chrome.storage.local.get(TOKEN_AWAIT_UPDATE_KEY).then((res) => {
       const rec = freshRecord(res[TOKEN_AWAIT_UPDATE_KEY], Date.now());
       if (!rec) return;
-      log('  → activate_token: Update Status clicked for', rec.sourceTicketId);
+      log('  → token flow: Update Status clicked for', rec.sourceTicketId);
       return chrome.storage.local.set({ [TOKEN_ACTIVATED_KEY]: { sourceTicketId: rec.sourceTicketId, at: Date.now() } })
         .then(() => chrome.storage.local.remove(TOKEN_AWAIT_UPDATE_KEY));
     }).catch((err) => console.debug('[wocoo-i2c] token report failed', err));
@@ -1894,7 +1905,7 @@ async function bootstrap() {
     await tryFillAdminDebit();
     await tryDateRangeScrape();
     await tryFillApplyCredit();
-    await tryActivateToken();
+    await tryTokenStatusChange();
   }
   const deadline = Date.now() + 45_000;
   while (Date.now() < deadline) {
