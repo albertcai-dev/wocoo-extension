@@ -33,6 +33,7 @@ import {
   transitionTicket,
 } from '../api/jira';
 import { fetchAtlasAccountIdHeadless } from '../data/atlasAccountLookup';
+import { conciseReimbSummary, parseReimbAgentNote } from '../data/reimbPrefill';
 
 type Status = 'configuring' | 'confirming' | 'executing' | 'success' | 'error';
 
@@ -44,20 +45,23 @@ export function CreateReimbModal({ ticket, onClose, onCreated, agentNote }: {
   agentNote?: string;
 }) {
   // ===== Field state =====
-  const [summary, setSummary] = useState<string>(ticket.summary || '');
+  // The ticket's own amount wins; the agent note fills whatever the ticket lacks.
+  const [notePrefill] = useState(() => parseReimbAgentNote(agentNote));
+  const [summary, setSummary] = useState<string>(conciseReimbSummary(ticket.summary));
   const [accountIdInput, setAccountIdInput] = useState<string>(ticket.accountId || '');
   const [userTier, setUserTier] = useState<UserTier>(tierToUserTierLabel(ticket.tier));
   const [amountInput, setAmountInput] = useState<string>(
-    ticket.totalReimbursementAmount != null ? String(ticket.totalReimbursementAmount) : '',
+    ticket.totalReimbursementAmount != null ? String(ticket.totalReimbursementAmount)
+      : notePrefill.amount != null ? notePrefill.amount.toFixed(2) : '',
   );
   const [currency, setCurrency] = useState<Currency>(MODAL_DEFAULTS.currency);
-  const [reimbursementReason, setReimbursementReason] = useState<string>('');
+  const [reimbursementReason, setReimbursementReason] = useState<string>(notePrefill.reason ?? '');
   const [requestorTeam, setRequestorTeam] = useState<string>(MODAL_DEFAULTS.requestorTeam);
   const [incidentRelated, setIncidentRelated] = useState<IncidentRelated>(MODAL_DEFAULTS.incidentRelated);
 
   // Approver — Luke / Amanda / Vivian quick-pick OR free Jira user search
   type ApproverChoice = { accountId: string; displayName: string };
-  const initialAmount = ticket.totalReimbursementAmount ?? null;
+  const initialAmount = ticket.totalReimbursementAmount ?? notePrefill.amount ?? null;
   const initialApproverKey = defaultApproverKey(initialAmount);
   const [approver, setApprover] = useState<ApproverChoice>({
     accountId: REIMB_APPROVERS[initialApproverKey].accountId,
@@ -214,7 +218,7 @@ export function CreateReimbModal({ ticket, onClose, onCreated, agentNote }: {
               {agentNote && (
                 <Section label="Sidekick Agent says">
                   <div style={{ ...textInputStyle, whiteSpace: 'pre-wrap', userSelect: 'text', background: 'var(--mint-bg-subtle)' }}>{agentNote}</div>
-                  <Hint>For reference only. Fill the fields below from it.</Hint>
+                  <Hint>Amount and reason below are prefilled from this note. Double-check them.</Hint>
                 </Section>
               )}
 
