@@ -19,7 +19,8 @@ export type DraftFlag =
   | 'no_new_angle'
   | 'compass_no_reply'
   | 'i2c_deferred'
-  | 'amount_mismatch';
+  | 'amount_mismatch'
+  | 'attachment_unread';
 
 export type DraftMoveDestination =
   | 'EOC' | 'DBO' | 'CRED' | 'FRAUD' | 'PRR' | 'PFO' | 'BOPSFUND' | 'WORS' | 'BOTI';

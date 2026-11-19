@@ -115,6 +115,7 @@ const FLAG_LABELS: Record<DraftFlag, string> = {
   compass_no_reply: "Compass didn't answer",
   i2c_deferred: 'i2c not checked yet',
   amount_mismatch: "Amounts don't match the description",
+  attachment_unread: 'Attachment not read, check it before posting',
 };
 
 export function flagLabel(flag: DraftFlag): string {

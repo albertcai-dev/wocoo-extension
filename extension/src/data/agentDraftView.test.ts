@@ -130,6 +130,7 @@ describe('flagLabel', () => {
     expect(flagLabel('no_new_angle')).toBe('No new angle found');
     expect(flagLabel('compass_no_reply')).toBe("Compass didn't answer");
     expect(flagLabel('i2c_deferred')).toBe('i2c not checked yet');
+    expect(flagLabel('attachment_unread')).toBe('Attachment not read, check it before posting');
     expect(flagLabel('amount_mismatch')).toBe("Amounts don't match the description");
   });
 });
