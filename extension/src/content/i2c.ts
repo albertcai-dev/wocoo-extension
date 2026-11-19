@@ -4,6 +4,7 @@
 // The login form is a server-rendered JSP, so the inputs exist by document_idle. We
 // retry a few times anyway in case the form is replaced after first paint.
 
+import { relayAgentHello } from './agentTabHello';
 import { gridFromRows, pageSaysNoRecord, readColumnForLast4, readLabelValue, readProgramForLast4 } from '../data/i2cCardDetailsParse';
 import { locateProductColumns, pickCreditProduct, pickProduct, type ProductRow } from '../data/i2cProductSelect';
 import {
@@ -2215,3 +2216,5 @@ if (isAgentTab()) {
 watchUserActivity();
 void resumeTokenWatch();
 bootstrap();
+
+relayAgentHello();

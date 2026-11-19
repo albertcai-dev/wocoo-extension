@@ -1,5 +1,6 @@
 export {}; // Treat as module → file-scoped declarations, no collision with i2c.ts.
 
+import { relayAgentHello } from './agentTabHello';
 import {
   clearStagedPresetIdentity,
   readPresetIdentity,
@@ -494,3 +495,5 @@ async function bootstrap() {
 if (/^\/(superset\/)?dashboard\//.test(location.pathname)) {
   bootstrap();
 }
+
+relayAgentHello();

@@ -98,6 +98,8 @@ import {
   scheduleReplyPoll,
   runReplyPollNow,
 } from './replyPollScheduler';
+import { AGENT_TAB_HELLO_MSG, AGENT_TAB_SWEEP_ALARM } from '../data/agentTabs';
+import { recordAgentTab, scheduleAgentTabSweep, sweepAgentTabs } from './agentTabSweeper';
 import {
   sweepExpiredBridgeTabs,
   sweepAllBridgeTabsOnStartup,
@@ -107,6 +109,12 @@ import {
 // Keep the bridge-tab registry honest when the user closes a tab by hand, so the sweep
 // isn't chasing tab IDs that are already gone (and can't collide with a recycled ID).
 chrome.tabs.onRemoved.addListener((tabId) => { void unregisterBridgeTab(tabId); });
+
+// The draft agent announcing its tab (content/agentTabHello.ts), for the leftover-tab sweep.
+chrome.runtime.onMessage.addListener((msg, sender) => {
+  if (msg?.type === AGENT_TAB_HELLO_MSG && typeof sender.tab?.id === 'number') void recordAgentTab(sender.tab.id);
+  return undefined;
+});
 
 // On install / startup, seed once. `scheduleReplyPoll` just registers a chrome.alarms
 // entry — no bridge tab opens. The first actual poll runs at the +5 min mark, and only
@@ -118,6 +126,7 @@ chrome.tabs.onRemoved.addListener((tabId) => { void unregisterBridgeTab(tabId); 
 // worker was evicted mid-call.
 chrome.runtime.onInstalled.addListener(() => {
   void sweepAllBridgeTabsOnStartup();
+  void scheduleAgentTabSweep();
   rebroadcastActiveTab();
   void scheduleNextMcvAlarm();
   void runMcvIfMissed();
@@ -125,6 +134,7 @@ chrome.runtime.onInstalled.addListener(() => {
 });
 chrome.runtime.onStartup.addListener(() => {
   void sweepAllBridgeTabsOnStartup();
+  void scheduleAgentTabSweep();
   rebroadcastActiveTab();
   void scheduleNextMcvAlarm();
   void runMcvIfMissed();
@@ -137,6 +147,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   // Any alarm wake-up is a chance to sweep. The 5-min reply poll makes this the effective
   // sweep cadence, and it also collects tabs the *previous* poll leaked.
   void sweepExpiredBridgeTabs();
+  if (alarm.name === AGENT_TAB_SWEEP_ALARM || alarm.name === REPLY_POLL_ALARM_NAME) void sweepAgentTabs();
   if (alarm.name === MCV_ALARM_NAME) void handleMcvAlarm();
   if (alarm.name === REPLY_POLL_ALARM_NAME) void runReplyPollNow('alarm');
 });

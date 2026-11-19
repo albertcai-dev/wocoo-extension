@@ -8,6 +8,7 @@ export {}; // Module-scoped so helpers don't collide with other content scripts.
 
 console.log('[wocoo-koho] content script loaded on', location.href);
 
+import { relayAgentHello } from './agentTabHello';
 import {
   AGENT_KOHO_CHAIN_KEY, AGENT_KOHO_RESULT_ATTR, AGENT_KOHO_RESULT_KEY, KOHO_TRANSACTIONS_PAGE, kohoUserId,
   parseKohoRequest, readKohoChain, type KohoChain, type SiteResult,
@@ -300,3 +301,5 @@ if (isAgentTab()) {
 }
 
 bootstrap();
+
+relayAgentHello();

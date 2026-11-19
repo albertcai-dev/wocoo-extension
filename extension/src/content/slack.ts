@@ -5,6 +5,7 @@
 // Queue-driven, mirrors the Ledge pattern: side panel writes a job to
 // chrome.storage.local; this script picks it up, runs the DOM chain, writes the result.
 
+import { relayAgentHello } from './agentTabHello';
 import {
   AGENT_COMPASS_RESULT_ATTR,
   COMPASS_MENTION,
@@ -514,3 +515,5 @@ async function bootstrap() {
 }
 
 void bootstrap();
+
+relayAgentHello();

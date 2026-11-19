@@ -7,6 +7,7 @@
 // fall back to "first WOCOO-N anywhere in the URL." Sticky behaviour in the service worker
 // guarantees we never *clear* on a missed detection — only overwrite on a positive match.
 
+import { relayAgentHello } from './agentTabHello';
 import {
   CLEAR_PREFILL_MESSAGE, PREFILL_COMMENT_MESSAGE, boxHoldsDraft, fallbackLine, insertionBlocker, isBusyElsewhere, opsToPasteHtml, opsToPlainText,
   readInsertionState, segmentsToEditorOps, shouldPrefill,
@@ -498,3 +499,5 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     .finally(() => { prefillBusy = false; });
   return true; // reply asynchronously
 });
+
+relayAgentHello();

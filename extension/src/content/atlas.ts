@@ -1,5 +1,6 @@
 export {}; // Treat as module → file-scoped declarations, no collision with other content scripts.
 
+import { relayAgentHello } from './agentTabHello';
 import { CARD_ISSUANCE_STAGED_KEY, resolveCardIssuanceStage } from '../data/cardIssuanceStage';
 import {
   AGENT_ATLAS_CIM_MSG, AGENT_ATLAS_LOOKUP_MSG, AGENT_ATLAS_RESULT_ATTR, parseAtlasRequest,
@@ -798,3 +799,5 @@ window.addEventListener('message', (ev: MessageEvent) => {
     run();
   });
 })();
+
+relayAgentHello();
